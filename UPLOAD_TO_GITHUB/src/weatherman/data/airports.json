@@ -1,0 +1,6 @@
+{
+  "LEMD": {"name": "Madrid-Barajas", "iata": "MAD", "latitude": 40.466, "longitude": -3.555, "elevation_m": 610, "timezone": "Europe/Madrid", "models": ["ecmwf_ifs025", "gfs_global", "icon_global", "icon_eu", "ukmo_global_deterministic_10km", "meteofrance_arpege_europe", "meteofrance_arome_france", "meteofrance_arome_france_hd"]},
+  "EHAM": {"name": "Amsterdam Schiphol", "iata": "AMS", "latitude": 52.315, "longitude": 4.790, "elevation_m": -3, "timezone": "Europe/Amsterdam", "models": ["ecmwf_ifs025", "gfs_global", "icon_eu", "ukmo_global_deterministic_10km", "meteofrance_arpege_europe", "knmi_harmonie_arome_europe"]},
+  "EPWA": {"name": "Warsaw Chopin", "iata": "WAW", "latitude": 52.166, "longitude": 20.967, "elevation_m": 110, "timezone": "Europe/Warsaw", "models": ["ecmwf_ifs025", "gfs_global", "icon_eu", "ukmo_global_deterministic_10km", "meteofrance_arpege_europe"]},
+  "LTAC": {"name": "Ankara Esenboga", "iata": "ESB", "latitude": 40.128, "longitude": 32.995, "elevation_m": 953, "timezone": "Europe/Istanbul", "models": ["ecmwf_ifs025", "gfs_global", "icon_global", "ukmo_global_deterministic_10km", "meteofrance_arpege_europe"]}
+}
