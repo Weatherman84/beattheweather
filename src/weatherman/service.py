@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import date, timedelta
 
 from sqlalchemy import select
@@ -82,6 +83,7 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
         for code in airport_codes or list(catalog):
             airport = catalog[code]
             try:
+                airport_actuals = 0
                 for item in historical_actuals(airport, start, end):
                     _upsert(
                         session,
@@ -90,10 +92,13 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
                         {"max_temp_c": item["max_temp_c"], "source": "open-meteo-archive"},
                     )
                     counts["actuals"] += 1
+                    airport_actuals += 1
+                print(f"OK {code}/actuals: {airport_actuals} days")
             except Exception as exc:
                 print(f"WARN {code}/historical actuals: {exc}")
             for model in airport["models"]:
                 try:
+                    model_rows = 0
                     for item in historical_model(airport, model, start, end):
                         _upsert(
                             session,
@@ -107,7 +112,11 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
                             {"max_temp_c": item["max_temp_c"], "source": item["source"]},
                         )
                         counts["forecasts"] += 1
+                        model_rows += 1
+                    print(f"OK {code}/{model}: {model_rows} days")
                 except Exception as exc:
                     print(f"WARN {code}/{model} backfill: {exc}")
+                # Keep the free data endpoint below burst-rate limits.
+                time.sleep(1)
         session.commit()
     return counts

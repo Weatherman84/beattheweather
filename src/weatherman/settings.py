@@ -12,7 +12,7 @@ ROOT = Path(os.getenv("WEATHERMAN_HOME", Path.cwd())).resolve()
 load_dotenv(ROOT / ".env")
 
 DEFAULT_METEOBLUE_URL = (
-    "https://my.meteoblue.com/packages/basic-1h?lat={lat}&lon={lon}"
+    "https://my.meteoblue.com/packages/basic-1h_basic-day?lat={lat}&lon={lon}"
     "&apikey={apikey}&asl={elevation}&format=json"
 )
 
