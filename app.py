@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import sys
 from datetime import date
+from pathlib import Path
+
+# Streamlit Community Cloud starts this file from the repository root without
+# installing the local src package. Add it explicitly before importing Weatherman.
+SRC = Path(__file__).resolve().parent / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 import pandas as pd
 import plotly.express as px
