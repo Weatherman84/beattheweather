@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -14,6 +16,23 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
+POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com"
+
+MONTH_SLUGS = (
+    "",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
 
 
 def _get(url: str, params: dict[str, Any] | None = None) -> dict | list:
@@ -292,3 +311,98 @@ def recent_metars(icao: str, hours: int = 24) -> list[dict]:
             }
         )
     return sorted(rows, key=lambda item: item["observed_at"])
+
+
+def polymarket_event_slug(airport: dict, target: date) -> str:
+    city = airport.get("market_city")
+    if not city:
+        return ""
+    return (
+        f"highest-temperature-in-{city}-on-{MONTH_SLUGS[target.month]}-{target.day}-{target.year}"
+    )
+
+
+def _json_array(value: Any) -> list:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _number(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _temperature_range(label: str) -> tuple[float | None, float | None]:
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*°?C", label, re.IGNORECASE)
+    if not match:
+        return None, None
+    temperature = float(match.group(1))
+    lowered = label.casefold()
+    if "below" in lowered or "lower" in lowered:
+        return None, temperature
+    if "higher" in lowered or "above" in lowered:
+        return temperature, None
+    return temperature, temperature
+
+
+def polymarket_prices(airport: dict, target: date) -> list[dict]:
+    event_slug = polymarket_event_slug(airport, target)
+    if not event_slug:
+        return []
+    try:
+        event = _get(f"{POLYMARKET_GAMMA_URL}/events/slug/{event_slug}")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return []
+        raise
+    if not isinstance(event, dict):
+        return []
+    captured_at = datetime.now(timezone.utc)
+    rows = []
+    for market in event.get("markets", []):
+        outcomes = _json_array(market.get("outcomes"))
+        prices = _json_array(market.get("outcomePrices"))
+        tokens = _json_array(market.get("clobTokenIds"))
+        try:
+            yes_index = [str(outcome).casefold() for outcome in outcomes].index("yes")
+            yes_price = float(prices[yes_index])
+        except (ValueError, IndexError, TypeError):
+            continue
+        label = str(market.get("groupItemTitle") or market.get("question") or "")
+        low, high = _temperature_range(label)
+        if low is None and high is None:
+            continue
+        closed = bool(market.get("closed"))
+        yes_won = yes_price >= 0.999 if closed else None
+        rows.append(
+            {
+                "target_date": target,
+                "event_slug": event_slug,
+                "market_id": str(market["id"]),
+                "market_slug": str(market.get("slug") or ""),
+                "token_id": str(tokens[yes_index]) if yes_index < len(tokens) else None,
+                "bucket_label": label,
+                "bucket_low_c": low,
+                "bucket_high_c": high,
+                "yes_price": yes_price,
+                "best_bid": _number(market.get("bestBid")),
+                "best_ask": _number(market.get("bestAsk")),
+                "spread": _number(market.get("spread")),
+                "volume": _number(market.get("volumeNum") or market.get("volume")),
+                "liquidity": _number(market.get("liquidityNum") or market.get("liquidity")),
+                "closed": closed,
+                "yes_won": yes_won,
+                "resolution_source": event.get("resolutionSource"),
+                "captured_at": captured_at,
+            }
+        )
+    return rows

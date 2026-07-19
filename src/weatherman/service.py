@@ -5,12 +5,21 @@ from datetime import date, timedelta
 
 from sqlalchemy import select
 
-from .db import DailyActual, Forecast, HourlyForecast, Observation, Session, init_db
+from .db import (
+    DailyActual,
+    Forecast,
+    HourlyForecast,
+    MarketSnapshot,
+    Observation,
+    Session,
+    init_db,
+)
 from .providers import (
     historical_actuals,
     meteoblue_forecast,
     open_meteo_forecast,
     open_meteo_hourly,
+    polymarket_prices,
     previous_run_d1,
     recent_metars,
 )
@@ -28,7 +37,13 @@ def _upsert(session, model, keys: dict, values: dict) -> None:
 
 def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, int]:
     init_db()
-    counts = {"forecasts": 0, "hourly_forecasts": 0, "observations": 0}
+    counts = {
+        "forecasts": 0,
+        "hourly_forecasts": 0,
+        "observations": 0,
+        "market_prices": 0,
+        "actuals": 0,
+    }
     catalog = airports()
     with Session() as session:
         for code in airport_codes or list(catalog):
@@ -95,6 +110,46 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                     counts["observations"] += 1
             except Exception as exc:
                 print(f"WARN {code}/METAR: {exc}")
+            actual_end = date.today() - timedelta(days=6)
+            actual_start = actual_end - timedelta(days=13)
+            try:
+                for item in historical_actuals(airport, actual_start, actual_end):
+                    _upsert(
+                        session,
+                        DailyActual,
+                        {"airport": code, "target_date": item["target_date"]},
+                        {
+                            "max_temp_c": item["max_temp_c"],
+                            "source": "open-meteo-archive",
+                        },
+                    )
+                    counts["actuals"] += 1
+            except Exception as exc:
+                print(f"WARN {code}/recent actuals: {exc}")
+            for offset in range(-2, days):
+                market_target = date.today() + timedelta(days=offset)
+                try:
+                    for item in polymarket_prices(airport, market_target):
+                        market_keys = {
+                            "market_id": item["market_id"],
+                            "captured_at": item["captured_at"],
+                        }
+                        _upsert(
+                            session,
+                            MarketSnapshot,
+                            market_keys,
+                            {
+                                "airport": code,
+                                **{
+                                    key: value
+                                    for key, value in item.items()
+                                    if key not in market_keys
+                                },
+                            },
+                        )
+                        counts["market_prices"] += 1
+                except Exception as exc:
+                    print(f"WARN {code}/Polymarket/{market_target}: {exc}")
         session.commit()
     return counts
 

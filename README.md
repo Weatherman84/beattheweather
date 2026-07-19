@@ -110,6 +110,24 @@ Nach einem Update auf Version 6 bitte den Workflow **1 - Initial history backfil
 erneut ausführen. Danach **2 - Collect current forecasts** starten. Das Dashboard übernimmt
 die neue Datenbank anschließend automatisch.
 
+## Neu in Version 7
+
+- Das Dashboard findet automatisch die passenden täglichen Polymarket-Temperaturmärkte für
+  Madrid, Amsterdam, Warschau und Ankara.
+- Im neuen Reiter **Market comparison** stehen unsere Wahrscheinlichkeit, der angezeigte
+  Marktwert, das beste Gebot, der aktuelle YES-Kaufpreis und die Modelldifferenz nebeneinander.
+- Eine auffällige positive Differenz wird erst ab acht Prozentpunkten markiert. Sie ist ein
+  Modellsignal und ausdrücklich keine Gewinnzusage oder automatische Handelsempfehlung.
+- GitHub speichert die Marktpreise alle drei Stunden. Damit entsteht ab Version 7 eine echte
+  Preishistorie für spätere Auswertungen.
+- Neue Ist-Temperaturen werden im normalen Sammel-Workflow automatisch nachgetragen. Ein
+  regelmäßiger manueller Backfill ist dafür nicht mehr erforderlich.
+
+Polymarket-Marktdaten sind öffentlich lesbar. Für Version 7 wird kein Polymarket-Key und kein
+Wallet-Zugang benötigt. Nach dem Upload reicht es, **2 - Collect current forecasts** einmal
+manuell auszuführen. Der Backfill muss beim Update von Version 6 auf Version 7 nicht erneut
+gestartet werden.
+
 ## Wichtig zum Dashboard
 
 Die GitHub-Workflows sammeln und speichern die Daten. Eine normale GitHub-Seite führt das

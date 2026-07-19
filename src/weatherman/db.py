@@ -3,7 +3,17 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import Date, DateTime, Float, Integer, String, UniqueConstraint, create_engine, text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    UniqueConstraint,
+    create_engine,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from .settings import ROOT, settings
@@ -74,6 +84,33 @@ class MarketPrice(Base):
     yes_price: Mapped[float] = mapped_column(Float)
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class MarketSnapshot(Base):
+    __tablename__ = "market_snapshots"
+    __table_args__ = (UniqueConstraint("market_id", "captured_at"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    event_slug: Mapped[str] = mapped_column(String(250), index=True)
+    market_id: Mapped[str] = mapped_column(String(100), index=True)
+    market_slug: Mapped[str] = mapped_column(String(300))
+    token_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    bucket_label: Mapped[str] = mapped_column(String(80))
+    bucket_low_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bucket_high_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    yes_price: Mapped[float] = mapped_column(Float)
+    best_bid: Mapped[float | None] = mapped_column(Float, nullable=True)
+    best_ask: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spread: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    yes_won: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    resolution_source: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
 
 

@@ -61,6 +61,43 @@ def condition_probabilities(
     return {bucket: probability / total for bucket, probability in possible.items()}
 
 
+def probability_for_range(
+    probabilities: dict[int, float],
+    lower_c: float | None,
+    upper_c: float | None,
+) -> float:
+    return sum(
+        probability
+        for bucket, probability in probabilities.items()
+        if (lower_c is None or bucket >= lower_c) and (upper_c is None or bucket <= upper_c)
+    )
+
+
+def market_edges(probabilities: dict[int, float], markets: pd.DataFrame) -> pd.DataFrame:
+    if markets.empty:
+        return pd.DataFrame()
+    result = markets.copy()
+
+    def optional_number(value: object) -> float | None:
+        return float(value) if pd.notna(value) else None
+
+    result["model_probability"] = result.apply(
+        lambda row: probability_for_range(
+            probabilities,
+            optional_number(row.bucket_low_c),
+            optional_number(row.bucket_high_c),
+        ),
+        axis=1,
+    )
+    result["buy_price"] = result.best_ask.fillna(result.yes_price).astype(float)
+    result["edge"] = result.model_probability - result.buy_price
+    result["signal"] = "No clear edge"
+    actionable = result.best_ask.notna()
+    result.loc[actionable & (result.edge >= 0.04), "signal"] = "Watch"
+    result.loc[actionable & (result.edge >= 0.08), "signal"] = "Possible edge"
+    return result.sort_values("edge", ascending=False)
+
+
 def heat_spike_assessment(
     *,
     forecast_mean: float,

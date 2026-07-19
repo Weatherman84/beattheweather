@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "weatherman-trading"
-version = "6.0.0"
+version = "7.0.0"
 description = "Model consensus, nowcast and backtesting for daily maximum-temperature markets"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "httpx>=0.27,<1",
+  "httpx[socks]>=0.27,<1",
   "pandas>=2.2,<3",
   "plotly>=5.22,<7",
   "python-dotenv>=1.0,<2",

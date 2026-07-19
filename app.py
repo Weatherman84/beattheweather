@@ -20,6 +20,7 @@ from weatherman.analytics import (
     consensus,
     flat_bet_simulation,
     heat_spike_assessment,
+    market_edges,
     model_metrics,
     score_frame,
 )
@@ -27,6 +28,7 @@ from weatherman.db import (
     DailyActual,
     Forecast,
     HourlyForecast,
+    MarketSnapshot,
     Observation,
     Session,
     init_db,
@@ -105,7 +107,8 @@ if st.sidebar.button("Refresh forecasts + METAR", type="primary"):
     with st.spinner("Fetching models and observations…"):
         result = collect([airport])
     st.sidebar.success(
-        f"Saved {result['forecasts']} daily, {result['hourly_forecasts']} hourly forecasts"
+        f"Saved {result['forecasts']} daily, {result['hourly_forecasts']} hourly and "
+        f"{result['market_prices']} market prices; refreshed {result['actuals']} actuals"
     )
 
 with Session() as session:
@@ -117,16 +120,26 @@ with Session() as session:
     hourly = pd.read_sql(
         select(HourlyForecast).where(HourlyForecast.airport == airport), session.bind
     )
+    market_snapshots = pd.read_sql(
+        select(MarketSnapshot).where(MarketSnapshot.airport == airport), session.bind
+    )
 
 timezone_name = catalog[airport]["timezone"]
 d1_forecasts = forecasts[forecasts.horizon == "D-1"].copy() if not forecasts.empty else forecasts
 d1_scored = score_frame(d1_forecasts, actuals)
 d1_metrics = model_metrics(d1_scored)
 
-tab_live, tab_accuracy, tab_simulation, tab_data = st.tabs(
-    ["Live forecast", "Accuracy by timing", "D-1 $1 simulation", "Data coverage"]
+tab_live, tab_market, tab_accuracy, tab_simulation, tab_data = st.tabs(
+    [
+        "Live forecast",
+        "Market comparison",
+        "Accuracy by timing",
+        "D-1 $1 simulation",
+        "Data coverage",
+    ]
 )
 
+probabilities: dict[int, float] | None = None
 with tab_live:
     current = (
         forecasts[pd.to_datetime(forecasts.target_date).dt.date == target].copy()
@@ -254,6 +267,150 @@ with tab_live:
                 f"maximum is already {observed_max:.0f} °C. Remaining probabilities sum to 100%."
             )
 
+with tab_market:
+    st.subheader("Our probability versus the live Polymarket price")
+    st.caption(
+        "A positive difference means our weather model assigns a higher chance than the current "
+        "price to buy YES. It is a model signal, not a guarantee or trading instruction."
+    )
+    target_markets = (
+        market_snapshots[pd.to_datetime(market_snapshots.target_date).dt.date == target].copy()
+        if not market_snapshots.empty
+        else market_snapshots
+    )
+    if probabilities is None:
+        st.info("A current weather forecast is required before a market comparison can be made.")
+    elif target_markets.empty:
+        st.info(
+            "No matching Polymarket market has been stored for this airport and date. "
+            "Markets are usually published shortly before the target day. Run Collect forecasts."
+        )
+    else:
+        target_markets["captured_at"] = pd.to_datetime(target_markets.captured_at, utc=True)
+        latest_markets = target_markets.sort_values("captured_at").drop_duplicates(
+            "market_id", keep="last"
+        )
+        comparison = market_edges(probabilities, latest_markets)
+        if comparison.empty:
+            st.info("The stored market does not contain recognizable Celsius ranges.")
+        else:
+            actionable = comparison[comparison.best_ask.notna()]
+            best = actionable.iloc[0] if not actionable.empty else comparison.iloc[0]
+            market_sum = float(comparison.yes_price.sum())
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Best model difference", f"{best.edge:+.1%}")
+            m2.metric("Temperature range", best.bucket_label)
+            m3.metric("Market price sum", f"{market_sum:.1%}")
+            if pd.notna(best.best_ask) and best.edge >= 0.08:
+                st.info(
+                    f"Model signal: {best.bucket_label} is {best.edge:+.1%} above the current "
+                    "YES buy price. Check spread, liquidity and the resolution source before "
+                    "drawing any conclusion."
+                )
+            else:
+                st.write("There is currently no large positive difference of at least 8 points.")
+
+            shown = comparison[
+                [
+                    "bucket_label",
+                    "model_probability",
+                    "yes_price",
+                    "best_bid",
+                    "best_ask",
+                    "edge",
+                    "spread",
+                    "volume",
+                    "signal",
+                ]
+            ].copy()
+            shown["signal"] = shown.signal.map(
+                {
+                    "Possible edge": "Possible edge",
+                    "Watch": "Watch",
+                    "No clear edge": "No clear edge",
+                }
+            )
+            shown = shown.rename(
+                columns={
+                    "bucket_label": "Range",
+                    "model_probability": "Our model",
+                    "yes_price": "Market",
+                    "best_bid": "Best bid",
+                    "best_ask": "Buy YES",
+                    "edge": "Model − buy price",
+                    "spread": "Spread",
+                    "volume": "Volume $",
+                    "signal": "Signal",
+                }
+            )
+            percent_columns = [
+                "Our model",
+                "Market",
+                "Best bid",
+                "Buy YES",
+                "Model − buy price",
+                "Spread",
+            ]
+            for column in percent_columns:
+                shown[column] = shown[column].map(
+                    lambda value: f"{value:.1%}" if pd.notna(value) else "—"
+                )
+            shown["Volume $"] = shown["Volume $"].map(
+                lambda value: f"${value:,.0f}" if pd.notna(value) else "—"
+            )
+            st.dataframe(shown, hide_index=True, width="stretch")
+            selected_range = st.selectbox(
+                "Price history range",
+                comparison.bucket_label.tolist(),
+                key="market_history_range",
+            )
+            selected_market_id = str(
+                comparison.loc[comparison.bucket_label == selected_range, "market_id"].iloc[0]
+            )
+            price_history = target_markets[
+                target_markets.market_id.astype(str) == selected_market_id
+            ].sort_values("captured_at")
+            if price_history.captured_at.nunique() > 1:
+                price_chart = price_history[
+                    ["captured_at", "yes_price", "best_bid", "best_ask"]
+                ].melt(
+                    id_vars="captured_at",
+                    var_name="price_type",
+                    value_name="price",
+                )
+                price_chart = price_chart.dropna(subset=["price"])
+                st.plotly_chart(
+                    px.line(
+                        price_chart,
+                        x="captured_at",
+                        y="price",
+                        color="price_type",
+                        markers=True,
+                        title=f"Collected price history · {selected_range}",
+                        labels={"captured_at": "Captured", "price": "Price / probability"},
+                    ),
+                    width="stretch",
+                )
+            else:
+                st.caption("Price history starts with this collection and grows every three hours.")
+            event_slug = str(comparison.event_slug.iloc[0])
+            st.link_button(
+                "Open this market on Polymarket",
+                f"https://polymarket.com/event/{event_slug}",
+            )
+            resolution = comparison.resolution_source.dropna()
+            if not resolution.empty:
+                st.caption(
+                    "Resolution source: "
+                    f"{resolution.iloc[0]}. Weatherman uses airport METAR as the live reference; "
+                    "the official market source remains decisive."
+                )
+            st.caption(
+                "The displayed market value is an implied probability. Buying YES normally "
+                "requires the ask price, which can be higher. Missing asks use the displayed "
+                "market value only as an approximation."
+            )
+
 with tab_accuracy:
     horizon = st.selectbox("Forecast timing", ["D-1", "D0-morning", "Live"])
     selected = forecasts[forecasts.horizon == horizon] if not forecasts.empty else forecasts
@@ -299,7 +456,8 @@ with tab_simulation:
 with tab_data:
     st.write(
         f"Forecast rows: {len(forecasts):,} · Hourly rows: {len(hourly):,} · "
-        f"Actual rows: {len(actuals):,} · METAR rows: {len(observations):,}"
+        f"Actual rows: {len(actuals):,} · METAR rows: {len(observations):,} · "
+        f"Market rows: {len(market_snapshots):,}"
     )
     models = catalog[airport]["models"] + ["meteoblue"]
     coverage = pd.DataFrame({"model": models})
@@ -316,6 +474,13 @@ with tab_data:
         coverage["d1_days"] = coverage.d1_days.fillna(0).astype(int)
     st.subheader("D-1 historical coverage")
     st.dataframe(coverage, hide_index=True, width="stretch")
+    if not market_snapshots.empty:
+        market_coverage = market_snapshots.groupby("target_date", as_index=False).agg(
+            price_points=("captured_at", "nunique"),
+            ranges=("market_id", "nunique"),
+        )
+        st.subheader("Polymarket price history collected by Weatherman")
+        st.dataframe(market_coverage.sort_values("target_date", ascending=False), hide_index=True)
     if not forecasts.empty:
         st.download_button(
             "Download forecasts CSV",
