@@ -72,21 +72,26 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
 
 def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[str, int]:
     init_db()
-    end = date.today() - timedelta(days=1)
+    # Reanalysis products can arrive several days late. A six-day safety margin
+    # prevents a whole first-time backfill from failing on incomplete recent data.
+    end = date.today() - timedelta(days=6)
     start = end - timedelta(days=days - 1)
     counts = {"forecasts": 0, "actuals": 0}
     catalog = airports()
     with Session() as session:
         for code in airport_codes or list(catalog):
             airport = catalog[code]
-            for item in historical_actuals(airport, start, end):
-                _upsert(
-                    session,
-                    DailyActual,
-                    {"airport": code, "target_date": item["target_date"]},
-                    {"max_temp_c": item["max_temp_c"], "source": "open-meteo-archive"},
-                )
-                counts["actuals"] += 1
+            try:
+                for item in historical_actuals(airport, start, end):
+                    _upsert(
+                        session,
+                        DailyActual,
+                        {"airport": code, "target_date": item["target_date"]},
+                        {"max_temp_c": item["max_temp_c"], "source": "open-meteo-archive"},
+                    )
+                    counts["actuals"] += 1
+            except Exception as exc:
+                print(f"WARN {code}/historical actuals: {exc}")
             for model in airport["models"]:
                 try:
                     for item in historical_model(airport, model, start, end):

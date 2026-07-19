@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.getenv("WEATHERMAN_HOME", Path.cwd())).resolve()
 load_dotenv(ROOT / ".env")
 
 DEFAULT_METEOBLUE_URL = (
@@ -25,7 +26,15 @@ class Settings:
 
 
 def airports() -> dict[str, dict]:
-    with (ROOT / "config" / "airports.json").open(encoding="utf-8") as handle:
+    # Allow repository users to edit config/airports.json. The packaged copy is
+    # the reliable fallback when Weatherman is installed by GitHub Actions.
+    local_config = ROOT / "config" / "airports.json"
+    resource = (
+        local_config
+        if local_config.exists()
+        else files("weatherman").joinpath("data/airports.json")
+    )
+    with resource.open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
