@@ -11,9 +11,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: weatherman-database
+  cancel-in-progress: false
+
 jobs:
   backfill:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Download repository
         uses: actions/checkout@v6
