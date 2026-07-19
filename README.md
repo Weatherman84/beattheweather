@@ -94,6 +94,22 @@ Das Projekt sammelt Daten für Madrid, Amsterdam, Warschau und Ankara. Vergliche
 ECMWF, GFS, ICON, UKMO, ARPEGE, verfügbare AROME/HARMONIE-Modelle sowie optional
 Meteoblue.
 
+## Neu in Version 6
+
+- Der historische Modellvergleich verwendet einen festen **D-1-Zeitpunkt**. Dadurch werden
+  Vorhersagen verglichen, die für jeden Tag aus derselben Entfernung stammen.
+- Der **Heat Spike Score** berücksichtigt Modelltrend, Modellübereinstimmung, trockene Luft,
+  Bewölkung, Erwärmungsgeschwindigkeit und den Vergleich zwischen METAR und Modellverlauf.
+- Sobald ein METAR-Tagesmaximum vorliegt, entfernt das Dashboard alle bereits unmöglichen
+  niedrigeren Temperaturbereiche und verteilt die Wahrscheinlichkeiten neu.
+- Die Simulation verwendet bei jedem vergangenen Tag nur den Bias, der bis dahin bereits
+  bekannt war. Die angezeigten Quoten von 2,0 bleiben eine Testannahme und sind keine echten
+  historischen Marktpreise.
+
+Nach einem Update auf Version 6 bitte den Workflow **1 - Initial history backfill** einmal
+erneut ausführen. Danach **2 - Collect current forecasts** starten. Das Dashboard übernimmt
+die neue Datenbank anschließend automatisch.
+
 ## Wichtig zum Dashboard
 
 Die GitHub-Workflows sammeln und speichern die Daten. Eine normale GitHub-Seite führt das
@@ -103,4 +119,3 @@ Cloud.
 
 Das ist ein eigener nächster Schritt. Die Datensammlung auf GitHub funktioniert bereits
 ohne lokale Installation.
-

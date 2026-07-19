@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import Date, DateTime, Float, Integer, String, UniqueConstraint, create_engine
+from sqlalchemy import Date, DateTime, Float, Integer, String, UniqueConstraint, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from .settings import ROOT, settings
@@ -23,6 +23,24 @@ class Forecast(Base):
     target_date: Mapped[date] = mapped_column(Date, index=True)
     max_temp_c: Mapped[float] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(40), default="forecast")
+    horizon: Mapped[str] = mapped_column(String(20), default="Live", index=True)
+
+
+class HourlyForecast(Base):
+    __tablename__ = "hourly_forecasts"
+    __table_args__ = (UniqueConstraint("airport", "model", "run_at", "valid_at"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    model: Mapped[str] = mapped_column(String(80), index=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    valid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    temp_c: Mapped[float] = mapped_column(Float)
+    dewpoint_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cloud_cover: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_kph: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_direction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    radiation_wm2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temp_850hpa_c: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class Observation(Base):
@@ -73,3 +91,13 @@ Session = sessionmaker(ENGINE, expire_on_commit=False)
 
 def init_db() -> None:
     Base.metadata.create_all(ENGINE)
+    if ENGINE.dialect.name == "sqlite":
+        with ENGINE.begin() as connection:
+            columns = {row[1] for row in connection.execute(text("PRAGMA table_info(forecasts)"))}
+            if "horizon" not in columns:
+                connection.execute(
+                    text("ALTER TABLE forecasts ADD COLUMN horizon VARCHAR(20) DEFAULT 'Legacy'")
+                )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_forecasts_horizon ON forecasts (horizon)")
+            )

@@ -5,13 +5,14 @@ from datetime import date, timedelta
 
 from sqlalchemy import select
 
-from .db import DailyActual, Forecast, Observation, Session, init_db
+from .db import DailyActual, Forecast, HourlyForecast, Observation, Session, init_db
 from .providers import (
     historical_actuals,
-    historical_model,
-    latest_metar,
     meteoblue_forecast,
     open_meteo_forecast,
+    open_meteo_hourly,
+    previous_run_d1,
+    recent_metars,
 )
 from .settings import airports
 
@@ -27,7 +28,7 @@ def _upsert(session, model, keys: dict, values: dict) -> None:
 
 def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, int]:
     init_db()
-    counts = {"forecasts": 0, "observations": 0}
+    counts = {"forecasts": 0, "hourly_forecasts": 0, "observations": 0}
     catalog = airports()
     with Session() as session:
         for code in airport_codes or list(catalog):
@@ -38,6 +39,30 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                     batches.extend(open_meteo_forecast(airport, model, days))
                 except Exception as exc:
                     print(f"WARN {code}/{model}: {exc}")
+                try:
+                    for item in open_meteo_hourly(airport, model, days):
+                        _upsert(
+                            session,
+                            HourlyForecast,
+                            {
+                                "airport": code,
+                                "model": item["model"],
+                                "run_at": item["run_at"],
+                                "valid_at": item["valid_at"],
+                            },
+                            {
+                                "temp_c": item["temp_c"],
+                                "dewpoint_c": item["dewpoint_c"],
+                                "cloud_cover": item["cloud_cover"],
+                                "wind_kph": item["wind_kph"],
+                                "wind_direction": item["wind_direction"],
+                                "radiation_wm2": item["radiation_wm2"],
+                                "temp_850hpa_c": item["temp_850hpa_c"],
+                            },
+                        )
+                        counts["hourly_forecasts"] += 1
+                except Exception as exc:
+                    print(f"WARN {code}/{model} hourly: {exc}")
             try:
                 batches.extend(meteoblue_forecast(airport))
             except Exception as exc:
@@ -52,12 +77,15 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                         "run_at": item["run_at"],
                         "target_date": item["target_date"],
                     },
-                    {"max_temp_c": item["max_temp_c"], "source": item["source"]},
+                    {
+                        "max_temp_c": item["max_temp_c"],
+                        "source": item["source"],
+                        "horizon": item["horizon"],
+                    },
                 )
                 counts["forecasts"] += 1
             try:
-                obs = latest_metar(code)
-                if obs:
+                for obs in recent_metars(code):
                     _upsert(
                         session,
                         Observation,
@@ -99,7 +127,7 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
             for model in airport["models"]:
                 try:
                     model_rows = 0
-                    for item in historical_model(airport, model, start, end):
+                    for item in previous_run_d1(airport, model, start, end):
                         _upsert(
                             session,
                             Forecast,
@@ -109,7 +137,11 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
                                 "run_at": item["run_at"],
                                 "target_date": item["target_date"],
                             },
-                            {"max_temp_c": item["max_temp_c"], "source": item["source"]},
+                            {
+                                "max_temp_c": item["max_temp_c"],
+                                "source": item["source"],
+                                "horizon": item["horizon"],
+                            },
                         )
                         counts["forecasts"] += 1
                         model_rows += 1

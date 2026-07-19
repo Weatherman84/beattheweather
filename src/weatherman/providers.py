@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -11,6 +12,7 @@ from .settings import settings
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 
 
@@ -63,10 +65,89 @@ def open_meteo_forecast(airport: dict, model: str, days: int = 3) -> list[dict]:
             "target_date": date.fromisoformat(day),
             "max_temp_c": float(value),
             "source": "open-meteo",
+            "horizon": _forecast_horizon(run_at, date.fromisoformat(day), airport["timezone"]),
         }
         for day, value in zip(daily.get("time", []), daily.get("temperature_2m_max", []))
         if value is not None
     ]
+
+
+def _forecast_horizon(run_at: datetime, target_date: date, timezone_name: str) -> str:
+    local_run = run_at.astimezone(ZoneInfo(timezone_name))
+    if target_date == local_run.date() + timedelta(days=1):
+        return "D-1"
+    if target_date > local_run.date() + timedelta(days=1):
+        return "D-2+"
+    if target_date == local_run.date() and local_run.hour <= 10:
+        return "D0-morning"
+    return "Live"
+
+
+def open_meteo_hourly(airport: dict, model: str, days: int = 3) -> list[dict]:
+    variables = [
+        "temperature_2m",
+        "dew_point_2m",
+        "cloud_cover",
+        "wind_speed_10m",
+        "wind_direction_10m",
+        "shortwave_radiation",
+        "temperature_850hPa",
+    ]
+    try:
+        payload = _get(
+            FORECAST_URL,
+            {
+                "latitude": airport["latitude"],
+                "longitude": airport["longitude"],
+                "hourly": ",".join(variables),
+                "timezone": "UTC",
+                "forecast_days": days,
+                "models": model,
+            },
+        )
+    except httpx.HTTPStatusError:
+        # Some regional models do not expose 850 hPa. The surface-based
+        # nowcast remains useful and should not be discarded.
+        variables = variables[:-1]
+        payload = _get(
+            FORECAST_URL,
+            {
+                "latitude": airport["latitude"],
+                "longitude": airport["longitude"],
+                "hourly": ",".join(variables),
+                "timezone": "UTC",
+                "forecast_days": days,
+                "models": model,
+            },
+        )
+    hourly = payload.get("hourly", {})
+    run_at = datetime.now(timezone.utc)
+    rows = []
+    for index, timestamp in enumerate(hourly.get("time", [])):
+        temp = hourly.get("temperature_2m", [None])[index]
+        if temp is None:
+            continue
+
+        def value(name: str) -> float | None:
+            values = hourly.get(name)
+            item = values[index] if values and index < len(values) else None
+            return float(item) if item is not None else None
+
+        rows.append(
+            {
+                "model": model,
+                "run_at": run_at,
+                "valid_at": datetime.fromisoformat(timestamp).replace(tzinfo=timezone.utc),
+                "temp_c": float(temp),
+                "dewpoint_c": value("dew_point_2m"),
+                "cloud_cover": value("cloud_cover"),
+                "wind_kph": value("wind_speed_10m"),
+                "wind_direction": value("wind_direction_10m"),
+                "radiation_wm2": value("shortwave_radiation"),
+                "temp_850hpa_c": value("temperature_850hPa"),
+            }
+        )
+    return rows
 
 
 def meteoblue_forecast(airport: dict) -> list[dict]:
@@ -90,6 +171,7 @@ def meteoblue_forecast(airport: dict) -> list[dict]:
             "target_date": date.fromisoformat(day[:10]),
             "max_temp_c": float(value),
             "source": "meteoblue",
+            "horizon": _forecast_horizon(now, date.fromisoformat(day[:10]), airport["timezone"]),
         }
         for day, value in zip(times, temps)
         if value is not None
@@ -140,21 +222,73 @@ def historical_model(airport: dict, model: str, start: date, end: date) -> list[
             "target_date": date.fromisoformat(day),
             "max_temp_c": float(value),
             "source": "historical-forecast",
+            "horizon": "Legacy",
         }
         for day, value in zip(daily.get("time", []), daily.get("temperature_2m_max", []))
         if value is not None
     ]
 
 
-def latest_metar(icao: str) -> dict | None:
-    payload = _get(METAR_URL, {"ids": icao, "format": "json", "hours": 3})
-    if not payload:
-        return None
-    row = payload[0]
-    return {
-        "observed_at": datetime.fromtimestamp(row["obsTime"], tz=timezone.utc),
-        "temp_c": float(row["temp"]),
-        "dewpoint_c": row.get("dewp"),
-        "wind_kph": float(row["wspd"]) * 1.852 if row.get("wspd") is not None else None,
-        "raw": row.get("rawOb"),
-    }
+def previous_run_d1(airport: dict, model: str, start: date, end: date) -> list[dict]:
+    variable = "temperature_2m_previous_day1"
+    payload = _get(
+        PREVIOUS_RUNS_URL,
+        {
+            "latitude": airport["latitude"],
+            "longitude": airport["longitude"],
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "hourly": variable,
+            "timezone": airport["timezone"],
+            "models": model,
+        },
+    )
+    hourly = payload.get("hourly", {})
+    maxima: dict[date, float] = {}
+    for timestamp, value in zip(hourly.get("time", []), hourly.get(variable, [])):
+        if value is None:
+            continue
+        target = date.fromisoformat(timestamp[:10])
+        maxima[target] = max(maxima.get(target, float("-inf")), float(value))
+    tz = ZoneInfo(airport["timezone"])
+    rows = []
+    for target, max_temp in maxima.items():
+        # Noon one day before represents a consistent 24-hour information set.
+        run_local = datetime.combine(target, datetime.min.time(), tzinfo=tz).replace(hour=12)
+        rows.append(
+            {
+                "model": model,
+                "run_at": run_local.astimezone(timezone.utc) - timedelta(days=1),
+                "target_date": target,
+                "max_temp_c": max_temp,
+                "source": "previous-runs",
+                "horizon": "D-1",
+            }
+        )
+    return rows
+
+
+def recent_metars(icao: str, hours: int = 24) -> list[dict]:
+    payload = _get(METAR_URL, {"ids": icao, "format": "json", "hours": hours})
+    rows = []
+    for row in payload or []:
+        observed = row.get("obsTime") or row.get("reportTime")
+        if observed is None or row.get("temp") is None:
+            continue
+        if isinstance(observed, (int, float)):
+            observed_at = datetime.fromtimestamp(observed, tz=timezone.utc)
+        else:
+            text = str(observed).replace("Z", "+00:00")
+            observed_at = datetime.fromisoformat(text)
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=timezone.utc)
+        rows.append(
+            {
+                "observed_at": observed_at.astimezone(timezone.utc),
+                "temp_c": float(row["temp"]),
+                "dewpoint_c": float(row["dewp"]) if row.get("dewp") is not None else None,
+                "wind_kph": (float(row["wspd"]) * 1.852 if row.get("wspd") is not None else None),
+                "raw": row.get("rawOb"),
+            }
+        )
+    return sorted(rows, key=lambda item: item["observed_at"])
