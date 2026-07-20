@@ -114,6 +114,26 @@ class MarketSnapshot(Base):
     )
 
 
+class SignalSnapshot(Base):
+    __tablename__ = "signal_snapshots"
+    __table_args__ = (UniqueConstraint("market_id", "captured_at"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    event_slug: Mapped[str] = mapped_column(String(250), index=True)
+    market_id: Mapped[str] = mapped_column(String(100), index=True)
+    bucket_label: Mapped[str] = mapped_column(String(80))
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    timing: Mapped[str] = mapped_column(String(30), index=True)
+    model_probability: Mapped[float] = mapped_column(Float)
+    market_probability: Mapped[float] = mapped_column(Float)
+    buy_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    edge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal: Mapped[str] = mapped_column(String(30), index=True)
+    day_phase: Mapped[str] = mapped_column(String(20))
+    model_count: Mapped[int] = mapped_column(Integer)
+
+
 def engine():
     if settings.database_url.startswith("sqlite:///"):
         path = ROOT / settings.database_url.removeprefix("sqlite:///")

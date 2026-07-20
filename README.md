@@ -165,6 +165,30 @@ Nach dem Upload von Version 8 nur **2 - Collect current forecasts** einmal ausf�
 erneuter Backfill ist nicht erforderlich. Danach in Streamlit bei Bedarf **Reboot app** oder
 **Rerun** wählen.
 
+## Neu in Version 9
+
+- Weatherman führt ab jetzt automatisch ein **Signal-Tagebuch**. Bei jedem Lauf von Workflow 2
+  werden die damalige Modellwahrscheinlichkeit, der echte YES-Kaufpreis, die Modelldifferenz
+  und der Zeitpunkt gespeichert.
+- Als Testsignal zählt weiterhin nur **Possible edge**, also eine Modelldifferenz von mindestens
+  acht Prozentpunkten und ein tatsächlich vorhandener YES-Kaufpreis.
+- Im neuen Reiter **Tracked performance** wird pro Temperaturbereich nur das erste solche
+  Signal als hypothetischer Einsatz von 1 Dollar erfasst.
+- Sobald Polymarket den Markt offiziell aufgelöst hat, berechnet das Dashboard Trefferquote,
+  Testgewinn oder Testverlust und Rendite.
+- Eine Tabelle vergleicht Madrid, Amsterdam, Warschau und Ankara. Dadurch wird mit der Zeit
+  sichtbar, an welchen Flughäfen Weatherman am zuverlässigsten arbeitet.
+- Es werden keine echten Wetten oder automatischen Käufe ausgeführt. Gebühren, schlechtere
+  Ausführungspreise und Liquiditätsgrenzen sind in der Testrechnung nicht enthalten.
+
+Alte v7- und v8-Signale werden bewusst nicht nachträglich rekonstruiert. Sonst könnten später
+bekannte Wetterdaten unbemerkt in eine frühere Entscheidung einfließen. Das saubere Tagebuch
+beginnt mit dem ersten Sammellauf nach dem v9-Upload.
+
+Nach dem Upload von Version 9 nur **2 - Collect current forecasts** einmal ausführen. Ein
+Backfill ist nicht erforderlich. Der Reiter **Tracked performance** füllt sich danach
+automatisch; abgeschlossene Ergebnisse erscheinen jeweils nach der offiziellen Marktauflösung.
+
 ## Wichtig zum Dashboard
 
 Die GitHub-Workflows sammeln und speichern die Daten. Eine normale GitHub-Seite führt das

@@ -263,6 +263,70 @@ def market_edges(probabilities: dict[int, float], markets: pd.DataFrame) -> pd.D
     return result.sort_values("edge", ascending=False)
 
 
+def settled_signal_performance(
+    signals: pd.DataFrame,
+    markets: pd.DataFrame,
+    stake: float = 1.0,
+) -> pd.DataFrame:
+    """Settle the first recorded Possible-edge entry for each market range."""
+    columns = [
+        "airport",
+        "target_date",
+        "market_id",
+        "bucket_label",
+        "captured_at",
+        "timing",
+        "model_probability",
+        "buy_price",
+        "edge",
+        "won",
+        "pnl",
+        "cumulative_pnl",
+    ]
+    if signals.empty or markets.empty:
+        return pd.DataFrame(columns=columns)
+    candidates = signals[signals.signal == "Possible edge"].copy()
+    candidates["buy_price"] = pd.to_numeric(candidates.buy_price, errors="coerce")
+    candidates = candidates[(candidates.buy_price > 0) & (candidates.buy_price < 1)]
+    if candidates.empty:
+        return pd.DataFrame(columns=columns)
+    candidates["captured_at"] = pd.to_datetime(candidates.captured_at, utc=True)
+    entries = candidates.sort_values("captured_at").drop_duplicates("market_id", keep="first")
+
+    outcomes = markets.copy()
+    outcomes["captured_at"] = pd.to_datetime(outcomes.captured_at, utc=True)
+    outcomes = outcomes.sort_values("captured_at").drop_duplicates("market_id", keep="last")
+    if "event_slug" in outcomes:
+        outcomes["event_key"] = outcomes.event_slug.astype(str)
+    else:
+        outcomes["event_key"] = "single-event"
+    resolved_groups = []
+    for _, event in outcomes.groupby("event_key"):
+        event_closed = event.closed.fillna(False).astype(bool).all()
+        winner_count = int(event.yes_won.fillna(False).astype(bool).sum())
+        if event_closed and winner_count == 1:
+            resolved_groups.append(event[["market_id", "yes_won"]])
+    outcomes = (
+        pd.concat(resolved_groups, ignore_index=True)
+        if resolved_groups
+        else pd.DataFrame(columns=["market_id", "yes_won"])
+    )
+    if outcomes.empty:
+        return pd.DataFrame(columns=columns)
+
+    settled = entries.merge(outcomes, on="market_id", how="inner")
+    if settled.empty:
+        return pd.DataFrame(columns=columns)
+    settled["won"] = settled.yes_won.astype(bool)
+    settled["pnl"] = settled.apply(
+        lambda row: stake / row.buy_price - stake if row.won else -stake,
+        axis=1,
+    )
+    settled = settled.sort_values("captured_at")
+    settled["cumulative_pnl"] = settled.pnl.cumsum()
+    return settled[columns].reset_index(drop=True)
+
+
 def heat_spike_assessment(
     *,
     forecast_mean: float,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -15,15 +15,11 @@ import streamlit as st
 from sqlalchemy import select
 
 from weatherman.analytics import (
-    assess_day_status,
-    condition_probability_range,
-    consensus,
     flat_bet_simulation,
-    heat_spike_assessment,
     market_edges,
     model_metrics,
-    resolved_market_range,
     score_frame,
+    settled_signal_performance,
 )
 from weatherman.db import (
     DailyActual,
@@ -32,107 +28,12 @@ from weatherman.db import (
     MarketSnapshot,
     Observation,
     Session,
+    SignalSnapshot,
     init_db,
 )
+from weatherman.nowcast import build_live_nowcast
 from weatherman.service import collect
 from weatherman.settings import airports
-
-
-def local_observations(frame: pd.DataFrame, timezone_name: str, target: date) -> pd.DataFrame:
-    if frame.empty:
-        return frame
-    result = frame.copy()
-    result["observed_at"] = pd.to_datetime(result.observed_at, utc=True)
-    result["local_at"] = result.observed_at.dt.tz_convert(timezone_name)
-    return result[result.local_at.dt.date == target].sort_values("observed_at")
-
-
-def hourly_context(
-    frame: pd.DataFrame, timezone_name: str, target: date
-) -> tuple[float | None, float | None, float | None, float | None]:
-    if frame.empty:
-        return None, None, None, None
-    result = frame.copy()
-    result["valid_at"] = pd.to_datetime(result.valid_at, utc=True)
-    result["run_at"] = pd.to_datetime(result.run_at, utc=True)
-    result["local_valid"] = result.valid_at.dt.tz_convert(timezone_name)
-    result = result[result.local_valid.dt.date == target]
-    if result.empty:
-        return None, None, None, None
-    result = result.sort_values("run_at").drop_duplicates(["model", "valid_at"], keep="last")
-    local_now = datetime.now(ZoneInfo(timezone_name))
-    reference = (
-        local_now
-        if target == local_now.date()
-        else datetime(target.year, target.month, target.day, 14, tzinfo=ZoneInfo(timezone_name))
-    )
-    reference_utc = pd.Timestamp(reference).tz_convert("UTC")
-    result["distance"] = (result.valid_at - reference_utc).abs()
-    nearest = result.sort_values("distance").drop_duplicates("model", keep="first")
-
-    def median(column: str) -> float | None:
-        values = nearest[column].dropna()
-        return float(values.median()) if not values.empty else None
-
-    return median("temp_c"), median("cloud_cover"), median("temp_850hpa_c"), median("radiation_wm2")
-
-
-def remaining_heating_context(
-    frame: pd.DataFrame,
-    timezone_name: str,
-    target: date,
-    reference: datetime,
-) -> tuple[float | None, float | None]:
-    """Return conservative remaining warming and future sunlight from latest hourly runs."""
-    if frame.empty:
-        return None, None
-    result = frame.copy()
-    result["valid_at"] = pd.to_datetime(result.valid_at, utc=True)
-    result["run_at"] = pd.to_datetime(result.run_at, utc=True)
-    result["local_valid"] = result.valid_at.dt.tz_convert(timezone_name)
-    result = result[result.local_valid.dt.date == target]
-    if result.empty:
-        return None, None
-    reference_utc = pd.Timestamp(reference).tz_convert("UTC")
-    rises: list[float] = []
-    future_radiation: list[float] = []
-    for _, model_frame in result.groupby("model"):
-        latest_run = model_frame.run_at.max()
-        model_frame = model_frame[model_frame.run_at == latest_run].sort_values("valid_at")
-        if model_frame.empty:
-            continue
-        nearest_index = (model_frame.valid_at - reference_utc).abs().idxmin()
-        expected_now = float(model_frame.loc[nearest_index, "temp_c"])
-        future = model_frame[model_frame.valid_at >= reference_utc - timedelta(minutes=30)]
-        if future.empty:
-            rises.append(0.0)
-            future_radiation.append(0.0)
-            continue
-        rises.append(max(0.0, float(future.temp_c.max()) - expected_now))
-        radiation_values = future.radiation_wm2.dropna()
-        if not radiation_values.empty:
-            future_radiation.append(float(radiation_values.max()))
-    remaining_rise = max(rises) if rises else None
-    radiation_max = max(future_radiation) if future_radiation else None
-    return remaining_rise, radiation_max
-
-
-def model_run_trend(frame: pd.DataFrame, target: date) -> float | None:
-    if frame.empty:
-        return None
-    recent = frame[
-        (pd.to_datetime(frame.target_date).dt.date == target)
-        & frame.source.isin(["open-meteo", "meteoblue"])
-    ].copy()
-    if recent.empty:
-        return None
-    recent["run_at"] = pd.to_datetime(recent.run_at, utc=True)
-    changes = []
-    for _, model_frame in recent.groupby("model"):
-        values = model_frame.sort_values("run_at").max_temp_c.tail(2).tolist()
-        if len(values) == 2:
-            changes.append(float(values[-1] - values[-2]))
-    return float(pd.Series(changes).median()) if changes else None
 
 
 def last_update(frame: pd.DataFrame, column: str, timezone_name: str) -> str:
@@ -169,7 +70,8 @@ if st.sidebar.button("Refresh forecasts + METAR", type="primary"):
     else:
         st.sidebar.success(
             f"Saved {result['forecasts']} daily, {result['hourly_forecasts']} hourly and "
-            f"{result['market_prices']} market prices; refreshed {result['actuals']} actuals"
+            f"{result['market_prices']} market prices; journaled {result['signals']} model "
+            f"comparisons and refreshed {result['actuals']} actuals"
         )
 
 with Session() as session:
@@ -181,9 +83,19 @@ with Session() as session:
     hourly = pd.read_sql(
         select(HourlyForecast).where(HourlyForecast.airport == airport), session.bind
     )
-    market_snapshots = pd.read_sql(
-        select(MarketSnapshot).where(MarketSnapshot.airport == airport), session.bind
-    )
+    all_market_snapshots = pd.read_sql(select(MarketSnapshot), session.bind)
+    all_signal_snapshots = pd.read_sql(select(SignalSnapshot), session.bind)
+
+market_snapshots = (
+    all_market_snapshots[all_market_snapshots.airport == airport].copy()
+    if not all_market_snapshots.empty
+    else all_market_snapshots
+)
+signal_snapshots = (
+    all_signal_snapshots[all_signal_snapshots.airport == airport].copy()
+    if not all_signal_snapshots.empty
+    else all_signal_snapshots
+)
 
 target_markets = (
     market_snapshots[pd.to_datetime(market_snapshots.target_date).dt.date == target].copy()
@@ -197,22 +109,22 @@ if not target_markets.empty:
     )
 else:
     latest_markets = target_markets
-market_resolution = resolved_market_range(latest_markets)
 d1_forecasts = forecasts[forecasts.horizon == "D-1"].copy() if not forecasts.empty else forecasts
 d1_scored = score_frame(d1_forecasts, actuals)
-d1_metrics = model_metrics(d1_scored)
 
 st.caption(
     f"Last data update · Forecast: {last_update(forecasts, 'run_at', timezone_name)} · "
     f"METAR: {last_update(observations, 'observed_at', timezone_name)} · "
-    f"Polymarket: {last_update(market_snapshots, 'captured_at', timezone_name)} "
+    f"Polymarket: {last_update(market_snapshots, 'captured_at', timezone_name)} · "
+    f"Signals: {last_update(signal_snapshots, 'captured_at', timezone_name)} "
     f"({timezone_name} local time)"
 )
 
-tab_live, tab_market, tab_accuracy, tab_simulation, tab_data = st.tabs(
+tab_live, tab_market, tab_performance, tab_accuracy, tab_simulation, tab_data = st.tabs(
     [
         "Live forecast",
         "Market comparison",
+        "Tracked performance",
         "Accuracy by timing",
         "D-1 $1 simulation",
         "Data coverage",
@@ -222,95 +134,28 @@ tab_live, tab_market, tab_accuracy, tab_simulation, tab_data = st.tabs(
 probabilities: dict[int, float] | None = None
 day_status = None
 with tab_live:
-    current = (
-        forecasts[pd.to_datetime(forecasts.target_date).dt.date == target].copy()
-        if not forecasts.empty
-        else forecasts
+    live_nowcast = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=actuals,
+        observations=observations,
+        hourly=hourly,
+        markets=latest_markets,
+        timezone_name=timezone_name,
+        target=target,
+        as_of=datetime.now(ZoneInfo("UTC")),
     )
-    current = current[current.source.isin(["open-meteo", "meteoblue"])]
-    if current.empty:
+    if live_nowcast is None:
         st.info("No current forecast stored for this date. Click Refresh forecasts + METAR.")
     else:
-        current["run_at"] = pd.to_datetime(current.run_at, utc=True)
-        current = current.sort_values("run_at").drop_duplicates("model", keep="last")
-        bias_map = dict(zip(d1_metrics.model, d1_metrics.bias)) if not d1_metrics.empty else {}
-        current["d1_bias"] = current.model.map(bias_map).fillna(0).astype(float)
-        current["corrected_max"] = current.max_temp_c - current.d1_bias
-        corrected = consensus(current.max_temp_c.tolist(), current.d1_bias.tolist())
-
-        obs_today = local_observations(observations, timezone_name, target)
-        latest_obs = obs_today.iloc[-1] if not obs_today.empty else None
-        observed_max = float(obs_today.temp_c.max()) if not obs_today.empty else None
-        heating_rate = None
-        if len(obs_today) >= 2:
-            latest_time = pd.Timestamp(obs_today.observed_at.iloc[-1])
-            recent_obs = obs_today[obs_today.observed_at >= latest_time - timedelta(hours=3)]
-            elapsed = (
-                recent_obs.observed_at.iloc[-1] - recent_obs.observed_at.iloc[0]
-            ).total_seconds() / 3600
-            if elapsed > 0:
-                heating_rate = float(
-                    (recent_obs.temp_c.iloc[-1] - recent_obs.temp_c.iloc[0]) / elapsed
-                )
-
-        expected_now, cloud_cover, temp_850, radiation = hourly_context(
-            hourly, timezone_name, target
-        )
-        local_now = datetime.now(ZoneInfo(timezone_name))
-        remaining_rise, future_radiation = remaining_heating_context(
-            hourly, timezone_name, target, local_now
-        )
-        observation_age_hours = None
-        if latest_obs is not None:
-            latest_observed_at = pd.Timestamp(latest_obs.observed_at)
-            observation_age_hours = max(
-                0.0,
-                (pd.Timestamp(local_now).tz_convert("UTC") - latest_observed_at).total_seconds()
-                / 3600,
-            )
-        trend = model_run_trend(forecasts, target)
-        recent_baseline = None
-        if not actuals.empty:
-            past = actuals[pd.to_datetime(actuals.target_date).dt.date < target].sort_values(
-                "target_date"
-            )
-            if not past.empty:
-                recent_baseline = float(past.max_temp_c.tail(14).median())
-
-        heat = heat_spike_assessment(
-            forecast_mean=corrected.mean,
-            recent_baseline=recent_baseline,
-            run_trend=trend,
-            model_spread=corrected.spread,
-            observed_temp=float(latest_obs.temp_c) if latest_obs is not None else None,
-            observed_dewpoint=(
-                float(latest_obs.dewpoint_c)
-                if latest_obs is not None and pd.notna(latest_obs.dewpoint_c)
-                else None
-            ),
-            expected_temp_now=expected_now if target == local_now.date() else None,
-            heating_rate=heating_rate,
-            cloud_cover=cloud_cover,
-        )
-        nowcast = consensus((current.corrected_max + heat.adjustment_c).tolist())
-        resolved_lower = market_resolution[0] if market_resolution is not None else None
-        resolved_upper = market_resolution[1] if market_resolution is not None else None
-        day_status = assess_day_status(
-            target_date=target,
-            local_now=local_now,
-            observed_max=observed_max,
-            observation_age_hours=observation_age_hours,
-            heating_rate=heating_rate,
-            remaining_model_rise=remaining_rise,
-            future_radiation_max=future_radiation,
-            resolved_lower_c=resolved_lower,
-            resolved_upper_c=resolved_upper,
-        )
-        probabilities = condition_probability_range(
-            nowcast.probability_by_bucket,
-            day_status.minimum_bucket,
-            day_status.maximum_bucket,
-        )
+        current = live_nowcast.current
+        corrected = live_nowcast.corrected
+        heat = live_nowcast.heat
+        day_status = live_nowcast.day_status
+        probabilities = live_nowcast.probabilities
+        observed_max = live_nowcast.observed_max
+        remaining_rise = live_nowcast.remaining_rise_c
+        temp_850 = live_nowcast.temp_850_c
+        radiation = live_nowcast.radiation_wm2
         live_mean = sum(bucket * probability for bucket, probability in probabilities.items())
 
         c1, c2, c3 = st.columns(3)
@@ -546,6 +391,145 @@ with tab_market:
                 "market value only as an approximation."
             )
 
+
+with tab_performance:
+    st.subheader("Tracked performance from real market prices")
+    st.caption(
+        "Starting with v9, every workflow run journals the probability shown by Weatherman and "
+        "the contemporaneous YES ask. After official resolution, the first Possible-edge signal "
+        "for each range is settled as a hypothetical $1 stake. No real order is placed."
+    )
+    settled = settled_signal_performance(all_signal_snapshots, all_market_snapshots)
+    recorded_ranges = (
+        all_signal_snapshots.market_id.nunique() if not all_signal_snapshots.empty else 0
+    )
+    possible_entries = (
+        all_signal_snapshots[all_signal_snapshots.signal == "Possible edge"].market_id.nunique()
+        if not all_signal_snapshots.empty
+        else 0
+    )
+    if all_signal_snapshots.empty:
+        st.info(
+            "The v9 signal journal is still empty. Run workflow 2 - Collect current forecasts "
+            "once. It will then update automatically every three hours."
+        )
+    elif settled.empty:
+        st.info(
+            f"The journal already contains {recorded_ranges} market ranges and "
+            f"{possible_entries} Possible-edge entries. Performance appears as soon as one of "
+            "those markets is officially resolved."
+        )
+    else:
+        total_pnl = float(settled.pnl.sum())
+        win_rate = float(settled.won.mean())
+        roi = total_pnl / len(settled)
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Settled $1 entries", f"{len(settled)}")
+        p2.metric("Hit rate", f"{win_rate:.1%}")
+        p3.metric("Tracked P/L", f"${total_pnl:+.2f}")
+        p4.metric("Return on test stakes", f"{roi:+.1%}")
+
+        airport_summary = settled.groupby("airport", as_index=False).agg(
+            settled_entries=("market_id", "count"),
+            wins=("won", "sum"),
+            pnl=("pnl", "sum"),
+            average_edge=("edge", "mean"),
+        )
+        airport_summary["hit_rate"] = airport_summary.wins / airport_summary.settled_entries
+        airport_summary["return"] = airport_summary.pnl / airport_summary.settled_entries
+        airport_summary["airport_name"] = airport_summary.airport.map(
+            lambda code: catalog.get(code, {}).get("name", code)
+        )
+        airport_summary = airport_summary.sort_values("pnl", ascending=False)
+        ranking = airport_summary[
+            [
+                "airport",
+                "airport_name",
+                "settled_entries",
+                "hit_rate",
+                "pnl",
+                "return",
+                "average_edge",
+            ]
+        ].copy()
+        ranking = ranking.rename(
+            columns={
+                "airport": "Airport",
+                "airport_name": "Name",
+                "settled_entries": "Settled entries",
+                "hit_rate": "Hit rate",
+                "pnl": "P/L",
+                "return": "Return",
+                "average_edge": "Average model edge",
+            }
+        )
+        for column in ["Hit rate", "Return", "Average model edge"]:
+            ranking[column] = ranking[column].map(lambda value: f"{value:.1%}")
+        ranking["P/L"] = ranking["P/L"].map(lambda value: f"${value:+.2f}")
+        st.subheader("Airport comparison")
+        st.dataframe(ranking, hide_index=True, width="stretch")
+
+        selected_performance = settled[settled.airport == airport].copy()
+        if selected_performance.empty:
+            st.info(f"No Possible-edge entry has settled for {airport} yet.")
+        else:
+            selected_performance = selected_performance.sort_values("captured_at")
+            selected_performance["airport_cumulative_pnl"] = selected_performance.pnl.cumsum()
+            st.plotly_chart(
+                px.line(
+                    selected_performance,
+                    x="captured_at",
+                    y="airport_cumulative_pnl",
+                    markers=True,
+                    title=f"{airport} · tracked cumulative P/L",
+                    labels={
+                        "captured_at": "Signal time",
+                        "airport_cumulative_pnl": "P/L from $1 test stakes",
+                    },
+                ),
+                width="stretch",
+            )
+
+        details = settled[
+            [
+                "airport",
+                "target_date",
+                "bucket_label",
+                "timing",
+                "model_probability",
+                "buy_price",
+                "edge",
+                "won",
+                "pnl",
+            ]
+        ].copy()
+        details = details.sort_values("target_date", ascending=False)
+        details["won"] = details.won.map({True: "Won", False: "Lost"})
+        for column in ["model_probability", "buy_price", "edge"]:
+            details[column] = details[column].map(lambda value: f"{value:.1%}")
+        details["pnl"] = details.pnl.map(lambda value: f"${value:+.2f}")
+        details = details.rename(
+            columns={
+                "airport": "Airport",
+                "target_date": "Target date",
+                "bucket_label": "Range",
+                "timing": "Entry timing",
+                "model_probability": "Our model",
+                "buy_price": "YES ask",
+                "edge": "Edge at entry",
+                "won": "Result",
+                "pnl": "P/L",
+            }
+        )
+        st.subheader("Settled signal details")
+        st.dataframe(details, hide_index=True, width="stretch")
+        st.caption(
+            "This is a historical model check, not a brokerage statement. It assumes one $1 "
+            "test stake at the recorded ask and does not include fees, slippage or liquidity "
+            "limits. Multiple qualifying temperature ranges are evaluated separately."
+        )
+
+
 with tab_accuracy:
     horizon = st.selectbox("Forecast timing", ["D-1", "D0-morning", "Live"])
     selected = forecasts[forecasts.horizon == horizon] if not forecasts.empty else forecasts
@@ -596,14 +580,15 @@ with tab_simulation:
         )
         st.caption(
             "Bucket-hit test: D-1 forecasts are corrected only with bias known before each day. "
-            "Fixed 2.0 odds are synthetic; this is not yet a real Polymarket ROI calculation."
+            "Fixed 2.0 odds are synthetic. Results based on collected Polymarket asks are shown "
+            "separately under Tracked performance."
         )
 
 with tab_data:
     st.write(
         f"Forecast rows: {len(forecasts):,} · Hourly rows: {len(hourly):,} · "
         f"Actual rows: {len(actuals):,} · METAR rows: {len(observations):,} · "
-        f"Market rows: {len(market_snapshots):,}"
+        f"Market rows: {len(market_snapshots):,} · Signal rows: {len(signal_snapshots):,}"
     )
     models = catalog[airport]["models"] + ["meteoblue"]
     coverage = pd.DataFrame({"model": models})

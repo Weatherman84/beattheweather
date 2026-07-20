@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterable
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
+import pandas as pd
 from sqlalchemy import select
 
+from .analytics import market_edges
 from .db import (
     DailyActual,
     Forecast,
@@ -13,8 +16,10 @@ from .db import (
     MarketSnapshot,
     Observation,
     Session,
+    SignalSnapshot,
     init_db,
 )
+from .nowcast import build_live_nowcast
 from .providers import (
     historical_actuals,
     meteoblue_forecast,
@@ -59,6 +64,93 @@ def _upsert_batch(
     return len(items)
 
 
+def _signal_timing(captured_at: datetime, target: date, timezone_name: str) -> str:
+    local = captured_at.astimezone(ZoneInfo(timezone_name))
+    if local.date() < target:
+        return "D-1 or earlier"
+    if local.date() > target:
+        return "After target day"
+    return "D0 morning" if local.hour < 12 else "D0 live"
+
+
+def _record_signal_snapshots(
+    session,
+    code: str,
+    airport: dict,
+    market_rows: list[dict],
+) -> int:
+    """Journal the exact model-versus-market view created by this collection."""
+    if not market_rows or all(bool(row.get("closed")) for row in market_rows):
+        return 0
+    captured_at = max(row["captured_at"] for row in market_rows)
+    target = market_rows[0]["target_date"]
+    connection = session.connection()
+    forecasts = pd.read_sql(
+        select(Forecast).where(Forecast.airport == code), connection
+    )
+    actuals = pd.read_sql(
+        select(DailyActual).where(DailyActual.airport == code), connection
+    )
+    observations = pd.read_sql(
+        select(Observation).where(Observation.airport == code), connection
+    )
+    hourly = pd.read_sql(
+        select(HourlyForecast).where(HourlyForecast.airport == code), connection
+    )
+    market_frame = pd.DataFrame(market_rows)
+    nowcast = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=actuals,
+        observations=observations,
+        hourly=hourly,
+        markets=market_frame,
+        timezone_name=airport["timezone"],
+        target=target,
+        as_of=captured_at,
+    )
+    if nowcast is None:
+        return 0
+    comparison = market_edges(nowcast.probabilities, market_frame)
+    if nowcast.day_status.is_locked:
+        comparison["signal"] = "Day complete"
+    timing = _signal_timing(captured_at, target, airport["timezone"])
+    rows = []
+    for row in comparison.itertuples():
+        rows.append(
+            {
+                "market_id": str(row.market_id),
+                "captured_at": captured_at,
+                "airport": code,
+                "target_date": target,
+                "event_slug": str(row.event_slug),
+                "bucket_label": str(row.bucket_label),
+                "timing": timing,
+                "model_probability": float(row.model_probability),
+                "market_probability": float(row.yes_price),
+                "buy_price": float(row.buy_price) if pd.notna(row.buy_price) else None,
+                "edge": float(row.edge) if pd.notna(row.edge) else None,
+                "signal": str(row.signal),
+                "day_phase": nowcast.day_status.phase,
+                "model_count": len(nowcast.current),
+            }
+        )
+    return _upsert_batch(
+        session,
+        SignalSnapshot,
+        rows,
+        lambda item: {
+            "market_id": item["market_id"],
+            "captured_at": item["captured_at"],
+        },
+        lambda item: {
+            key: value
+            for key, value in item.items()
+            if key not in {"market_id", "captured_at"}
+        },
+        f"{code}/signal journal/{target}",
+    )
+
+
 def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, int]:
     init_db()
     counts = {
@@ -66,6 +158,7 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
         "hourly_forecasts": 0,
         "observations": 0,
         "market_prices": 0,
+        "signals": 0,
         "actuals": 0,
     }
     catalog = airports()
@@ -158,8 +251,9 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                     },
                     f"{code}/recent actuals",
                 )
+            local_today = datetime.now(ZoneInfo(airport["timezone"])).date()
             for offset in range(-2, days):
-                market_target = date.today() + timedelta(days=offset)
+                market_target = local_today + timedelta(days=offset)
                 try:
                     market_rows = polymarket_prices(airport, market_target)
                 except Exception as exc:
@@ -183,6 +277,12 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                         },
                         f"{code}/Polymarket/{market_target}",
                     )
+                    try:
+                        counts["signals"] += _record_signal_snapshots(
+                            session, code, airport, market_rows
+                        )
+                    except Exception as exc:
+                        print(f"WARN {code}/signal journal/{market_target}: {exc}")
         session.commit()
     return counts
 
