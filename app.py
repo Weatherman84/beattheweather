@@ -16,10 +16,13 @@ from sqlalchemy import select
 
 from weatherman.analytics import (
     flat_bet_simulation,
+    forecast_scorecards,
     market_edges,
     model_metrics,
     score_frame,
+    settled_probability_comparison,
     settled_signal_performance,
+    trading_airport_scorecards,
 )
 from weatherman.db import (
     DailyActual,
@@ -44,6 +47,13 @@ def last_update(frame: pd.DataFrame, column: str, timezone_name: str) -> str:
         return "not available"
     latest = values.max().tz_convert(timezone_name)
     return latest.strftime("%d.%m.%Y %H:%M")
+
+
+@st.cache_data(show_spinner=False, ttl=900)
+def cached_forecast_scorecards(
+    forecast_frame: pd.DataFrame, actual_frame: pd.DataFrame
+) -> pd.DataFrame:
+    return forecast_scorecards(forecast_frame, actual_frame)
 
 
 st.set_page_config(page_title="Weatherman", page_icon="🌡️", layout="wide")
@@ -75,8 +85,8 @@ if st.sidebar.button("Refresh forecasts + METAR", type="primary"):
         )
 
 with Session() as session:
-    forecasts = pd.read_sql(select(Forecast).where(Forecast.airport == airport), session.bind)
-    actuals = pd.read_sql(select(DailyActual).where(DailyActual.airport == airport), session.bind)
+    all_forecasts = pd.read_sql(select(Forecast), session.bind)
+    all_actuals = pd.read_sql(select(DailyActual), session.bind)
     observations = pd.read_sql(
         select(Observation).where(Observation.airport == airport), session.bind
     )
@@ -86,6 +96,16 @@ with Session() as session:
     all_market_snapshots = pd.read_sql(select(MarketSnapshot), session.bind)
     all_signal_snapshots = pd.read_sql(select(SignalSnapshot), session.bind)
 
+forecasts = (
+    all_forecasts[all_forecasts.airport == airport].copy()
+    if not all_forecasts.empty
+    else all_forecasts
+)
+actuals = (
+    all_actuals[all_actuals.airport == airport].copy()
+    if not all_actuals.empty
+    else all_actuals
+)
 market_snapshots = (
     all_market_snapshots[all_market_snapshots.airport == airport].copy()
     if not all_market_snapshots.empty
@@ -111,6 +131,18 @@ else:
     latest_markets = target_markets
 d1_forecasts = forecasts[forecasts.horizon == "D-1"].copy() if not forecasts.empty else forecasts
 d1_scored = score_frame(d1_forecasts, actuals)
+settled_performance = settled_signal_performance(
+    all_signal_snapshots, all_market_snapshots
+)
+probability_comparison = settled_probability_comparison(
+    all_signal_snapshots, all_market_snapshots
+)
+trade_scorecards = trading_airport_scorecards(
+    settled_performance, probability_comparison
+)
+airport_forecast_scorecards = cached_forecast_scorecards(
+    all_forecasts, all_actuals
+)
 
 st.caption(
     f"Last data update · Forecast: {last_update(forecasts, 'run_at', timezone_name)} · "
@@ -120,11 +152,20 @@ st.caption(
     f"({timezone_name} local time)"
 )
 
-tab_live, tab_market, tab_performance, tab_accuracy, tab_simulation, tab_data = st.tabs(
+(
+    tab_live,
+    tab_market,
+    tab_performance,
+    tab_airports,
+    tab_accuracy,
+    tab_simulation,
+    tab_data,
+) = st.tabs(
     [
         "Live forecast",
         "Market comparison",
         "Tracked performance",
+        "Airport analysis",
         "Accuracy by timing",
         "D-1 $1 simulation",
         "Data coverage",
@@ -162,7 +203,7 @@ with tab_live:
         c1.metric("Raw model mean", f"{current.max_temp_c.mean():.1f} °C")
         c2.metric("D-1 bias-corrected", f"{corrected.mean:.1f} °C")
         c3.metric("METAR-conditioned nowcast", f"{live_mean:.1f} °C")
-        c4, c5, c6, c7 = st.columns(4)
+        c4, c5, c6, c7, c8 = st.columns(5)
         c4.metric("Model spread", f"{corrected.spread:.1f} °C")
         c5.metric(
             "METAR max so far",
@@ -172,7 +213,33 @@ with tab_live:
             "Model warming left",
             f"≤ {remaining_rise:.1f} °C" if remaining_rise is not None else "Not available",
         )
-        c7.metric("Day status", day_status.label)
+        c7.metric("Forecast confidence", f"{live_nowcast.forecast_confidence}/100")
+        c8.metric("Day status", day_status.label)
+
+        with st.expander("Dynamic model weights and confidence"):
+            weights = current[["model", "model_weight", "d1_bias"]].copy()
+            weights["model_weight"] = weights.model_weight.map(lambda value: f"{value:.1%}")
+            weights["d1_bias"] = weights.d1_bias.map(lambda value: f"{value:+.2f} °C")
+            weights = weights.rename(
+                columns={
+                    "model": "Model",
+                    "model_weight": "Current weight",
+                    "d1_bias": "D-1 bias correction",
+                }
+            )
+            st.dataframe(weights, hide_index=True, width="stretch")
+            factors = pd.DataFrame(
+                [
+                    {"Factor": name.replace("_", " ").title(), "Score": score}
+                    for name, score in live_nowcast.confidence_factors.items()
+                ]
+            )
+            st.bar_chart(factors.set_index("Factor"), horizontal=True)
+            st.caption(
+                "Weights use only earlier D-1 errors from the latest 90 days and are shrunk "
+                "toward equal weighting when the sample is small. Confidence combines historical "
+                "accuracy, current model agreement, sample size and live-data freshness."
+            )
 
         st.subheader("Model maximum forecasts")
         chart = current[["model", "max_temp_c", "corrected_max"]].melt(
@@ -399,7 +466,7 @@ with tab_performance:
         "the contemporaneous YES ask. After official resolution, the first Possible-edge signal "
         "for each range is settled as a hypothetical $1 stake. No real order is placed."
     )
-    settled = settled_signal_performance(all_signal_snapshots, all_market_snapshots)
+    settled = settled_performance
     recorded_ranges = (
         all_signal_snapshots.market_id.nunique() if not all_signal_snapshots.empty else 0
     )
@@ -528,6 +595,206 @@ with tab_performance:
             "test stake at the recorded ask and does not include fees, slippage or liquidity "
             "limits. Multiple qualifying temperature ranges are evaluated separately."
         )
+
+
+with tab_airports:
+    st.subheader("Airport and model scorecards")
+    st.caption(
+        "Forecast Score measures weather accuracy. Trade Score measures settled market results. "
+        "They remain separate because an accurate airport is not automatically a profitable one."
+    )
+    analysis_window = st.selectbox(
+        "Historical accuracy window",
+        [90, 30, 365],
+        format_func=lambda days: f"Last {days} days",
+        key="airport_analysis_window",
+    )
+    window_scores = (
+        airport_forecast_scorecards[
+            airport_forecast_scorecards.window_days == analysis_window
+        ].copy()
+        if not airport_forecast_scorecards.empty
+        else airport_forecast_scorecards
+    )
+    if window_scores.empty:
+        st.info("Run the historical D-1 backfill once to create airport scorecards.")
+    else:
+        ensemble_ranking = window_scores[
+            window_scores.model == "Weighted ensemble"
+        ].copy()
+        if ensemble_ranking.empty:
+            ensemble_ranking = window_scores.sort_values(
+                "forecast_score", ascending=False
+            ).drop_duplicates("airport", keep="first")
+        ensemble_ranking["airport_name"] = ensemble_ranking.airport.map(
+            lambda code: catalog.get(code, {}).get("name", code)
+        )
+        combined = ensemble_ranking[
+            ["airport", "airport_name", "forecast_score", "n", "mae", "data_quality"]
+        ].merge(
+            trade_scorecards[
+                ["airport", "trade_score", "resolved_days", "confidence"]
+            ]
+            if not trade_scorecards.empty
+            else pd.DataFrame(
+                columns=["airport", "trade_score", "resolved_days", "confidence"]
+            ),
+            on="airport",
+            how="left",
+        )
+        combined = combined.sort_values("forecast_score", ascending=False)
+        combined["trade_score"] = combined.trade_score.map(
+            lambda value: f"{value:.0f}/100" if pd.notna(value) else "Waiting for data"
+        )
+        combined["resolved_days"] = pd.to_numeric(
+            combined.resolved_days, errors="coerce"
+        ).fillna(0).astype(int)
+        combined["confidence"] = combined.confidence.fillna("Not enough data")
+        combined["forecast_score"] = combined.forecast_score.map(
+            lambda value: f"{value:.0f}/100"
+        )
+        combined["mae"] = combined.mae.map(lambda value: f"{value:.2f} °C")
+        combined = combined.rename(
+            columns={
+                "airport": "Airport",
+                "airport_name": "Name",
+                "forecast_score": "Forecast Score",
+                "trade_score": "Trade Score",
+                "resolved_days": "Settled airport days",
+                "confidence": "Trade-score status",
+                "n": "Forecast days",
+                "mae": "Ensemble MAE",
+                "data_quality": "Forecast data",
+            }
+        )
+        st.subheader("Airport ranking")
+        st.dataframe(combined, hide_index=True, width="stretch")
+
+        selected_models = window_scores[window_scores.airport == airport].copy()
+        current_weights = live_nowcast.model_weights if live_nowcast is not None else {}
+        selected_models["current_weight"] = selected_models.model.map(current_weights)
+        selected_models = selected_models.sort_values("forecast_score", ascending=False)
+        model_table = selected_models[
+            [
+                "model",
+                "n",
+                "bias",
+                "mae",
+                "rmse",
+                "exact_hit",
+                "within_1c",
+                "forecast_score",
+                "current_weight",
+                "data_quality",
+            ]
+        ].copy()
+        for column in ["bias", "mae", "rmse"]:
+            model_table[column] = model_table[column].map(lambda value: f"{value:.2f} °C")
+        for column in ["exact_hit", "within_1c", "current_weight"]:
+            model_table[column] = model_table[column].map(
+                lambda value: f"{value:.1%}" if pd.notna(value) else "—"
+            )
+        model_table["forecast_score"] = model_table.forecast_score.map(
+            lambda value: f"{value:.0f}/100"
+        )
+        model_table = model_table.rename(
+            columns={
+                "model": "Model",
+                "n": "Days",
+                "bias": "Bias",
+                "mae": "MAE",
+                "rmse": "RMSE",
+                "exact_hit": "Exact bucket",
+                "within_1c": "Within ±1 °C",
+                "forecast_score": "Forecast Score",
+                "current_weight": "Current live weight",
+                "data_quality": "Data quality",
+            }
+        )
+        st.subheader(f"{airport} · model detail")
+        st.dataframe(model_table, hide_index=True, width="stretch")
+        st.caption(
+            "The Weighted ensemble is tested walk-forward: every historical day uses only errors "
+            "known before that day. Current model weights use the latest 90 days and are limited "
+            "so that a short lucky period cannot dominate the forecast."
+        )
+
+    trade_base = pd.DataFrame(
+        [
+            {"airport": code, "airport_name": details["name"]}
+            for code, details in catalog.items()
+        ]
+    )
+    trade_table = trade_base.merge(trade_scorecards, on="airport", how="left")
+    trade_table["resolved_days"] = pd.to_numeric(
+        trade_table.resolved_days, errors="coerce"
+    ).fillna(0).astype(int)
+    trade_table["entries"] = pd.to_numeric(
+        trade_table.entries, errors="coerce"
+    ).fillna(0).astype(int)
+    trade_table["confidence"] = trade_table.confidence.fillna("Not enough data")
+    trade_table["trade_score"] = trade_table.trade_score.map(
+        lambda value: f"{value:.0f}/100" if pd.notna(value) else "Locked"
+    )
+    for column in ["hit_rate", "roi", "average_edge", "average_market_gap"]:
+        trade_table[column] = trade_table[column].map(
+            lambda value: f"{value:.1%}" if pd.notna(value) else "—"
+        )
+    trade_table["pnl"] = trade_table.pnl.map(
+        lambda value: f"${value:+.2f}" if pd.notna(value) else "$0.00"
+    )
+    trade_table["max_drawdown"] = trade_table.max_drawdown.map(
+        lambda value: f"${value:.2f}" if pd.notna(value) else "—"
+    )
+    trade_table["sharpe"] = trade_table.sharpe.map(
+        lambda value: f"{value:.2f}" if pd.notna(value) else "Waiting for 30 days"
+    )
+    trade_table["calibration_error"] = trade_table.calibration_error.map(
+        lambda value: f"{value:.3f}" if pd.notna(value) else "Collecting"
+    )
+    trade_table = trade_table[
+        [
+            "airport",
+            "airport_name",
+            "trade_score",
+            "confidence",
+            "resolved_days",
+            "entries",
+            "hit_rate",
+            "roi",
+            "pnl",
+            "max_drawdown",
+            "sharpe",
+            "average_edge",
+            "average_market_gap",
+            "calibration_error",
+        ]
+    ].rename(
+        columns={
+            "airport": "Airport",
+            "airport_name": "Name",
+            "trade_score": "Trade Score",
+            "confidence": "Status",
+            "resolved_days": "Settled days",
+            "entries": "Entries",
+            "hit_rate": "Hit rate",
+            "roi": "ROI",
+            "pnl": "P/L",
+            "max_drawdown": "Max drawdown",
+            "sharpe": "Daily Sharpe",
+            "average_edge": "Average entry edge",
+            "average_market_gap": "Average model-market gap",
+            "calibration_error": "Calibration error",
+        }
+    )
+    st.subheader("Trading scorecard · data gates active")
+    st.dataframe(trade_table, hide_index=True, width="stretch")
+    st.caption(
+        "Trade Score stays locked below 10 independent settled airport days. It is Provisional "
+        "from 10–29 days, Developing from 30–99 and More robust from 100 days. Daily Sharpe "
+        "starts at 30 days; calibration error requires at least 100 probability samples and "
+        "30 settled days. Model-market gap measures disagreement, not guaranteed inefficiency."
+    )
 
 
 with tab_accuracy:

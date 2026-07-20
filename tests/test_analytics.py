@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -9,13 +9,16 @@ from weatherman.analytics import (
     condition_probabilities,
     consensus,
     flat_bet_simulation,
+    forecast_scorecards,
     heat_spike_assessment,
     market_edges,
     model_metrics,
+    model_weight_map,
     probability_for_range,
     resolved_market_range,
     score_frame,
     settled_signal_performance,
+    trading_airport_scorecards,
 )
 
 
@@ -23,6 +26,11 @@ def test_consensus_bias_correction():
     result = consensus([35, 36, 37], [1, 0, -1])
     assert result.mean == 36
     assert abs(sum(result.probability_by_bucket.values()) - 1) < 1e-9
+
+
+def test_consensus_supports_dynamic_model_weights():
+    result = consensus([10, 20], weights=[0.9, 0.1])
+    assert result.mean == 11
 
 
 def test_scoring_and_metrics():
@@ -307,3 +315,81 @@ def test_signal_performance_waits_for_a_confirmed_winner():
         ]
     )
     assert settled_signal_performance(signals, markets).empty
+
+
+def test_airport_model_weights_and_walk_forward_scorecard():
+    start = date(2026, 1, 1)
+    forecasts = []
+    actuals = []
+    for offset in range(100):
+        target = start + timedelta(days=offset)
+        actual = 20 + offset % 5
+        actuals.append(
+            {"airport": "LEMD", "target_date": target, "max_temp_c": actual}
+        )
+        for model, error in [
+            ("accurate", 0.2),
+            ("weak", 2.0 if offset % 2 == 0 else -2.0),
+        ]:
+            forecasts.append(
+                {
+                    "airport": "LEMD",
+                    "model": model,
+                    "run_at": datetime.combine(target, datetime.min.time())
+                    - timedelta(days=1),
+                    "target_date": target,
+                    "max_temp_c": actual + error,
+                    "source": "previous-runs",
+                    "horizon": "D-1",
+                }
+            )
+    forecast_frame = pd.DataFrame(forecasts)
+    actual_frame = pd.DataFrame(actuals)
+    scored = score_frame(forecast_frame, actual_frame)
+    weights = model_weight_map(scored)
+    assert weights["accurate"] > weights["weak"]
+
+    cards = forecast_scorecards(forecast_frame, actual_frame)
+    recent = cards[cards.window_days == 90]
+    assert "Weighted ensemble" in set(recent.model)
+    accurate_score = recent[recent.model == "accurate"].iloc[0].forecast_score
+    weak_score = recent[recent.model == "weak"].iloc[0].forecast_score
+    assert accurate_score > weak_score
+
+
+def test_trade_score_is_gated_by_independent_days():
+    performance = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 1, 1) + timedelta(days=index),
+                "market_id": f"market-{index}",
+                "won": index % 3 != 0,
+                "pnl": 0.5 if index % 3 != 0 else -1.0,
+                "edge": 0.12,
+            }
+            for index in range(30)
+        ]
+    )
+    probability_records = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "model_probability": 0.6,
+                "outcome": float(index % 3 != 0),
+                "model_brier": 0.16,
+                "market_brier": 0.20,
+                "model_market_gap": 0.1,
+            }
+            for index in range(100)
+        ]
+    )
+    gated = trading_airport_scorecards(performance.iloc[:9], probability_records).iloc[0]
+    assert gated.confidence == "Not enough data"
+    assert pd.isna(gated.trade_score)
+
+    developing = trading_airport_scorecards(performance, probability_records).iloc[0]
+    assert developing.confidence == "Developing"
+    assert pd.notna(developing.trade_score)
+    assert pd.notna(developing.sharpe)
+    assert pd.notna(developing.calibration_error)

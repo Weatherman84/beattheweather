@@ -189,6 +189,32 @@ Nach dem Upload von Version 9 nur **2 - Collect current forecasts** einmal ausf�
 Backfill ist nicht erforderlich. Der Reiter **Tracked performance** füllt sich danach
 automatisch; abgeschlossene Ergebnisse erscheinen jeweils nach der offiziellen Marktauflösung.
 
+## Neu in Version 9.1
+
+- Der neue Reiter **Airport analysis** vergleicht die Wetterqualität aller vorhandenen
+  Flughäfen über die letzten 30, 90 oder 365 Tage.
+- Für jedes Wettermodell stehen Datenmenge, Bias, MAE, RMSE, Treffer auf den exakten
+  Temperaturbereich und Treffer innerhalb von ±1 °C in einer verständlichen Scorecard.
+- Der **Forecast Score** von 0 bis 100 fasst diese Wetterkennzahlen zusammen. Eine zusätzliche
+  Qualitätsangabe zeigt, ob die Datenmenge begrenzt, mittel oder stark ist.
+- Das Live-Modell verwendet nun dynamische Gewichte. Modelle mit kleineren, nach der
+  Bias-Korrektur verbleibenden Fehlern der letzten 90 Tage erhalten mehr Gewicht. Bei wenigen
+  Daten bleiben die Gewichte bewusst näher an einer Gleichverteilung.
+- Das gewichtete Ensemble wird ohne Zukunftswissen getestet: Für jeden vergangenen Testtag
+  dürfen ausschließlich Ergebnisse älterer Tage verwendet werden.
+- **Forecast confidence** berücksichtigt historische Genauigkeit, aktuelle
+  Modellübereinstimmung, Datenmenge und Aktualität der Live-Messungen.
+- Forecast Score und Trade Score bleiben getrennt. Ein genauer Wetterflughafen ist nicht
+  automatisch ein guter Trading-Flughafen.
+- Trade Score bleibt unter 10 unabhängig abgeschlossenen Flughafentagen gesperrt. Von 10 bis
+  29 Tagen ist er vorläufig, von 30 bis 99 zunehmend belastbar und ab 100 Tagen belastbarer.
+- Maximaler Drawdown, tägliche Sharpe-Kennzahl und Wahrscheinlichkeitskalibrierung sind bereits
+  vorbereitet, werden aber erst bei ausreichend vielen echten Ergebnissen angezeigt.
+
+Nach dem Upload von Version 9.1 nur **2 - Collect current forecasts** einmal ausführen. Ein
+erneuter Backfill ist nicht erforderlich. Danach in Streamlit **Reboot app** oder **Rerun**
+wählen.
+
 ## Wichtig zum Dashboard
 
 Die GitHub-Workflows sammeln und speichern die Daten. Eine normale GitHub-Seite führt das
