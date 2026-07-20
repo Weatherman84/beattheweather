@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -20,6 +21,17 @@ class HeatSpikeAssessment:
     status: str
     adjustment_c: float
     signals: list[str]
+
+
+@dataclass(frozen=True)
+class DayStatus:
+    phase: str
+    label: str
+    is_locked: bool
+    minimum_bucket: int | None
+    maximum_bucket: int | None
+    remaining_heating_c: float | None
+    explanation: str
 
 
 def consensus(
@@ -48,17 +60,166 @@ def consensus(
 def condition_probabilities(
     probabilities: dict[int, float], minimum_bucket: int | None
 ) -> dict[int, float]:
-    if minimum_bucket is None:
+    return condition_probability_range(probabilities, minimum_bucket, None)
+
+
+def condition_probability_range(
+    probabilities: dict[int, float],
+    minimum_bucket: int | None,
+    maximum_bucket: int | None,
+) -> dict[int, float]:
+    if minimum_bucket is None and maximum_bucket is None:
         return probabilities
     possible = {
         bucket: probability
         for bucket, probability in probabilities.items()
-        if bucket >= minimum_bucket
+        if (minimum_bucket is None or bucket >= minimum_bucket)
+        and (maximum_bucket is None or bucket <= maximum_bucket)
     }
     total = sum(possible.values())
     if total <= 0:
-        return {minimum_bucket: 1.0}
+        fallback = minimum_bucket if minimum_bucket is not None else maximum_bucket
+        return {fallback: 1.0} if fallback is not None else probabilities
     return {bucket: probability / total for bucket, probability in possible.items()}
+
+
+def assess_day_status(
+    *,
+    target_date: date,
+    local_now: datetime,
+    observed_max: float | None,
+    observation_age_hours: float | None,
+    heating_rate: float | None,
+    remaining_model_rise: float | None,
+    future_radiation_max: float | None,
+    resolved_lower_c: float | None = None,
+    resolved_upper_c: float | None = None,
+) -> DayStatus:
+    """Decide whether a daily maximum can still change.
+
+    The live lock is deliberately conservative: it requires a fresh observation, a
+    non-rising temperature, almost no remaining sunlight and no meaningful rise in
+    the latest hourly model paths. A settled market may supply an official range.
+    """
+    minimum_bucket = math.floor(observed_max + 0.5) if observed_max is not None else None
+    has_resolution = resolved_lower_c is not None or resolved_upper_c is not None
+    if has_resolution:
+        resolved_min = math.ceil(resolved_lower_c) if resolved_lower_c is not None else None
+        resolved_max = math.floor(resolved_upper_c) if resolved_upper_c is not None else None
+        return DayStatus(
+            phase="resolved",
+            label="Officially resolved",
+            is_locked=True,
+            minimum_bucket=resolved_min,
+            maximum_bucket=resolved_max,
+            remaining_heating_c=0.0,
+            explanation="The market is closed and its official winning range is available.",
+        )
+
+    if target_date < local_now.date():
+        if minimum_bucket is not None:
+            return DayStatus(
+                phase="final",
+                label="Final from observations",
+                is_locked=True,
+                minimum_bucket=minimum_bucket,
+                maximum_bucket=minimum_bucket,
+                remaining_heating_c=0.0,
+                explanation="The local calendar day has ended; the stored METAR maximum is final.",
+            )
+        return DayStatus(
+            phase="incomplete",
+            label="Past day · observations missing",
+            is_locked=False,
+            minimum_bucket=None,
+            maximum_bucket=None,
+            remaining_heating_c=None,
+            explanation="The date has passed, but no METAR maximum is stored for it.",
+        )
+
+    if target_date > local_now.date():
+        return DayStatus(
+            phase="forecast",
+            label="Pre-day forecast",
+            is_locked=False,
+            minimum_bucket=None,
+            maximum_bucket=None,
+            remaining_heating_c=remaining_model_rise,
+            explanation="The target day has not started in the airport's local time.",
+        )
+
+    fresh_observation = (
+        observation_age_hours is not None and 0 <= observation_age_hours <= 2.0
+    )
+    late_enough = local_now.hour >= 16
+    not_heating = heating_rate is not None and heating_rate <= 0.2
+    sunlight_gone = future_radiation_max is not None and future_radiation_max <= 50
+    models_done = remaining_model_rise is not None and remaining_model_rise <= 0.4
+    if (
+        minimum_bucket is not None
+        and fresh_observation
+        and late_enough
+        and not_heating
+        and sunlight_gone
+        and models_done
+    ):
+        return DayStatus(
+            phase="locked",
+            label="Peak locked",
+            is_locked=True,
+            minimum_bucket=minimum_bucket,
+            maximum_bucket=minimum_bucket,
+            remaining_heating_c=max(0.0, remaining_model_rise),
+            explanation=(
+                "Fresh METAR observations are no longer rising, sunlight is nearly gone and "
+                "the hourly models show no meaningful remaining warming."
+            ),
+        )
+
+    if minimum_bucket is None:
+        label = "Waiting for METAR"
+        explanation = "No observation for the local target day has been stored yet."
+    elif not fresh_observation:
+        label = "Live · METAR stale"
+        explanation = "The last observation is too old to decide whether the daily peak is final."
+    else:
+        label = "Heating window open"
+        explanation = "Further warming is still possible; only already-impossible lower buckets are removed."
+    return DayStatus(
+        phase="active",
+        label=label,
+        is_locked=False,
+        minimum_bucket=minimum_bucket,
+        maximum_bucket=None,
+        remaining_heating_c=remaining_model_rise,
+        explanation=explanation,
+    )
+
+
+def resolved_market_range(
+    markets: pd.DataFrame,
+) -> tuple[float | None, float | None, str] | None:
+    """Return the sole official winning range once every stored market is closed."""
+    if markets.empty or "closed" not in markets or "yes_won" not in markets:
+        return None
+    latest = markets.copy()
+    if "captured_at" in latest:
+        latest = latest.sort_values("captured_at").drop_duplicates("market_id", keep="last")
+    if not latest.closed.fillna(False).astype(bool).all():
+        return None
+    winners = latest[latest.yes_won.fillna(False).astype(bool)]
+    if len(winners) != 1:
+        return None
+    winner = winners.iloc[0]
+
+    def optional_number(value: object) -> float | None:
+        return float(value) if pd.notna(value) else None
+
+    return (
+        optional_number(winner.bucket_low_c),
+        optional_number(winner.bucket_high_c),
+        str(winner.bucket_label),
+    )
 
 
 def probability_for_range(
@@ -89,10 +250,14 @@ def market_edges(probabilities: dict[int, float], markets: pd.DataFrame) -> pd.D
         ),
         axis=1,
     )
-    result["buy_price"] = result.best_ask.fillna(result.yes_price).astype(float)
+    result["buy_price"] = result.best_ask.where(result.best_ask.notna(), result.yes_price).astype(
+        float
+    )
     result["edge"] = result.model_probability - result.buy_price
     result["signal"] = "No clear edge"
     actionable = result.best_ask.notna()
+    if "closed" in result:
+        actionable &= ~result.closed.fillna(False).astype(bool)
     result.loc[actionable & (result.edge >= 0.04), "signal"] = "Watch"
     result.loc[actionable & (result.edge >= 0.08), "signal"] = "Possible edge"
     return result.sort_values("edge", ascending=False)

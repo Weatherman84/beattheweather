@@ -1,6 +1,11 @@
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 
 from weatherman.analytics import (
+    assess_day_status,
+    condition_probability_range,
     condition_probabilities,
     consensus,
     flat_bet_simulation,
@@ -8,6 +13,7 @@ from weatherman.analytics import (
     market_edges,
     model_metrics,
     probability_for_range,
+    resolved_market_range,
     score_frame,
 )
 
@@ -73,6 +79,38 @@ def test_metar_floor_removes_impossible_buckets():
     assert round(conditioned[35], 3) == 0.583
 
 
+def test_completed_day_locks_probability_to_observed_maximum():
+    status = assess_day_status(
+        target_date=date(2026, 7, 20),
+        local_now=datetime(2026, 7, 20, 21, tzinfo=ZoneInfo("Europe/Madrid")),
+        observed_max=35.0,
+        observation_age_hours=0.4,
+        heating_rate=-0.8,
+        remaining_model_rise=0.1,
+        future_radiation_max=0,
+    )
+    assert status.label == "Peak locked"
+    assert status.is_locked
+    assert condition_probability_range({35: 0.3, 36: 0.5, 37: 0.2}, 35, 35) == {
+        35: 1.0
+    }
+
+
+def test_day_stays_open_while_sunlight_and_warming_remain():
+    status = assess_day_status(
+        target_date=date(2026, 7, 20),
+        local_now=datetime(2026, 7, 20, 17, tzinfo=ZoneInfo("Europe/Madrid")),
+        observed_max=35.0,
+        observation_age_hours=0.3,
+        heating_rate=0.0,
+        remaining_model_rise=0.8,
+        future_radiation_max=250,
+    )
+    assert status.label == "Heating window open"
+    assert not status.is_locked
+    assert status.maximum_bucket is None
+
+
 def test_heat_spike_confirmation():
     result = heat_spike_assessment(
         forecast_mean=36,
@@ -108,3 +146,49 @@ def test_market_range_probabilities_and_actionable_edge():
     result = market_edges(probabilities, markets)
     assert round(result.iloc[0].edge, 2) == 0.09
     assert result.iloc[0].signal == "Possible edge"
+
+
+def test_closed_market_is_not_marked_as_an_edge_and_supplies_winner():
+    markets = pd.DataFrame(
+        [
+            {
+                "market_id": "1",
+                "captured_at": "2026-07-20T21:00:00Z",
+                "bucket_label": "35°C",
+                "bucket_low_c": 35,
+                "bucket_high_c": 35,
+                "yes_price": 1.0,
+                "best_ask": 1.0,
+                "closed": True,
+                "yes_won": True,
+            },
+            {
+                "market_id": "2",
+                "captured_at": "2026-07-20T21:00:00Z",
+                "bucket_label": "36°C",
+                "bucket_low_c": 36,
+                "bucket_high_c": 36,
+                "yes_price": 0.0,
+                "best_ask": 0.01,
+                "closed": True,
+                "yes_won": False,
+            },
+        ]
+    )
+    result = market_edges({35: 1.0}, markets)
+    assert set(result.signal) == {"No clear edge"}
+    assert resolved_market_range(markets) == (35.0, 35.0, "35°C")
+
+    status = assess_day_status(
+        target_date=date(2026, 7, 20),
+        local_now=datetime(2026, 7, 21, 9, tzinfo=ZoneInfo("Europe/Madrid")),
+        observed_max=None,
+        observation_age_hours=None,
+        heating_rate=None,
+        remaining_model_rise=None,
+        future_radiation_max=None,
+        resolved_lower_c=35,
+        resolved_upper_c=35,
+    )
+    assert status.label == "Officially resolved"
+    assert status.minimum_bucket == status.maximum_bucket == 35

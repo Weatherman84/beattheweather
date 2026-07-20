@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -16,12 +15,14 @@ import streamlit as st
 from sqlalchemy import select
 
 from weatherman.analytics import (
-    condition_probabilities,
+    assess_day_status,
+    condition_probability_range,
     consensus,
     flat_bet_simulation,
     heat_spike_assessment,
     market_edges,
     model_metrics,
+    resolved_market_range,
     score_frame,
 )
 from weatherman.db import (
@@ -76,6 +77,46 @@ def hourly_context(
     return median("temp_c"), median("cloud_cover"), median("temp_850hpa_c"), median("radiation_wm2")
 
 
+def remaining_heating_context(
+    frame: pd.DataFrame,
+    timezone_name: str,
+    target: date,
+    reference: datetime,
+) -> tuple[float | None, float | None]:
+    """Return conservative remaining warming and future sunlight from latest hourly runs."""
+    if frame.empty:
+        return None, None
+    result = frame.copy()
+    result["valid_at"] = pd.to_datetime(result.valid_at, utc=True)
+    result["run_at"] = pd.to_datetime(result.run_at, utc=True)
+    result["local_valid"] = result.valid_at.dt.tz_convert(timezone_name)
+    result = result[result.local_valid.dt.date == target]
+    if result.empty:
+        return None, None
+    reference_utc = pd.Timestamp(reference).tz_convert("UTC")
+    rises: list[float] = []
+    future_radiation: list[float] = []
+    for _, model_frame in result.groupby("model"):
+        latest_run = model_frame.run_at.max()
+        model_frame = model_frame[model_frame.run_at == latest_run].sort_values("valid_at")
+        if model_frame.empty:
+            continue
+        nearest_index = (model_frame.valid_at - reference_utc).abs().idxmin()
+        expected_now = float(model_frame.loc[nearest_index, "temp_c"])
+        future = model_frame[model_frame.valid_at >= reference_utc - timedelta(minutes=30)]
+        if future.empty:
+            rises.append(0.0)
+            future_radiation.append(0.0)
+            continue
+        rises.append(max(0.0, float(future.temp_c.max()) - expected_now))
+        radiation_values = future.radiation_wm2.dropna()
+        if not radiation_values.empty:
+            future_radiation.append(float(radiation_values.max()))
+    remaining_rise = max(rises) if rises else None
+    radiation_max = max(future_radiation) if future_radiation else None
+    return remaining_rise, radiation_max
+
+
 def model_run_trend(frame: pd.DataFrame, target: date) -> float | None:
     if frame.empty:
         return None
@@ -112,7 +153,10 @@ st.title("Weatherman · Temperature Market Lab")
 airport = st.sidebar.selectbox(
     "Airport", list(catalog), format_func=lambda code: f"{code} · {catalog[code]['name']}"
 )
-target = st.sidebar.date_input("Target date", value=date.today())
+timezone_name = catalog[airport]["timezone"]
+target = st.sidebar.date_input(
+    "Target date", value=datetime.now(ZoneInfo(timezone_name)).date()
+)
 if st.sidebar.button("Refresh forecasts + METAR", type="primary"):
     try:
         with st.spinner("Fetching models and observations…"):
@@ -141,7 +185,19 @@ with Session() as session:
         select(MarketSnapshot).where(MarketSnapshot.airport == airport), session.bind
     )
 
-timezone_name = catalog[airport]["timezone"]
+target_markets = (
+    market_snapshots[pd.to_datetime(market_snapshots.target_date).dt.date == target].copy()
+    if not market_snapshots.empty
+    else market_snapshots
+)
+if not target_markets.empty:
+    target_markets["captured_at"] = pd.to_datetime(target_markets.captured_at, utc=True)
+    latest_markets = target_markets.sort_values("captured_at").drop_duplicates(
+        "market_id", keep="last"
+    )
+else:
+    latest_markets = target_markets
+market_resolution = resolved_market_range(latest_markets)
 d1_forecasts = forecasts[forecasts.horizon == "D-1"].copy() if not forecasts.empty else forecasts
 d1_scored = score_frame(d1_forecasts, actuals)
 d1_metrics = model_metrics(d1_scored)
@@ -164,6 +220,7 @@ tab_live, tab_market, tab_accuracy, tab_simulation, tab_data = st.tabs(
 )
 
 probabilities: dict[int, float] | None = None
+day_status = None
 with tab_live:
     current = (
         forecasts[pd.to_datetime(forecasts.target_date).dt.date == target].copy()
@@ -199,6 +256,18 @@ with tab_live:
         expected_now, cloud_cover, temp_850, radiation = hourly_context(
             hourly, timezone_name, target
         )
+        local_now = datetime.now(ZoneInfo(timezone_name))
+        remaining_rise, future_radiation = remaining_heating_context(
+            hourly, timezone_name, target, local_now
+        )
+        observation_age_hours = None
+        if latest_obs is not None:
+            latest_observed_at = pd.Timestamp(latest_obs.observed_at)
+            observation_age_hours = max(
+                0.0,
+                (pd.Timestamp(local_now).tz_convert("UTC") - latest_observed_at).total_seconds()
+                / 3600,
+            )
         trend = model_run_trend(forecasts, target)
         recent_baseline = None
         if not actuals.empty:
@@ -219,28 +288,46 @@ with tab_live:
                 if latest_obs is not None and pd.notna(latest_obs.dewpoint_c)
                 else None
             ),
-            expected_temp_now=expected_now
-            if target == datetime.now(ZoneInfo(timezone_name)).date()
-            else None,
+            expected_temp_now=expected_now if target == local_now.date() else None,
             heating_rate=heating_rate,
             cloud_cover=cloud_cover,
         )
         nowcast = consensus((current.corrected_max + heat.adjustment_c).tolist())
-        minimum_bucket = math.floor(observed_max + 0.5) if observed_max is not None else None
-        probabilities = condition_probabilities(nowcast.probability_by_bucket, minimum_bucket)
+        resolved_lower = market_resolution[0] if market_resolution is not None else None
+        resolved_upper = market_resolution[1] if market_resolution is not None else None
+        day_status = assess_day_status(
+            target_date=target,
+            local_now=local_now,
+            observed_max=observed_max,
+            observation_age_hours=observation_age_hours,
+            heating_rate=heating_rate,
+            remaining_model_rise=remaining_rise,
+            future_radiation_max=future_radiation,
+            resolved_lower_c=resolved_lower,
+            resolved_upper_c=resolved_upper,
+        )
+        probabilities = condition_probability_range(
+            nowcast.probability_by_bucket,
+            day_status.minimum_bucket,
+            day_status.maximum_bucket,
+        )
         live_mean = sum(bucket * probability for bucket, probability in probabilities.items())
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Raw model mean", f"{current.max_temp_c.mean():.1f} °C")
         c2.metric("D-1 bias-corrected", f"{corrected.mean:.1f} °C")
         c3.metric("METAR-conditioned nowcast", f"{live_mean:.1f} °C")
-        c4, c5, c6 = st.columns(3)
+        c4, c5, c6, c7 = st.columns(4)
         c4.metric("Model spread", f"{corrected.spread:.1f} °C")
         c5.metric(
             "METAR max so far",
             f"{observed_max:.0f} °C" if observed_max is not None else "Not available",
         )
-        c6.metric("Heat Spike Score", f"{heat.score}/100", heat.status)
+        c6.metric(
+            "Model warming left",
+            f"≤ {remaining_rise:.1f} °C" if remaining_rise is not None else "Not available",
+        )
+        c7.metric("Day status", day_status.label)
 
         st.subheader("Model maximum forecasts")
         chart = current[["model", "max_temp_c", "corrected_max"]].melt(
@@ -285,22 +372,26 @@ with tab_live:
             hide_index=True,
             width="stretch",
         )
-        if minimum_bucket is not None:
-            st.caption(
-                f"Buckets below {minimum_bucket} °C are impossible because today's stored METAR "
-                f"maximum is already {observed_max:.0f} °C. Remaining probabilities sum to 100%."
+        if day_status.is_locked:
+            st.success(
+                f"{day_status.label}: {day_status.explanation} Probabilities outside the final "
+                "range have been removed."
             )
+        elif day_status.minimum_bucket is not None:
+            st.caption(
+                f"Buckets below {day_status.minimum_bucket} °C are impossible because today's "
+                f"stored METAR maximum is already {observed_max:.0f} °C. Remaining "
+                "probabilities sum to 100%."
+            )
+            st.caption(day_status.explanation)
+        else:
+            st.caption(day_status.explanation)
 
 with tab_market:
     st.subheader("Our probability versus the live Polymarket price")
     st.caption(
         "A positive difference means our weather model assigns a higher chance than the current "
         "price to buy YES. It is a model signal, not a guarantee or trading instruction."
-    )
-    target_markets = (
-        market_snapshots[pd.to_datetime(market_snapshots.target_date).dt.date == target].copy()
-        if not market_snapshots.empty
-        else market_snapshots
     )
     if probabilities is None:
         st.info("A current weather forecast is required before a market comparison can be made.")
@@ -317,29 +408,41 @@ with tab_market:
                 "Daily markets are often published only shortly before the target day."
             )
     else:
-        target_markets["captured_at"] = pd.to_datetime(target_markets.captured_at, utc=True)
-        latest_markets = target_markets.sort_values("captured_at").drop_duplicates(
-            "market_id", keep="last"
-        )
         comparison = market_edges(probabilities, latest_markets)
         if comparison.empty:
             st.info("The stored market does not contain recognizable Celsius ranges.")
         else:
+            market_closed = latest_markets.closed.fillna(False).astype(bool).all()
+            trading_suppressed = market_closed or bool(day_status and day_status.is_locked)
             actionable = comparison[comparison.best_ask.notna()]
             best = actionable.iloc[0] if not actionable.empty else comparison.iloc[0]
             market_sum = float(comparison.yes_price.sum())
             m1, m2, m3 = st.columns(3)
-            m1.metric("Best model difference", f"{best.edge:+.1%}")
-            m2.metric("Temperature range", best.bucket_label)
-            m3.metric("Market price sum", f"{market_sum:.1%}")
-            if pd.notna(best.best_ask) and best.edge >= 0.08:
-                st.info(
-                    f"Model signal: {best.bucket_label} is {best.edge:+.1%} above the current "
-                    "YES buy price. Check spread, liquidity and the resolution source before "
-                    "drawing any conclusion."
+            if trading_suppressed:
+                top_market = comparison.sort_values("yes_price", ascending=False).iloc[0]
+                status_label = "Officially resolved" if market_closed else "Daily peak locked"
+                m1.metric("Status", status_label)
+                m2.metric("Leading / winning range", top_market.bucket_label)
+                m3.metric("Market probability", f"{top_market.yes_price:.1%}")
+                comparison["signal"] = "Day complete"
+                st.success(
+                    "The temperature day is complete. Weatherman no longer displays new edge "
+                    "signals for this date."
                 )
             else:
-                st.write("There is currently no large positive difference of at least 8 points.")
+                m1.metric("Best model difference", f"{best.edge:+.1%}")
+                m2.metric("Temperature range", best.bucket_label)
+                m3.metric("Market price sum", f"{market_sum:.1%}")
+                if pd.notna(best.best_ask) and best.edge >= 0.08:
+                    st.info(
+                        f"Model signal: {best.bucket_label} is {best.edge:+.1%} above the current "
+                        "YES buy price. Check spread, liquidity and the resolution source before "
+                        "drawing any conclusion."
+                    )
+                else:
+                    st.write(
+                        "There is currently no large positive difference of at least 8 points."
+                    )
 
             shown = comparison[
                 [
@@ -359,6 +462,7 @@ with tab_market:
                     "Possible edge": "Possible edge",
                     "Watch": "Watch",
                     "No clear edge": "No clear edge",
+                    "Day complete": "Day complete",
                 }
             )
             shown = shown.rename(

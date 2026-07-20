@@ -142,6 +142,29 @@ gestartet werden.
 Nach dem Upload von Version 7.1 nur **2 - Collect current forecasts** einmal ausführen. Ein
 erneuter Backfill ist nicht erforderlich.
 
+## Neu in Version 8
+
+- Das Dashboard erkennt nun, ob der Temperaturtag noch läuft oder ob das Tagesmaximum
+  praktisch feststeht.
+- Dafür werden nicht einfach die Polymarket-Prozente kopiert. Entscheidend sind ein frischer
+  METAR-Wert, die Temperaturentwicklung der letzten Stunden, die noch erwartete
+  Sonneneinstrahlung und der restliche Temperaturanstieg in den stündlichen Wettermodellen.
+- Erst wenn es am Flughafen mindestens 16 Uhr ist, die Temperatur nicht mehr steigt, fast
+  keine Sonneneinstrahlung mehr erwartet wird und auch die stündlichen Modelle keine
+  nennenswerte Erwärmung zeigen, erhält der Tag den Status **Peak locked**.
+- Bei **Peak locked** wird das bereits erreichte METAR-Tagesmaximum mit 100 % angezeigt.
+  Unmögliche höhere und niedrigere Temperaturen verschwinden aus der Verteilung.
+- Ist der Polymarket-Markt offiziell aufgelöst, übernimmt die Anzeige den offiziellen
+  Gewinnerbereich und zeigt **Officially resolved**.
+- Für abgeschlossene Temperaturtage werden keine neuen „Possible edge“-Hinweise mehr
+  angezeigt. Der Marktvergleich bleibt zur Kontrolle und für die Preishistorie sichtbar.
+- Die neue Kennzahl **Model warming left** zeigt, wie viel Erwärmung die vorsichtigste der
+  aktuellen stündlichen Modellkurven noch zulässt.
+
+Nach dem Upload von Version 8 nur **2 - Collect current forecasts** einmal ausführen. Ein
+erneuter Backfill ist nicht erforderlich. Danach in Streamlit bei Bedarf **Reboot app** oder
+**Rerun** wählen.
+
 ## Wichtig zum Dashboard
 
 Die GitHub-Workflows sammeln und speichern die Daten. Eine normale GitHub-Seite führt das
