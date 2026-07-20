@@ -94,6 +94,16 @@ def model_run_trend(frame: pd.DataFrame, target: date) -> float | None:
     return float(pd.Series(changes).median()) if changes else None
 
 
+def last_update(frame: pd.DataFrame, column: str, timezone_name: str) -> str:
+    if frame.empty or column not in frame:
+        return "not available"
+    values = pd.to_datetime(frame[column], utc=True, errors="coerce").dropna()
+    if values.empty:
+        return "not available"
+    latest = values.max().tz_convert(timezone_name)
+    return latest.strftime("%d.%m.%Y %H:%M")
+
+
 st.set_page_config(page_title="Weatherman", page_icon="🌡️", layout="wide")
 init_db()
 catalog = airports()
@@ -104,12 +114,19 @@ airport = st.sidebar.selectbox(
 )
 target = st.sidebar.date_input("Target date", value=date.today())
 if st.sidebar.button("Refresh forecasts + METAR", type="primary"):
-    with st.spinner("Fetching models and observations…"):
-        result = collect([airport])
-    st.sidebar.success(
-        f"Saved {result['forecasts']} daily, {result['hourly_forecasts']} hourly and "
-        f"{result['market_prices']} market prices; refreshed {result['actuals']} actuals"
-    )
+    try:
+        with st.spinner("Fetching models and observations…"):
+            result = collect([airport])
+    except Exception as exc:
+        st.sidebar.error(
+            f"Refresh failed ({type(exc).__name__}). The dashboard remains usable; "
+            "the full cause is available in the Streamlit log."
+        )
+    else:
+        st.sidebar.success(
+            f"Saved {result['forecasts']} daily, {result['hourly_forecasts']} hourly and "
+            f"{result['market_prices']} market prices; refreshed {result['actuals']} actuals"
+        )
 
 with Session() as session:
     forecasts = pd.read_sql(select(Forecast).where(Forecast.airport == airport), session.bind)
@@ -128,6 +145,13 @@ timezone_name = catalog[airport]["timezone"]
 d1_forecasts = forecasts[forecasts.horizon == "D-1"].copy() if not forecasts.empty else forecasts
 d1_scored = score_frame(d1_forecasts, actuals)
 d1_metrics = model_metrics(d1_scored)
+
+st.caption(
+    f"Last data update · Forecast: {last_update(forecasts, 'run_at', timezone_name)} · "
+    f"METAR: {last_update(observations, 'observed_at', timezone_name)} · "
+    f"Polymarket: {last_update(market_snapshots, 'captured_at', timezone_name)} "
+    f"({timezone_name} local time)"
+)
 
 tab_live, tab_market, tab_accuracy, tab_simulation, tab_data = st.tabs(
     [
@@ -281,10 +305,17 @@ with tab_market:
     if probabilities is None:
         st.info("A current weather forecast is required before a market comparison can be made.")
     elif target_markets.empty:
-        st.info(
-            "No matching Polymarket market has been stored for this airport and date. "
-            "Markets are usually published shortly before the target day. Run Collect forecasts."
-        )
+        if market_snapshots.empty:
+            st.info(
+                "No Polymarket prices have been stored for this airport yet. Run workflow "
+                "2 - Collect current forecasts once. Its final result should show a "
+                "market_prices value greater than zero for a published market."
+            )
+        else:
+            st.info(
+                f"Polymarket data exists, but no matching market is stored for {target:%d.%m.%Y}. "
+                "Daily markets are often published only shortly before the target day."
+            )
     else:
         target_markets["captured_at"] = pd.to_datetime(target_markets.captured_at, utc=True)
         latest_markets = target_markets.sort_values("captured_at").drop_duplicates(
@@ -417,10 +448,21 @@ with tab_accuracy:
     scored = score_frame(selected, actuals)
     metrics = model_metrics(scored)
     if metrics.empty:
+        snapshot_days = selected.target_date.nunique() if not selected.empty else 0
         if horizon == "D-1":
             st.info("Run the v6 historical backfill once to create fixed 24-hour D-1 data.")
+        elif snapshot_days:
+            st.info(
+                f"{snapshot_days} {horizon} day(s) have already been stored. Accuracy appears "
+                "only after matching actual temperatures are available; recent actuals arrive "
+                "with an approximately six-day safety delay."
+            )
         else:
-            st.info(f"{horizon} accuracy will populate from newly collected snapshots.")
+            st.info(
+                f"No {horizon} snapshots are stored yet. D0-morning is collected automatically "
+                "by workflow 2 during the airport's morning; the first accuracy values normally "
+                "appear about one week later."
+            )
     else:
         shown = metrics.copy()
         shown["hit_rate"] = shown.hit_rate.map(lambda value: f"{value:.1%}")

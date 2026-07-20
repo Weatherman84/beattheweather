@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Iterable
 from datetime import date, timedelta
 
 from sqlalchemy import select
@@ -35,6 +36,29 @@ def _upsert(session, model, keys: dict, values: dict) -> None:
             setattr(row, key, value)
 
 
+def _upsert_batch(
+    session,
+    model,
+    rows: Iterable[dict],
+    keys: Callable[[dict], dict],
+    values: Callable[[dict], dict],
+    label: str,
+) -> int:
+    """Store one source atomically so a bad row cannot poison the whole collection."""
+    items = list(rows)
+    if not items:
+        return 0
+    try:
+        with session.begin_nested():
+            for item in items:
+                _upsert(session, model, keys(item), values(item))
+            session.flush()
+    except Exception as exc:
+        print(f"WARN {label} storage rolled back: {type(exc).__name__}: {exc}")
+        return 0
+    return len(items)
+
+
 def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, int]:
     init_db()
     counts = {
@@ -55,101 +79,110 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                 except Exception as exc:
                     print(f"WARN {code}/{model}: {exc}")
                 try:
-                    for item in open_meteo_hourly(airport, model, days):
-                        _upsert(
-                            session,
-                            HourlyForecast,
-                            {
-                                "airport": code,
-                                "model": item["model"],
-                                "run_at": item["run_at"],
-                                "valid_at": item["valid_at"],
-                            },
-                            {
-                                "temp_c": item["temp_c"],
-                                "dewpoint_c": item["dewpoint_c"],
-                                "cloud_cover": item["cloud_cover"],
-                                "wind_kph": item["wind_kph"],
-                                "wind_direction": item["wind_direction"],
-                                "radiation_wm2": item["radiation_wm2"],
-                                "temp_850hpa_c": item["temp_850hpa_c"],
-                            },
-                        )
-                        counts["hourly_forecasts"] += 1
+                    hourly_rows = open_meteo_hourly(airport, model, days)
                 except Exception as exc:
                     print(f"WARN {code}/{model} hourly: {exc}")
+                else:
+                    counts["hourly_forecasts"] += _upsert_batch(
+                        session,
+                        HourlyForecast,
+                        hourly_rows,
+                        lambda item: {
+                            "airport": code,
+                            "model": item["model"],
+                            "run_at": item["run_at"],
+                            "valid_at": item["valid_at"],
+                        },
+                        lambda item: {
+                            "temp_c": item["temp_c"],
+                            "dewpoint_c": item["dewpoint_c"],
+                            "cloud_cover": item["cloud_cover"],
+                            "wind_kph": item["wind_kph"],
+                            "wind_direction": item["wind_direction"],
+                            "radiation_wm2": item["radiation_wm2"],
+                            "temp_850hpa_c": item["temp_850hpa_c"],
+                        },
+                        f"{code}/{model} hourly",
+                    )
             try:
                 batches.extend(meteoblue_forecast(airport))
             except Exception as exc:
                 print(f"WARN {code}/meteoblue: {exc}")
-            for item in batches:
-                _upsert(
-                    session,
-                    Forecast,
-                    {
-                        "airport": code,
-                        "model": item["model"],
-                        "run_at": item["run_at"],
-                        "target_date": item["target_date"],
-                    },
-                    {
-                        "max_temp_c": item["max_temp_c"],
-                        "source": item["source"],
-                        "horizon": item["horizon"],
-                    },
-                )
-                counts["forecasts"] += 1
+            counts["forecasts"] += _upsert_batch(
+                session,
+                Forecast,
+                batches,
+                lambda item: {
+                    "airport": code,
+                    "model": item["model"],
+                    "run_at": item["run_at"],
+                    "target_date": item["target_date"],
+                },
+                lambda item: {
+                    "max_temp_c": item["max_temp_c"],
+                    "source": item["source"],
+                    "horizon": item["horizon"],
+                },
+                f"{code} daily forecasts",
+            )
             try:
-                for obs in recent_metars(code):
-                    _upsert(
-                        session,
-                        Observation,
-                        {"airport": code, "observed_at": obs.pop("observed_at")},
-                        obs,
-                    )
-                    counts["observations"] += 1
+                metar_rows = recent_metars(code)
             except Exception as exc:
                 print(f"WARN {code}/METAR: {exc}")
+            else:
+                counts["observations"] += _upsert_batch(
+                    session,
+                    Observation,
+                    metar_rows,
+                    lambda item: {"airport": code, "observed_at": item["observed_at"]},
+                    lambda item: {
+                        key: value for key, value in item.items() if key != "observed_at"
+                    },
+                    f"{code}/METAR",
+                )
             actual_end = date.today() - timedelta(days=6)
             actual_start = actual_end - timedelta(days=13)
             try:
-                for item in historical_actuals(airport, actual_start, actual_end):
-                    _upsert(
-                        session,
-                        DailyActual,
-                        {"airport": code, "target_date": item["target_date"]},
-                        {
-                            "max_temp_c": item["max_temp_c"],
-                            "source": "open-meteo-archive",
-                        },
-                    )
-                    counts["actuals"] += 1
+                actual_rows = historical_actuals(airport, actual_start, actual_end)
             except Exception as exc:
                 print(f"WARN {code}/recent actuals: {exc}")
+            else:
+                counts["actuals"] += _upsert_batch(
+                    session,
+                    DailyActual,
+                    actual_rows,
+                    lambda item: {"airport": code, "target_date": item["target_date"]},
+                    lambda item: {
+                        "max_temp_c": item["max_temp_c"],
+                        "source": "open-meteo-archive",
+                    },
+                    f"{code}/recent actuals",
+                )
             for offset in range(-2, days):
                 market_target = date.today() + timedelta(days=offset)
                 try:
-                    for item in polymarket_prices(airport, market_target):
-                        market_keys = {
-                            "market_id": item["market_id"],
-                            "captured_at": item["captured_at"],
-                        }
-                        _upsert(
-                            session,
-                            MarketSnapshot,
-                            market_keys,
-                            {
-                                "airport": code,
-                                **{
-                                    key: value
-                                    for key, value in item.items()
-                                    if key not in market_keys
-                                },
-                            },
-                        )
-                        counts["market_prices"] += 1
+                    market_rows = polymarket_prices(airport, market_target)
                 except Exception as exc:
                     print(f"WARN {code}/Polymarket/{market_target}: {exc}")
+                else:
+                    counts["market_prices"] += _upsert_batch(
+                        session,
+                        MarketSnapshot,
+                        market_rows,
+                        lambda item: {
+                            "market_id": item["market_id"],
+                            "captured_at": item["captured_at"],
+                        },
+                        lambda item: {
+                            "airport": code,
+                            **{
+                                key: value
+                                for key, value in item.items()
+                                if key not in {"market_id", "captured_at"}
+                            },
+                        },
+                        f"{code}/Polymarket/{market_target}",
+                    )
         session.commit()
     return counts
 
@@ -166,40 +199,43 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
         for code in airport_codes or list(catalog):
             airport = catalog[code]
             try:
-                airport_actuals = 0
-                for item in historical_actuals(airport, start, end):
-                    _upsert(
-                        session,
-                        DailyActual,
-                        {"airport": code, "target_date": item["target_date"]},
-                        {"max_temp_c": item["max_temp_c"], "source": "open-meteo-archive"},
-                    )
-                    counts["actuals"] += 1
-                    airport_actuals += 1
+                actual_rows = historical_actuals(airport, start, end)
+                airport_actuals = _upsert_batch(
+                    session,
+                    DailyActual,
+                    actual_rows,
+                    lambda item: {"airport": code, "target_date": item["target_date"]},
+                    lambda item: {
+                        "max_temp_c": item["max_temp_c"],
+                        "source": "open-meteo-archive",
+                    },
+                    f"{code}/historical actuals",
+                )
+                counts["actuals"] += airport_actuals
                 print(f"OK {code}/actuals: {airport_actuals} days")
             except Exception as exc:
                 print(f"WARN {code}/historical actuals: {exc}")
             for model in airport["models"]:
                 try:
-                    model_rows = 0
-                    for item in previous_run_d1(airport, model, start, end):
-                        _upsert(
-                            session,
-                            Forecast,
-                            {
-                                "airport": code,
-                                "model": model,
-                                "run_at": item["run_at"],
-                                "target_date": item["target_date"],
-                            },
-                            {
-                                "max_temp_c": item["max_temp_c"],
-                                "source": item["source"],
-                                "horizon": item["horizon"],
-                            },
-                        )
-                        counts["forecasts"] += 1
-                        model_rows += 1
+                    forecast_rows = previous_run_d1(airport, model, start, end)
+                    model_rows = _upsert_batch(
+                        session,
+                        Forecast,
+                        forecast_rows,
+                        lambda item: {
+                            "airport": code,
+                            "model": model,
+                            "run_at": item["run_at"],
+                            "target_date": item["target_date"],
+                        },
+                        lambda item: {
+                            "max_temp_c": item["max_temp_c"],
+                            "source": item["source"],
+                            "horizon": item["horizon"],
+                        },
+                        f"{code}/{model} backfill",
+                    )
+                    counts["forecasts"] += model_rows
                     print(f"OK {code}/{model}: {model_rows} days")
                 except Exception as exc:
                     print(f"WARN {code}/{model} backfill: {exc}")

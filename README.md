@@ -128,6 +128,20 @@ Wallet-Zugang benötigt. Nach dem Upload reicht es, **2 - Collect current foreca
 manuell auszuführen. Der Backfill muss beim Update von Version 6 auf Version 7 nicht erneut
 gestartet werden.
 
+## Korrektur in Version 7.1
+
+- Ein Fehler einer einzelnen Datenquelle setzt nicht mehr die gesamte Datenbank-Sitzung außer
+  Kraft. Nur der betroffene Datenblock wird zurückgesetzt; alle anderen Quellen laufen weiter.
+- Oben im Dashboard stehen die letzten Updatezeiten für Forecast, METAR und Polymarket in der
+  jeweiligen Flughafen-Ortszeit.
+- Der Accuracy-Reiter zeigt verständlich an, ob D0-Morgendaten noch fehlen oder bereits
+  gesammelt wurden und nur auf die später verfügbaren Ist-Werte warten.
+- Der Polymarket-Reiter unterscheidet zwischen „noch gar keine Marktdaten gesammelt“ und „für
+  das ausgewählte Datum wurde noch kein Markt veröffentlicht“.
+
+Nach dem Upload von Version 7.1 nur **2 - Collect current forecasts** einmal ausführen. Ein
+erneuter Backfill ist nicht erforderlich.
+
 ## Wichtig zum Dashboard
 
 Die GitHub-Workflows sammeln und speichern die Daten. Eine normale GitHub-Seite führt das
