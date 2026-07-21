@@ -17,6 +17,7 @@ from .db import (
     Observation,
     Session,
     SignalSnapshot,
+    TafReport,
     init_db,
 )
 from .nowcast import build_live_nowcast
@@ -28,6 +29,7 @@ from .providers import (
     polymarket_prices,
     previous_run_d1,
     recent_metars,
+    recent_tafs,
 )
 from .settings import airports
 
@@ -64,6 +66,52 @@ def _upsert_batch(
     return len(items)
 
 
+def collect_metars(
+    airport_codes: list[str] | None = None, hours: int = 2
+) -> dict[str, object]:
+    """Fetch only METARs for a low-latency dashboard refresh.
+
+    The normal collector also downloads all forecast models, TAFs and market data.
+    Keeping this path separate lets the live dashboard poll the official aviation
+    feed once a minute without repeating those expensive requests.
+    """
+
+    init_db()
+    catalog = airports()
+    selected_codes = airport_codes or list(catalog)
+    stored = 0
+    latest: dict[str, datetime] = {}
+    errors: dict[str, str] = {}
+    with Session() as session:
+        for code in selected_codes:
+            if code not in catalog:
+                errors[code] = "Unknown airport"
+                continue
+            try:
+                metar_rows = recent_metars(code, hours=hours)
+            except Exception as exc:
+                print(f"WARN {code}/live METAR: {exc}")
+                errors[code] = type(exc).__name__
+                continue
+            stored += _upsert_batch(
+                session,
+                Observation,
+                metar_rows,
+                lambda item, airport_code=code: {
+                    "airport": airport_code,
+                    "observed_at": item["observed_at"],
+                },
+                lambda item: {
+                    key: value for key, value in item.items() if key != "observed_at"
+                },
+                f"{code}/live METAR",
+            )
+            if metar_rows:
+                latest[code] = max(item["observed_at"] for item in metar_rows)
+        session.commit()
+    return {"observations": stored, "latest": latest, "errors": errors}
+
+
 def _signal_timing(captured_at: datetime, target: date, timezone_name: str) -> str:
     local = captured_at.astimezone(ZoneInfo(timezone_name))
     if local.date() < target:
@@ -97,6 +145,9 @@ def _record_signal_snapshots(
     hourly = pd.read_sql(
         select(HourlyForecast).where(HourlyForecast.airport == code), connection
     )
+    tafs = pd.read_sql(
+        select(TafReport).where(TafReport.airport == code), connection
+    )
     market_frame = pd.DataFrame(market_rows)
     nowcast = build_live_nowcast(
         forecasts=forecasts,
@@ -104,9 +155,11 @@ def _record_signal_snapshots(
         observations=observations,
         hourly=hourly,
         markets=market_frame,
+        tafs=tafs,
         timezone_name=airport["timezone"],
         target=target,
         as_of=captured_at,
+        wind_profile=airport.get("heat_wind_profile"),
     )
     if nowcast is None:
         return 0
@@ -157,13 +210,20 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
         "forecasts": 0,
         "hourly_forecasts": 0,
         "observations": 0,
+        "taf_reports": 0,
         "market_prices": 0,
         "signals": 0,
         "actuals": 0,
     }
     catalog = airports()
+    selected_codes = airport_codes or list(catalog)
+    try:
+        fetched_tafs = recent_tafs(selected_codes)
+    except Exception as exc:
+        print(f"WARN TAF: {exc}")
+        fetched_tafs = []
     with Session() as session:
-        for code in airport_codes or list(catalog):
+        for code in selected_codes:
             airport = catalog[code]
             batches = []
             for model in airport["models"]:
@@ -233,6 +293,23 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                     },
                     f"{code}/METAR",
                 )
+            airport_tafs = [row for row in fetched_tafs if row["airport"] == code]
+            counts["taf_reports"] += _upsert_batch(
+                session,
+                TafReport,
+                airport_tafs,
+                lambda item: {
+                    "airport": code,
+                    "issue_time": item["issue_time"],
+                    "raw_taf": item["raw_taf"],
+                },
+                lambda item: {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"airport", "issue_time", "raw_taf", "collected_at"}
+                },
+                f"{code}/TAF",
+            )
             actual_end = date.today() - timedelta(days=6)
             actual_start = actual_end - timedelta(days=13)
             try:

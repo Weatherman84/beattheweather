@@ -10,6 +10,7 @@ from sqlalchemy import (
     Float,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     create_engine,
     text,
@@ -62,7 +63,38 @@ class Observation(Base):
     temp_c: Mapped[float] = mapped_column(Float)
     dewpoint_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_kph: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_direction: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    first_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=True,
+        index=True,
+    )
+    source: Mapped[str] = mapped_column(String(50), default="aviationweather.gov")
+
+
+class TafReport(Base):
+    __tablename__ = "taf_reports"
+    __table_args__ = (UniqueConstraint("airport", "issue_time", "raw_taf"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    issue_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    bulletin_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    valid_to: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    raw_taf: Mapped[str] = mapped_column(Text)
+    is_amended: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_corrected: Mapped[bool] = mapped_column(Boolean, default=False)
+    max_temp_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_temp_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    min_temp_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_temp_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    periods_json: Mapped[str] = mapped_column(Text, default="[]")
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+    source: Mapped[str] = mapped_column(String(50), default="aviationweather.gov")
 
 
 class DailyActual(Base):
@@ -146,6 +178,16 @@ ENGINE = engine()
 Session = sessionmaker(ENGINE, expire_on_commit=False)
 
 
+def refresh_database_connections() -> None:
+    """Drop pooled handles so a replaced SQLite snapshot is opened afresh.
+
+    Streamlit can keep SQLAlchemy's pooled connection alive after GitHub deploys a
+    newer database file. Disposing the pool is safe between requests and avoids an
+    app reboot merely to see a newly committed METAR snapshot.
+    """
+    ENGINE.dispose()
+
+
 def init_db() -> None:
     Base.metadata.create_all(ENGINE)
     if ENGINE.dialect.name == "sqlite":
@@ -157,4 +199,28 @@ def init_db() -> None:
                 )
             connection.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_forecasts_horizon ON forecasts (horizon)")
+            )
+            observation_columns = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(observations)"))
+            }
+            if "wind_direction" not in observation_columns:
+                connection.execute(
+                    text("ALTER TABLE observations ADD COLUMN wind_direction FLOAT")
+                )
+            if "first_seen_at" not in observation_columns:
+                connection.execute(
+                    text("ALTER TABLE observations ADD COLUMN first_seen_at DATETIME")
+                )
+            if "source" not in observation_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE observations ADD COLUMN source VARCHAR(50) "
+                        "DEFAULT 'aviationweather.gov'"
+                    )
+                )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_observations_first_seen_at "
+                    "ON observations (first_seen_at)"
+                )
             )

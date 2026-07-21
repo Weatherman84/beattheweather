@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -19,6 +20,7 @@ from .analytics import (
     resolved_market_range,
     score_frame,
 )
+from .taf import TafGuidance, build_taf_guidance
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,9 @@ class LiveNowcast:
     heating_rate: float | None
     expected_now: float | None
     cloud_cover: float | None
+    wind_speed_kph: float | None
+    wind_direction_deg: float | None
+    wind_source: str | None
     temp_850_c: float | None
     radiation_wm2: float | None
     remaining_rise_c: float | None
@@ -39,6 +44,7 @@ class LiveNowcast:
     forecast_confidence: int
     confidence_factors: dict[str, float]
     model_weights: dict[str, float]
+    taf_guidance: TafGuidance | None
 
 
 def local_observations(
@@ -79,10 +85,17 @@ def hourly_context(
     timezone_name: str,
     target: date,
     as_of: datetime,
-) -> tuple[float | None, float | None, float | None, float | None]:
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+]:
     result = _hourly_for_target(frame, timezone_name, target, as_of)
     if result.empty:
-        return None, None, None, None
+        return None, None, None, None, None, None
     result = result.sort_values("run_at").drop_duplicates(
         ["model", "valid_at"], keep="last"
     )
@@ -97,14 +110,31 @@ def hourly_context(
     nearest = result.sort_values("distance").drop_duplicates("model", keep="first")
 
     def median(column: str) -> float | None:
+        if column not in nearest:
+            return None
         values = nearest[column].dropna()
         return float(values.median()) if not values.empty else None
+
+    def circular_mean(column: str) -> float | None:
+        if column not in nearest:
+            return None
+        values = nearest[column].dropna()
+        if values.empty:
+            return None
+        radians = values.astype(float).map(math.radians)
+        sine = radians.map(math.sin).mean()
+        cosine = radians.map(math.cos).mean()
+        if abs(sine) < 1e-9 and abs(cosine) < 1e-9:
+            return None
+        return float(math.degrees(math.atan2(sine, cosine)) % 360)
 
     return (
         median("temp_c"),
         median("cloud_cover"),
         median("temp_850hpa_c"),
         median("radiation_wm2"),
+        median("wind_kph"),
+        circular_mean("wind_direction"),
     )
 
 
@@ -173,9 +203,11 @@ def build_live_nowcast(
     observations: pd.DataFrame,
     hourly: pd.DataFrame,
     markets: pd.DataFrame,
+    tafs: pd.DataFrame | None = None,
     timezone_name: str,
     target: date,
     as_of: datetime,
+    wind_profile: dict | None = None,
 ) -> LiveNowcast | None:
     if forecasts.empty:
         return None
@@ -220,6 +252,15 @@ def build_live_nowcast(
         current.d1_bias.tolist(),
         weights=current.model_weight.tolist(),
     )
+    wind_profile = wind_profile or {}
+    taf_guidance = build_taf_guidance(
+        tafs if tafs is not None else pd.DataFrame(),
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        model_mean=corrected.mean,
+        wind_profile=wind_profile,
+    )
 
     obs_today = local_observations(observations, timezone_name, target, as_of)
     latest_obs = obs_today.iloc[-1] if not obs_today.empty else None
@@ -236,9 +277,14 @@ def build_live_nowcast(
                 (recent_obs.temp_c.iloc[-1] - recent_obs.temp_c.iloc[0]) / elapsed
             )
 
-    expected_now, cloud_cover, temp_850, radiation = hourly_context(
-        hourly, timezone_name, target, as_of
-    )
+    (
+        expected_now,
+        cloud_cover,
+        temp_850,
+        radiation,
+        model_wind_speed,
+        model_wind_direction,
+    ) = hourly_context(hourly, timezone_name, target, as_of)
     remaining_rise, future_radiation = remaining_heating_context(
         hourly, timezone_name, target, as_of
     )
@@ -255,6 +301,27 @@ def build_live_nowcast(
         recent_baseline = float(past.max_temp_c.tail(14).median())
 
     local_now = as_of.astimezone(ZoneInfo(timezone_name))
+    observed_wind_speed = None
+    observed_wind_direction = None
+    if latest_obs is not None:
+        if "wind_kph" in latest_obs.index and pd.notna(latest_obs.wind_kph):
+            observed_wind_speed = float(latest_obs.wind_kph)
+        if "wind_direction" in latest_obs.index and pd.notna(latest_obs.wind_direction):
+            observed_wind_direction = float(latest_obs.wind_direction)
+    if (
+        observed_wind_speed is not None
+        and observation_age_hours is not None
+        and observation_age_hours <= 2
+    ):
+        wind_speed = observed_wind_speed
+        # Keep VRB/unknown METAR direction unknown instead of silently mixing it
+        # with a model direction and labelling the hybrid as an observation.
+        wind_direction = observed_wind_direction
+        wind_source = "METAR"
+    else:
+        wind_speed = model_wind_speed
+        wind_direction = model_wind_direction
+        wind_source = "model"
     heat = heat_spike_assessment(
         forecast_mean=corrected.mean,
         recent_baseline=recent_baseline,
@@ -269,10 +336,29 @@ def build_live_nowcast(
         expected_temp_now=expected_now if target == local_now.date() else None,
         heating_rate=heating_rate,
         cloud_cover=cloud_cover,
+        wind_speed_kph=wind_speed,
+        wind_direction_deg=wind_direction,
+        warm_wind_sectors=wind_profile.get("warm_sectors"),
+        cool_wind_sectors=wind_profile.get("cool_sectors"),
+        wind_source=wind_source,
+        guidance_score_points=(
+            taf_guidance.heat_score_points if taf_guidance is not None else 0
+        ),
+        guidance_adjustment_c=(
+            taf_guidance.heat_adjustment_c if taf_guidance is not None else 0.0
+        ),
+        guidance_signals=(taf_guidance.signals if taf_guidance is not None else None),
+    )
+    taf_center_adjustment = (
+        taf_guidance.center_adjustment_c if taf_guidance is not None else 0.0
+    )
+    taf_spread_addition = (
+        taf_guidance.spread_addition_c if taf_guidance is not None else 0.0
     )
     unconditioned = consensus(
-        (current.corrected_max + heat.adjustment_c).tolist(),
+        (current.corrected_max + heat.adjustment_c + taf_center_adjustment).tolist(),
         weights=current.model_weight.tolist(),
+        sigma_floor=0.65 + taf_spread_addition,
     )
     resolution = resolved_market_range(markets)
     day_status = assess_day_status(
@@ -334,12 +420,19 @@ def build_live_nowcast(
         "sample_size": sample_score,
         "live_data": live_score,
     }
-    forecast_confidence = round(
+    base_confidence = (
         0.40 * history_score
         + 0.30 * spread_score
         + 0.20 * sample_score
         + 0.10 * live_score
     )
+    if taf_guidance is not None:
+        confidence_factors["taf_guidance"] = float(taf_guidance.confidence_score)
+        forecast_confidence = round(
+            0.80 * base_confidence + 0.20 * taf_guidance.confidence_score
+        )
+    else:
+        forecast_confidence = round(base_confidence)
     return LiveNowcast(
         current=current,
         corrected=corrected,
@@ -350,6 +443,9 @@ def build_live_nowcast(
         heating_rate=heating_rate,
         expected_now=expected_now,
         cloud_cover=cloud_cover,
+        wind_speed_kph=wind_speed,
+        wind_direction_deg=wind_direction,
+        wind_source=wind_source,
         temp_850_c=temp_850,
         radiation_wm2=radiation,
         remaining_rise_c=remaining_rise,
@@ -357,4 +453,5 @@ def build_live_nowcast(
         forecast_confidence=int(max(0, min(100, forecast_confidence))),
         confidence_factors=confidence_factors,
         model_weights=dict(zip(current.model.astype(str), current.model_weight.astype(float))),
+        taf_guidance=taf_guidance,
     )

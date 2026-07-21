@@ -137,6 +137,30 @@ def test_heat_spike_confirmation():
     assert result.adjustment_c > 0
 
 
+def test_heat_spike_wind_uses_airport_specific_warm_and_cooling_sectors():
+    common = {
+        "forecast_mean": 34,
+        "recent_baseline": 32,
+        "run_trend": 0.0,
+        "model_spread": 1.2,
+        "observed_temp": 31,
+        "observed_dewpoint": 20,
+        "expected_temp_now": 31,
+        "heating_rate": 0.5,
+        "cloud_cover": 30,
+        "wind_speed_kph": 22,
+        "warm_wind_sectors": [[120, 230]],
+        "cool_wind_sectors": [[280, 60]],
+        "wind_source": "METAR",
+    }
+    warm = heat_spike_assessment(**common, wind_direction_deg=180)
+    cooling = heat_spike_assessment(**common, wind_direction_deg=330)
+    assert warm.score > cooling.score
+    assert warm.adjustment_c > cooling.adjustment_c
+    assert any("warm sector" in signal for signal in warm.signals)
+    assert any("cooling sector" in signal for signal in cooling.signals)
+
+
 def test_market_range_probabilities_and_actionable_edge():
     probabilities = {34: 0.1, 35: 0.3, 36: 0.5, 37: 0.1}
     assert probability_for_range(probabilities, None, 34) == 0.1

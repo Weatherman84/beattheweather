@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import calendar
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +17,7 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
+TAF_URL = "https://aviationweather.gov/api/data/taf"
 POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com"
 
 MONTH_SLUGS = (
@@ -37,10 +39,16 @@ MONTH_SLUGS = (
 
 def _get(url: str, params: dict[str, Any] | None = None) -> dict | list:
     last_error: Exception | None = None
-    with httpx.Client(timeout=settings.timeout, follow_redirects=True) as client:
+    with httpx.Client(
+        timeout=settings.timeout,
+        follow_redirects=True,
+        headers={"User-Agent": "Weatherman/9.3 temperature-market research"},
+    ) as client:
         for attempt in range(5):
             try:
                 response = client.get(url, params=params)
+                if response.status_code == 204:
+                    return []
                 if response.status_code == 429 or response.status_code >= 500:
                     response.raise_for_status()
                 response.raise_for_status()
@@ -301,16 +309,146 @@ def recent_metars(icao: str, hours: int = 24) -> list[dict]:
             observed_at = datetime.fromisoformat(text)
             if observed_at.tzinfo is None:
                 observed_at = observed_at.replace(tzinfo=timezone.utc)
+        try:
+            wind_direction = float(row["wdir"]) if row.get("wdir") is not None else None
+        except (TypeError, ValueError):
+            # Variable winds are commonly reported as VRB and have no single direction.
+            wind_direction = None
         rows.append(
             {
                 "observed_at": observed_at.astimezone(timezone.utc),
                 "temp_c": float(row["temp"]),
                 "dewpoint_c": float(row["dewp"]) if row.get("dewp") is not None else None,
                 "wind_kph": (float(row["wspd"]) * 1.852 if row.get("wspd") is not None else None),
+                "wind_direction": wind_direction,
                 "raw": row.get("rawOb"),
             }
         )
     return sorted(rows, key=lambda item: item["observed_at"])
+
+
+def _api_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _taf_group_datetime(issue_time: datetime, day: int, hour: int) -> datetime:
+    """Resolve a DDHH TAF group around an issue time, including month rollover."""
+    candidates: list[datetime] = []
+    for month_offset in (-1, 0, 1):
+        month_index = issue_time.year * 12 + issue_time.month - 1 + month_offset
+        year, month_zero = divmod(month_index, 12)
+        month = month_zero + 1
+        if day <= calendar.monthrange(year, month)[1]:
+            candidates.append(datetime(year, month, day, hour, tzinfo=timezone.utc))
+    return min(candidates, key=lambda candidate: abs(candidate - issue_time))
+
+
+def _raw_taf_temperature(
+    raw_taf: str, marker: str, issue_time: datetime
+) -> tuple[float | None, datetime | None]:
+    match = re.search(rf"\b{marker}(M?\d{{2}})/(\d{{2}})(\d{{2}})Z\b", raw_taf)
+    if not match:
+        return None, None
+    token, day, hour = match.groups()
+    value = -float(token[1:]) if token.startswith("M") else float(token)
+    return value, _taf_group_datetime(issue_time, int(day), int(hour))
+
+
+def _decoded_taf_temperatures(
+    report: dict, issue_time: datetime
+) -> dict[str, tuple[float | None, datetime | None]]:
+    decoded: dict[str, tuple[float | None, datetime | None]] = {}
+    for period in report.get("fcsts") or []:
+        for item in period.get("temp") or []:
+            marker = str(item.get("maxOrMin") or "").upper()
+            value = item.get("sfcTemp")
+            valid_at = _api_datetime(item.get("validTime"))
+            if marker in {"MAX", "MIN"} and value is not None and valid_at is not None:
+                decoded[marker] = (float(value), valid_at)
+    raw_taf = str(report.get("rawTAF") or "")
+    decoded.setdefault("MAX", _raw_taf_temperature(raw_taf, "TX", issue_time))
+    decoded.setdefault("MIN", _raw_taf_temperature(raw_taf, "TN", issue_time))
+    return decoded
+
+
+def _taf_periods_json(report: dict) -> str:
+    periods = []
+    for period in report.get("fcsts") or []:
+        periods.append(
+            {
+                "time_from": (
+                    _api_datetime(period.get("timeFrom")).isoformat()
+                    if _api_datetime(period.get("timeFrom"))
+                    else None
+                ),
+                "time_to": (
+                    _api_datetime(period.get("timeTo")).isoformat()
+                    if _api_datetime(period.get("timeTo"))
+                    else None
+                ),
+                "time_bec": (
+                    _api_datetime(period.get("timeBec")).isoformat()
+                    if _api_datetime(period.get("timeBec"))
+                    else None
+                ),
+                "change": period.get("fcstChange"),
+                "probability": period.get("probability"),
+                "wind_direction": period.get("wdir"),
+                "wind_speed_kt": period.get("wspd"),
+                "wind_gust_kt": period.get("wgst"),
+                "weather": period.get("wxString"),
+                "visibility_sm": period.get("visib"),
+                "clouds": period.get("clouds") or [],
+            }
+        )
+    return json.dumps(periods, separators=(",", ":"))
+
+
+def recent_tafs(icaos: str | list[str]) -> list[dict]:
+    """Fetch the current decoded TAFs in one rate-limit-friendly request."""
+    identifiers = [icaos] if isinstance(icaos, str) else list(icaos)
+    if not identifiers:
+        return []
+    payload = _get(TAF_URL, {"ids": ",".join(identifiers), "format": "json"})
+    collected_at = datetime.now(timezone.utc)
+    rows = []
+    for report in payload or []:
+        issue_time = _api_datetime(report.get("issueTime"))
+        valid_from = _api_datetime(report.get("validTimeFrom"))
+        valid_to = _api_datetime(report.get("validTimeTo"))
+        raw_taf = str(report.get("rawTAF") or "").strip()
+        if issue_time is None or valid_from is None or valid_to is None or not raw_taf:
+            continue
+        temperatures = _decoded_taf_temperatures(report, issue_time)
+        maximum, maximum_at = temperatures.get("MAX", (None, None))
+        minimum, minimum_at = temperatures.get("MIN", (None, None))
+        rows.append(
+            {
+                "airport": str(report.get("icaoId") or "").upper(),
+                "issue_time": issue_time,
+                "bulletin_time": _api_datetime(report.get("bulletinTime")),
+                "valid_from": valid_from,
+                "valid_to": valid_to,
+                "raw_taf": raw_taf,
+                "is_amended": bool(re.search(r"^TAF\s+AMD\b", raw_taf)),
+                "is_corrected": bool(re.search(r"^TAF\s+COR\b", raw_taf)),
+                "max_temp_c": maximum,
+                "max_temp_at": maximum_at,
+                "min_temp_c": minimum,
+                "min_temp_at": minimum_at,
+                "periods_json": _taf_periods_json(report),
+                "collected_at": collected_at,
+                "source": "aviationweather.gov",
+            }
+        )
+    return sorted(rows, key=lambda item: (item["airport"], item["issue_time"]))
 
 
 def polymarket_event_slug(airport: dict, target: date) -> str:

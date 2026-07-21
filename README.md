@@ -77,7 +77,7 @@ Repository. Du musst sonst nichts tun.
 3. Klicke rechts auf **Run workflow**.
 4. Bestätige noch einmal mit dem grünen Button **Run workflow**.
 
-Danach sammelt GitHub automatisch alle drei Stunden neue Vorhersagen und METAR-Daten.
+Danach sammelt GitHub automatisch alle drei Stunden neue Vorhersagen, METAR- und TAF-Daten.
 
 ## Woran erkennst du, dass es funktioniert?
 
@@ -214,6 +214,69 @@ automatisch; abgeschlossene Ergebnisse erscheinen jeweils nach der offiziellen M
 Nach dem Upload von Version 9.1 nur **2 - Collect current forecasts** einmal ausführen. Ein
 erneuter Backfill ist nicht erforderlich. Danach in Streamlit **Reboot app** oder **Rerun**
 wählen.
+
+## Korrektur in Version 9.1.1
+
+- Der Heat-Spike-Score verwendet jetzt Windgeschwindigkeit **und** Windrichtung.
+- Wenn verfügbar, hat die aktuelle METAR-Messung Vorrang; sonst wird der Median der aktuellen
+  stündlichen Modelle verwendet. Windrichtungen mehrerer Modelle werden zirkulär gemittelt.
+- Jeder Flughafen besitzt zunächst vorsichtige warme und kühlende Windsektoren. Beispielsweise
+  wird in Amsterdam kontinentaler Ostwind anders bewertet als maritimer Westwind.
+- Der Windbeitrag ist auf wenige Scorepunkte und höchstens ±0,4 °C Nowcast-Korrektur begrenzt,
+  bis genügend Daten für eine flughafenspezifische Kalibrierung vorhanden sind.
+- Die verwendete Windstärke, Richtung und Quelle werden direkt im Heat-Spike-Modul angezeigt.
+
+Nach dem Upload reicht erneut **2 - Collect current forecasts**. Die Datenbank wird automatisch
+um die METAR-Windrichtung ergänzt; ein Backfill ist nicht erforderlich.
+
+## Neu in Version 9.2
+
+- Weatherman lädt bei jedem Sammellauf den aktuellen Flughafen-TAF und archiviert Ausgabezeit,
+  Gültigkeit, Rohtext, TX/TN sowie die dekodierten `FM`-, `BECMG`-, `TEMPO`- und
+  `PROB30/40`-Phasen.
+- Das neue Modul **TAF guidance** zeigt eine explizite TX-Höchsttemperatur samt Zeitpunkt,
+  Wind und Böen, Bewölkung, Niederschlags- und Gewitterrisiken während des typischen
+  Aufheizfensters sowie Änderungen gegenüber dem vorherigen TAF.
+- Wettermodelle und TAF bleiben getrennt sichtbar. Bei Übereinstimmung steigt das Vertrauen
+  leicht. Bei einem Konflikt wird die Verteilung vor allem breiter; der TAF darf den finalen
+  Mittelpunkt höchstens um 0,5 °C verschieben und zählt nie als zusätzliches Wettermodell.
+- Aktuelle METAR-Daten haben im Live-Nowcast weiterhin Vorrang vor TAF und Modellen.
+- TAF-TX-Fehler werden getrennt nach D-1, D0 morning und Live gespeichert und ausgewertet,
+  sobald passende Ist-Temperaturen vorliegen. TAFs ohne TX bleiben als wertvolle
+  Bedingungsprognose erhalten, werden aber nicht künstlich als Temperaturvorhersage gewertet.
+- Der manuelle Aktualisierungsknopf öffnet die Datenbank anschließend neu, leert den
+  Berechnungscache und führt das Dashboard sauber erneut aus. Er meldet ausdrücklich, ob der
+  METAR-Zeitstempel vorgerückt ist oder ob die Luftfahrtquelle noch keinen neueren Bericht
+  geliefert hat. Ein App-Reboot ist dafür nicht mehr nötig.
+
+Nach dem Upload von Version 9.2 nur **2 - Collect current forecasts** einmal ausführen und im
+Dashboard **Rerun** wählen. Ein historischer Backfill ist nicht erforderlich; das unverfälschte
+TAF-Archiv wächst ab dem ersten v9.2-Lauf automatisch.
+
+## Neu in Version 9.3
+
+- Ein neuer **Live METAR monitor** fragt die offizielle Aviation-Weather-API automatisch
+  einmal pro Minute ab, solange das Dashboard im Browser geöffnet ist. Es ist kein manueller
+  Refresh mehr nötig.
+- Nur der ausgewählte Flughafen wird abgefragt. Ein minutenweiser Komplettabruf aller
+  Wettermodelle, TAFs und Märkte wird dadurch vermieden.
+- Sobald ein neuer Bericht erkannt wird, speichert Weatherman ihn und berechnet den gesamten
+  METAR-Nowcast sowie die Temperaturbereiche automatisch neu.
+- Das Live-Modul zeigt Temperatur, Beobachtungszeit, Alter, letzten API-Check, Roh-METAR und
+  den Zeitpunkt, zu dem Weatherman den Bericht erstmals gesehen hat. Dadurch wird die echte
+  Verteilungslatenz künftig messbar.
+- Die Routinezeiten sind flughafenspezifisch hinterlegt: Madrid und Warschau `:00/:30`,
+  Amsterdam `:25/:55`, Ankara `:20/:50`.
+- Eine Minute vor dem nächsten Routinebericht beginnt ein **METAR pending**-Schutzfenster.
+  Ist der Bericht fällig, aber noch nicht eingetroffen, werden Live-Edge-Signale gesperrt.
+  Der vorherige METAR bleibt sichtbar, darf aber nicht als aktuelle Handelsgrundlage dienen.
+- Die Quelle selbst kann einen Bericht erst ausliefern, nachdem er am Flughafen erstellt und
+  übermittelt wurde. Auto-Refresh entfernt die zusätzliche Webseiten- und Bedienverzögerung,
+  kann aber keine noch nicht veröffentlichte Beobachtung vorwegnehmen.
+
+Nach dem Upload von Version 9.3 nur **2 - Collect current forecasts** einmal ausführen und im
+Dashboard **Rerun** wählen. Ein Backfill ist nicht erforderlich. Für den minutengenauen
+Live-Modus muss der Dashboard-Tab geöffnet bleiben.
 
 ## Wichtig zum Dashboard
 

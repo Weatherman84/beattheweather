@@ -533,6 +533,70 @@ def trading_airport_scorecards(
     )
 
 
+def _direction_in_sectors(
+    direction: float,
+    sectors: list[list[float]] | tuple[tuple[float, float], ...] | None,
+) -> bool:
+    """Return whether a meteorological FROM direction falls inside any sector."""
+    normalized = direction % 360
+    for start, end in sectors or []:
+        start = float(start) % 360
+        end = float(end) % 360
+        if start <= end and start <= normalized <= end:
+            return True
+        if start > end and (normalized >= start or normalized <= end):
+            return True
+    return False
+
+
+def _wind_heat_effect(
+    *,
+    speed_kph: float | None,
+    direction_deg: float | None,
+    warm_sectors: list[list[float]] | tuple[tuple[float, float], ...] | None,
+    cool_sectors: list[list[float]] | tuple[tuple[float, float], ...] | None,
+    source: str,
+) -> tuple[int, float, str | None]:
+    """Conservative wind contribution pending airport-specific calibration."""
+    if speed_kph is None:
+        return 0, 0.0, None
+    speed = max(0.0, float(speed_kph))
+    direction = None if direction_deg is None else float(direction_deg) % 360
+    source_label = "METAR" if source == "METAR" else "model"
+    wind_label = f"{speed:.0f} km/h"
+    if direction is not None:
+        wind_label += f" from {direction:.0f}°"
+
+    # With almost calm wind, the direction is not meteorologically robust. Light
+    # winds do, however, reduce ventilation and can support local solar heating.
+    if speed < 6:
+        return 3, 0.08, f"Light {source_label} wind ({wind_label}) limits ventilation"
+
+    if direction is not None and _direction_in_sectors(direction, warm_sectors):
+        points = 4 if speed < 15 else 7 if speed < 30 else 5
+        return (
+            points,
+            min(0.25, points / 30),
+            f"{source_label} wind ({wind_label}) is in this airport's warm sector",
+        )
+
+    if direction is not None and _direction_in_sectors(direction, cool_sectors):
+        points = -4 if speed < 15 else -8 if speed < 30 else -12
+        return (
+            points,
+            max(-0.40, points / 30),
+            f"{source_label} wind ({wind_label}) is in this airport's cooling sector",
+        )
+
+    if speed >= 35:
+        return (
+            -4,
+            -0.12,
+            f"Strong {source_label} wind ({wind_label}) makes local spike heating less reliable",
+        )
+    return 0, 0.0, f"{source_label} wind is neutral ({wind_label})"
+
+
 def heat_spike_assessment(
     *,
     forecast_mean: float,
@@ -544,6 +608,14 @@ def heat_spike_assessment(
     expected_temp_now: float | None,
     heating_rate: float | None,
     cloud_cover: float | None,
+    wind_speed_kph: float | None = None,
+    wind_direction_deg: float | None = None,
+    warm_wind_sectors: list[list[float]] | tuple[tuple[float, float], ...] | None = None,
+    cool_wind_sectors: list[list[float]] | tuple[tuple[float, float], ...] | None = None,
+    wind_source: str = "model",
+    guidance_score_points: int = 0,
+    guidance_adjustment_c: float = 0.0,
+    guidance_signals: list[str] | tuple[str, ...] | None = None,
 ) -> HeatSpikeAssessment:
     score = 35
     signals: list[str] = []
@@ -613,12 +685,31 @@ def heat_spike_assessment(
             score -= 12
             signals.append("Cloud cover suppresses heating")
 
+    wind_points, wind_adjustment, wind_signal = _wind_heat_effect(
+        speed_kph=wind_speed_kph,
+        direction_deg=wind_direction_deg,
+        warm_sectors=warm_wind_sectors,
+        cool_sectors=cool_wind_sectors,
+        source=wind_source,
+    )
+    score += wind_points
+    if wind_signal is not None:
+        signals.append(wind_signal)
+
+    # Airport TAF guidance is intentionally capped and remains visibly separate
+    # from the numerical-model consensus. It can confirm or flag the heat setup,
+    # but it is not counted as another independent model vote.
+    score += max(-12, min(6, int(guidance_score_points)))
+    signals.extend(guidance_signals or [])
+
     score = int(max(0, min(100, score)))
     adjustment = 0.0
     if observed_anomaly is not None:
         adjustment += 0.45 * observed_anomaly
     if run_trend is not None:
         adjustment += 0.2 * run_trend
+    adjustment += wind_adjustment
+    adjustment += max(-0.35, min(0.20, float(guidance_adjustment_c)))
     adjustment = max(-1.5, min(1.5, adjustment))
 
     if observed_temp is None:

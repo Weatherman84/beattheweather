@@ -39,13 +39,68 @@ def test_recent_metars_skips_incomplete_reports(monkeypatch):
         "_get",
         lambda *_args, **_kwargs: [
             {"obsTime": None, "temp": 30},
-            {"obsTime": 1_752_921_600, "temp": 31, "dewp": 14, "wspd": 10},
+            {"obsTime": 1_752_921_600, "temp": 31, "dewp": 14, "wspd": 10, "wdir": 240},
         ],
     )
     rows = providers.recent_metars("EPWA")
     assert len(rows) == 1
     assert rows[0]["temp_c"] == 31
     assert round(rows[0]["wind_kph"], 2) == 18.52
+    assert rows[0]["wind_direction"] == 240
+
+
+def test_recent_metars_accepts_variable_wind_without_direction(monkeypatch):
+    monkeypatch.setattr(
+        providers,
+        "_get",
+        lambda *_args, **_kwargs: [
+            {"obsTime": 1_752_921_600, "temp": 31, "wspd": 3, "wdir": "VRB"},
+        ],
+    )
+    rows = providers.recent_metars("EPWA")
+    assert rows[0]["wind_direction"] is None
+
+
+def test_recent_tafs_parse_tx_tn_and_decoded_peak_periods(monkeypatch):
+    monkeypatch.setattr(
+        providers,
+        "_get",
+        lambda *_args, **_kwargs: [
+            {
+                "icaoId": "LEMD",
+                "issueTime": "2026-07-21T11:00:00Z",
+                "bulletinTime": "2026-07-21T11:00:00Z",
+                "validTimeFrom": 1_784_635_200,
+                "validTimeTo": 1_784_743_200,
+                "rawTAF": (
+                    "TAF AMD LEMD 211100Z 2112/2218 VRB04KT CAVOK "
+                    "TX39/2116Z TN19/2205Z TEMPO 2112/2118 24012G25KT"
+                ),
+                "fcsts": [
+                    {
+                        "timeFrom": 1_784_635_200,
+                        "timeTo": 1_784_656_800,
+                        "timeBec": None,
+                        "fcstChange": "TEMPO",
+                        "probability": 40,
+                        "wdir": 240,
+                        "wspd": 12,
+                        "wgst": 25,
+                        "wxString": None,
+                        "clouds": [{"cover": "NSC", "base": None, "type": None}],
+                        "temp": [],
+                    }
+                ],
+            }
+        ],
+    )
+    rows = providers.recent_tafs(["LEMD"])
+    assert len(rows) == 1
+    assert rows[0]["max_temp_c"] == 39
+    assert rows[0]["max_temp_at"] == datetime(2026, 7, 21, 16, tzinfo=timezone.utc)
+    assert rows[0]["min_temp_c"] == 19
+    assert rows[0]["is_amended"]
+    assert '\"wind_gust_kt\":25' in rows[0]["periods_json"]
 
 
 def test_polymarket_prices_parse_exact_and_boundary_ranges(monkeypatch):
