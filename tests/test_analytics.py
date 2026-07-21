@@ -8,10 +8,14 @@ from weatherman.analytics import (
     condition_probability_range,
     condition_probabilities,
     consensus,
+    detect_market_model_conflict,
     flat_bet_simulation,
+    forecast_ladder_frame,
+    forecast_ladder_metrics,
     forecast_scorecards,
     heat_spike_assessment,
     market_edges,
+    metar_schedule_status,
     model_metrics,
     model_weight_map,
     probability_for_range,
@@ -20,6 +24,76 @@ from weatherman.analytics import (
     settled_signal_performance,
     trading_airport_scorecards,
 )
+
+
+def test_metar_pending_starts_one_minute_before_routine_issue():
+    status = metar_schedule_status(
+        as_of=datetime(2026, 7, 21, 11, 59, tzinfo=ZoneInfo("UTC")),
+        latest_observation_at=datetime(2026, 7, 21, 11, 30, tzinfo=ZoneInfo("UTC")),
+        routine_minutes=[0, 30],
+    )
+    assert status.is_pending
+    assert status.due_at == datetime(2026, 7, 21, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_near_certain_market_conflict_is_only_a_safety_flag():
+    probabilities = {36: 0.45, 37: 0.40, 38: 0.15}
+    markets = pd.DataFrame(
+        [
+            {
+                "market_id": "37",
+                "bucket_label": "37°C",
+                "bucket_low_c": 37,
+                "bucket_high_c": 37,
+                "yes_price": 0.99,
+                "closed": False,
+            }
+        ]
+    )
+    conflict = detect_market_model_conflict(probabilities, markets)
+    assert conflict.is_conflict
+    assert conflict.model_probability == 0.40
+    assert probabilities == {36: 0.45, 37: 0.40, 38: 0.15}
+
+
+def test_forecast_ladder_scores_each_stage_separately():
+    snapshots = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 7, 21),
+                "captured_at": datetime(2026, 7, 21, 12, tzinfo=ZoneInfo("UTC")),
+                "timing": "D0 live",
+                "hours_to_peak": 3.5,
+                "raw_model_mean_c": 39.0,
+                "bias_corrected_c": 38.0,
+                "metar_conditioned_c": 37.2,
+                "final_forecast_c": 37.4,
+            }
+        ]
+    )
+    actuals = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 7, 21),
+                "max_temp_c": 37.0,
+                "actual_source": "airport METAR",
+            }
+        ]
+    )
+    scored = forecast_ladder_frame(snapshots, actuals)
+    metrics = forecast_ladder_metrics(scored)
+    assert metrics.stage.tolist() == [
+        "Raw model mean",
+        "Bias corrected",
+        "METAR conditioned",
+        "Final incl. TAF",
+    ]
+    metar = metrics[metrics.stage == "METAR conditioned"].iloc[0]
+    final = metrics[metrics.stage == "Final incl. TAF"].iloc[0]
+    assert round(metar.mae, 2) == 0.20
+    assert round(final.mae, 2) == 0.40
 
 
 def test_consensus_bias_correction():

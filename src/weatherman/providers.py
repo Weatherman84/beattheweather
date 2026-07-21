@@ -37,14 +37,20 @@ MONTH_SLUGS = (
 )
 
 
-def _get(url: str, params: dict[str, Any] | None = None) -> dict | list:
+def _get(
+    url: str,
+    params: dict[str, Any] | None = None,
+    *,
+    attempts: int = 5,
+    timeout: float | None = None,
+) -> dict | list:
     last_error: Exception | None = None
     with httpx.Client(
-        timeout=settings.timeout,
+        timeout=settings.timeout if timeout is None else timeout,
         follow_redirects=True,
-        headers={"User-Agent": "Weatherman/9.3 temperature-market research"},
+        headers={"User-Agent": "Weatherman/9.3.1 temperature-market research"},
     ) as client:
-        for attempt in range(5):
+        for attempt in range(attempts):
             try:
                 response = client.get(url, params=params)
                 if response.status_code == 204:
@@ -58,7 +64,7 @@ def _get(url: str, params: dict[str, Any] | None = None) -> dict | list:
                 retryable = not isinstance(exc, httpx.HTTPStatusError) or (
                     exc.response.status_code == 429 or exc.response.status_code >= 500
                 )
-                if not retryable or attempt == 4:
+                if not retryable or attempt == attempts - 1:
                     raise
                 retry_after = None
                 if isinstance(exc, httpx.HTTPStatusError):
@@ -295,8 +301,19 @@ def previous_run_d1(airport: dict, model: str, start: date, end: date) -> list[d
     return rows
 
 
-def recent_metars(icao: str, hours: int = 24) -> list[dict]:
-    payload = _get(METAR_URL, {"ids": icao, "format": "json", "hours": hours})
+def recent_metars(
+    icao: str,
+    hours: int = 24,
+    *,
+    attempts: int = 5,
+    timeout: float | None = None,
+) -> list[dict]:
+    payload = _get(
+        METAR_URL,
+        {"ids": icao, "format": "json", "hours": hours},
+        attempts=attempts,
+        timeout=timeout,
+    )
     rows = []
     for row in payload or []:
         observed = row.get("obsTime") or row.get("reportTime")
@@ -411,12 +428,22 @@ def _taf_periods_json(report: dict) -> str:
     return json.dumps(periods, separators=(",", ":"))
 
 
-def recent_tafs(icaos: str | list[str]) -> list[dict]:
+def recent_tafs(
+    icaos: str | list[str],
+    *,
+    attempts: int = 5,
+    timeout: float | None = None,
+) -> list[dict]:
     """Fetch the current decoded TAFs in one rate-limit-friendly request."""
     identifiers = [icaos] if isinstance(icaos, str) else list(icaos)
     if not identifiers:
         return []
-    payload = _get(TAF_URL, {"ids": ",".join(identifiers), "format": "json"})
+    payload = _get(
+        TAF_URL,
+        {"ids": ",".join(identifiers), "format": "json"},
+        attempts=attempts,
+        timeout=timeout,
+    )
     collected_at = datetime.now(timezone.utc)
     rows = []
     for report in payload or []:

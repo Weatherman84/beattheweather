@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -16,9 +16,13 @@ from sqlalchemy import func, select
 
 from weatherman.analytics import (
     flat_bet_simulation,
+    detect_market_model_conflict,
+    forecast_ladder_frame,
+    forecast_ladder_metrics,
     forecast_scorecards,
     market_edges,
     model_metrics,
+    preferred_station_actuals,
     score_frame,
     settled_probability_comparison,
     settled_signal_performance,
@@ -27,6 +31,7 @@ from weatherman.analytics import (
 from weatherman.db import (
     DailyActual,
     Forecast,
+    ForecastSnapshot,
     HourlyForecast,
     MarketSnapshot,
     Observation,
@@ -36,9 +41,8 @@ from weatherman.db import (
     init_db,
     refresh_database_connections,
 )
-from weatherman.metar_live import metar_release_guard
 from weatherman.nowcast import build_live_nowcast
-from weatherman.service import collect, collect_metars
+from weatherman.service import collect, collect_live_aviation
 from weatherman.settings import airports
 from weatherman.taf import taf_verification_frame, taf_verification_metrics
 
@@ -62,26 +66,11 @@ def latest_metar_time(airport_code: str) -> datetime | None:
         )
 
 
-def latest_metar_record(airport_code: str) -> dict | None:
+def latest_taf_time(airport_code: str) -> datetime | None:
     with Session() as session:
-        row = session.scalar(
-            select(Observation)
-            .where(Observation.airport == airport_code)
-            .order_by(Observation.observed_at.desc())
-            .limit(1)
+        return session.scalar(
+            select(func.max(TafReport.issue_time)).where(TafReport.airport == airport_code)
         )
-        if row is None:
-            return None
-        return {
-            "observed_at": row.observed_at,
-            "temp_c": row.temp_c,
-            "dewpoint_c": row.dewpoint_c,
-            "wind_kph": row.wind_kph,
-            "wind_direction": row.wind_direction,
-            "raw": row.raw,
-            "first_seen_at": row.first_seen_at,
-            "source": row.source,
-        }
 
 
 def utc_timestamp(value: datetime | None) -> pd.Timestamp | None:
@@ -91,118 +80,11 @@ def utc_timestamp(value: datetime | None) -> pd.Timestamp | None:
     return parsed.tz_localize("UTC") if parsed.tzinfo is None else parsed.tz_convert("UTC")
 
 
-def compact_age(seconds: float) -> str:
-    seconds = max(0, int(seconds))
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, remainder = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m {remainder:02d}s"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}h {minutes:02d}m"
-
-
 @st.cache_data(show_spinner=False, ttl=900)
 def cached_forecast_scorecards(
     forecast_frame: pd.DataFrame, actual_frame: pd.DataFrame
 ) -> pd.DataFrame:
     return forecast_scorecards(forecast_frame, actual_frame)
-
-
-@st.cache_data(show_spinner=False, ttl=60)
-def cached_live_metar_poll(airport_code: str) -> dict[str, object]:
-    """Share one official-feed request across sessions during each minute."""
-
-    return collect_metars([airport_code], hours=2)
-
-
-@st.fragment(run_every="60s")
-def live_metar_monitor(
-    airport_code: str,
-    timezone_name: str,
-    schedule_minutes: list[int],
-    enabled: bool,
-) -> None:
-    before = utc_timestamp(latest_metar_time(airport_code))
-    checked_at = datetime.now(timezone.utc)
-    poll_error: str | None = None
-    if enabled:
-        try:
-            result = cached_live_metar_poll(airport_code)
-            errors = result.get("errors", {})
-            if isinstance(errors, dict):
-                poll_error = errors.get(airport_code)
-        except Exception as exc:
-            poll_error = type(exc).__name__
-
-    after = utc_timestamp(latest_metar_time(airport_code))
-    if enabled and after is not None and (before is None or after > before):
-        record = latest_metar_record(airport_code)
-        temperature = record.get("temp_c") if record else None
-        local_time = after.tz_convert(timezone_name).strftime("%H:%M")
-        st.session_state["live_metar_arrival"] = (
-            f"New {airport_code} METAR · {local_time} · "
-            f"{temperature:.0f} °C" if temperature is not None else f"New {airport_code} METAR"
-        )
-        # Recompute every METAR-conditioned probability and market guard immediately.
-        st.rerun()
-
-    record = latest_metar_record(airport_code)
-    with st.container(border=True):
-        st.markdown(f"**Live METAR · {airport_code}**")
-        if record is None:
-            st.error("No METAR is stored yet. The live monitor will try again automatically.")
-            return
-
-        observed = utc_timestamp(record["observed_at"])
-        first_seen = utc_timestamp(record.get("first_seen_at"))
-        assert observed is not None
-        now = datetime.now(timezone.utc)
-        guard = metar_release_guard(now, observed.to_pydatetime(), schedule_minutes)
-        observed_local = observed.tz_convert(timezone_name)
-        checked_local = pd.Timestamp(checked_at).tz_convert(timezone_name)
-        report_age = (pd.Timestamp(now) - observed).total_seconds()
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Temperature", f"{record['temp_c']:.0f} °C")
-        c2.metric("Observation", f"{observed_local:%H:%M}", f"age {compact_age(report_age)}")
-        c3.metric("Last API check", f"{checked_local:%H:%M:%S}")
-        if first_seen is not None:
-            dissemination = (first_seen - observed).total_seconds()
-            c4.metric("First detected", f"{first_seen.tz_convert(timezone_name):%H:%M:%S}", compact_age(dissemination))
-        else:
-            c4.metric("First detected", "Not recorded")
-
-        if guard.is_pending:
-            expected = pd.Timestamp(guard.expected_at).tz_convert(timezone_name)
-            st.error(
-                f"METAR PENDING since {expected:%H:%M} — do not trade from the previous report. "
-                "Weatherman suppresses live edge signals until the new report arrives."
-            )
-        elif poll_error:
-            st.warning(
-                f"The last METAR remains visible, but this API check failed ({poll_error})."
-            )
-        elif enabled:
-            next_expected = pd.Timestamp(guard.next_expected_at).tz_convert(timezone_name)
-            st.success(
-                f"Live monitor armed · automatic check every 60 seconds · next routine "
-                f"report around {next_expected:%H:%M}."
-            )
-        else:
-            st.warning("Automatic METAR checks are paused.")
-
-        if record.get("raw"):
-            st.code(record["raw"], language=None, wrap_lines=True)
-        st.caption(
-            "Source: NOAA/NWS Aviation Weather Center. The observation time is not the same "
-            "as its publication time; the First detected value measures when Weatherman first "
-            "saw this report."
-        )
-        st.markdown(
-            f"[Open official raw {airport_code} feed]"
-            f"(https://aviationweather.gov/api/data/metar?ids={airport_code}&format=raw&hours=1)"
-        )
 
 
 st.set_page_config(page_title="Weatherman", page_icon="🌡️", layout="wide")
@@ -221,9 +103,65 @@ timezone_name = catalog[airport]["timezone"]
 target = st.sidebar.date_input(
     "Target date", value=datetime.now(ZoneInfo(timezone_name)).date()
 )
-live_metar_enabled = st.sidebar.toggle(
-    "Live METAR auto-refresh (60s)", value=True, help="Active while this dashboard is open."
-)
+
+
+@st.fragment(run_every=60)
+def live_aviation_poller() -> None:
+    """Poll the primary aviation feed without rerunning expensive model collection."""
+    now = datetime.now(timezone.utc)
+    poll_key = f"live_poll_at_{airport}"
+    taf_key = f"live_taf_poll_at_{airport}"
+    detection_key = f"metar_detected_at_{airport}"
+    last_poll = st.session_state.get(poll_key)
+    should_poll = last_poll is None or now - last_poll >= timedelta(seconds=55)
+    if should_poll:
+        before_metar = utc_timestamp(latest_metar_time(airport))
+        before_taf = utc_timestamp(latest_taf_time(airport))
+        last_taf_poll = st.session_state.get(taf_key)
+        include_taf = (
+            last_taf_poll is None or now - last_taf_poll >= timedelta(minutes=10)
+        )
+        try:
+            collect_live_aviation(airport, include_taf=include_taf)
+        except Exception as exc:
+            st.session_state[f"live_poll_error_{airport}"] = (
+                f"Live aviation check failed ({type(exc).__name__}); retrying automatically."
+            )
+        else:
+            refresh_database_connections()
+            after_metar = utc_timestamp(latest_metar_time(airport))
+            after_taf = utc_timestamp(latest_taf_time(airport))
+            st.session_state.pop(f"live_poll_error_{airport}", None)
+            st.session_state[poll_key] = now
+            if include_taf:
+                st.session_state[taf_key] = now
+            metar_advanced = after_metar is not None and (
+                before_metar is None or after_metar > before_metar
+            )
+            taf_advanced = after_taf is not None and (
+                before_taf is None or after_taf > before_taf
+            )
+            if metar_advanced:
+                st.session_state[detection_key] = now
+            if metar_advanced or taf_advanced:
+                st.cache_data.clear()
+                st.rerun(scope="app")
+
+    checked_at = st.session_state.get(poll_key)
+    if checked_at is not None:
+        checked_local = checked_at.astimezone(ZoneInfo(timezone_name))
+        detected_at = st.session_state.get(detection_key)
+        status = f"Live feed checked {checked_local:%H:%M:%S}"
+        if detected_at is not None:
+            detected_local = detected_at.astimezone(ZoneInfo(timezone_name))
+            status += f" · newest METAR detected {detected_local:%H:%M:%S}"
+        st.sidebar.caption(status)
+    error = st.session_state.get(f"live_poll_error_{airport}")
+    if error:
+        st.sidebar.warning(error)
+
+
+live_aviation_poller()
 refresh_feedback = st.session_state.pop("refresh_feedback", None)
 if refresh_feedback:
     level, message = refresh_feedback
@@ -248,7 +186,7 @@ if st.sidebar.button("Refresh forecasts + METAR + TAF", type="primary"):
         refresh_database_connections()
         init_db()
         after_metar = utc_timestamp(latest_metar_time(airport))
-        cached_forecast_scorecards.clear()
+        st.cache_data.clear()
         saved = (
             f"Saved {result['forecasts']} daily forecasts, "
             f"{result['taf_reports']} TAF report(s) and "
@@ -274,28 +212,16 @@ if st.sidebar.button("Refresh forecasts + METAR + TAF", type="primary"):
         st.session_state["refresh_feedback"] = feedback
         st.rerun()
 
-live_arrival = st.session_state.pop("live_metar_arrival", None)
-if live_arrival:
-    st.toast(live_arrival, icon="🛬")
-
-live_metar_monitor(
-    airport,
-    timezone_name,
-    catalog[airport].get("metar_schedule_minutes", [0, 30]),
-    live_metar_enabled,
-)
-
 with Session() as session:
     all_forecasts = pd.read_sql(select(Forecast), session.bind)
     all_actuals = pd.read_sql(select(DailyActual), session.bind)
-    observations = pd.read_sql(
-        select(Observation).where(Observation.airport == airport), session.bind
-    )
+    all_observations = pd.read_sql(select(Observation), session.bind)
     hourly = pd.read_sql(
         select(HourlyForecast).where(HourlyForecast.airport == airport), session.bind
     )
     all_market_snapshots = pd.read_sql(select(MarketSnapshot), session.bind)
     all_signal_snapshots = pd.read_sql(select(SignalSnapshot), session.bind)
+    all_forecast_snapshots = pd.read_sql(select(ForecastSnapshot), session.bind)
     all_tafs = pd.read_sql(select(TafReport), session.bind)
 
 forecasts = (
@@ -307,6 +233,11 @@ actuals = (
     all_actuals[all_actuals.airport == airport].copy()
     if not all_actuals.empty
     else all_actuals
+)
+observations = (
+    all_observations[all_observations.airport == airport].copy()
+    if not all_observations.empty
+    else all_observations
 )
 market_snapshots = (
     all_market_snapshots[all_market_snapshots.airport == airport].copy()
@@ -346,18 +277,13 @@ trade_scorecards = trading_airport_scorecards(
 airport_forecast_scorecards = cached_forecast_scorecards(
     all_forecasts, all_actuals
 )
-latest_observed_at = None
-if not observations.empty:
-    parsed_observations = pd.to_datetime(observations.observed_at, utc=True, errors="coerce")
-    if parsed_observations.notna().any():
-        latest_observed_at = parsed_observations.max().to_pydatetime()
-metar_guard = metar_release_guard(
-    datetime.now(timezone.utc),
-    latest_observed_at,
-    catalog[airport].get("metar_schedule_minutes", [0, 30]),
+station_actuals = preferred_station_actuals(
+    all_observations,
+    all_actuals,
+    {code: item["timezone"] for code, item in catalog.items()},
 )
-local_today = datetime.now(ZoneInfo(timezone_name)).date()
-metar_pending_for_target = target == local_today and metar_guard.is_pending
+ladder_scored = forecast_ladder_frame(all_forecast_snapshots, station_actuals)
+ladder_metrics = forecast_ladder_metrics(ladder_scored)
 
 st.caption(
     f"Last data update · Forecast: {last_update(forecasts, 'run_at', timezone_name)} · "
@@ -391,13 +317,6 @@ st.caption(
 probabilities: dict[int, float] | None = None
 day_status = None
 with tab_live:
-    if metar_pending_for_target:
-        expected_local = pd.Timestamp(metar_guard.expected_at).tz_convert(timezone_name)
-        st.error(
-            f"Trading guard active: the {expected_local:%H:%M} routine METAR is due but has "
-            "not reached the official feed. Forecasts remain visible, but live trade signals "
-            "are locked until it arrives."
-        )
     live_nowcast = build_live_nowcast(
         forecasts=forecasts,
         actuals=actuals,
@@ -409,6 +328,7 @@ with tab_live:
         target=target,
         as_of=datetime.now(ZoneInfo("UTC")),
         wind_profile=catalog[airport].get("heat_wind_profile"),
+        routine_metar_minutes=catalog[airport].get("metar_minutes"),
     )
     if live_nowcast is None:
         st.info("No current forecast stored for this date. Click Refresh forecasts + METAR + TAF.")
@@ -422,24 +342,44 @@ with tab_live:
         remaining_rise = live_nowcast.remaining_rise_c
         temp_850 = live_nowcast.temp_850_c
         radiation = live_nowcast.radiation_wm2
-        live_mean = sum(bucket * probability for bucket, probability in probabilities.items())
+        live_mean = live_nowcast.final_forecast_mean
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Raw model mean", f"{current.max_temp_c.mean():.1f} °C")
+        if live_nowcast.metar_pending:
+            due_local = (
+                pd.Timestamp(live_nowcast.metar_due_at).tz_convert(timezone_name)
+                if live_nowcast.metar_due_at is not None
+                else None
+            )
+            due_text = f" for {due_local:%H:%M}" if due_local is not None else ""
+            st.error(
+                f"METAR pending{due_text} – do not trade. The new routine report is due but "
+                "has not reached the official feed. Edge signals are temporarily blocked."
+            )
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Raw model mean", f"{live_nowcast.raw_model_mean:.1f} °C")
         c2.metric("D-1 bias-corrected", f"{corrected.mean:.1f} °C")
-        c3.metric("METAR-conditioned nowcast", f"{live_mean:.1f} °C")
-        c4, c5, c6, c7, c8 = st.columns(5)
-        c4.metric("Model spread", f"{corrected.spread:.1f} °C")
-        c5.metric(
+        c3.metric(
+            "METAR-conditioned",
+            f"{live_nowcast.metar_conditioned_mean:.1f} °C",
+        )
+        c4.metric(
+            "Final incl. TAF",
+            f"{live_mean:.1f} °C",
+            f"TAF {live_nowcast.taf_adjustment_c:+.2f} °C",
+        )
+        c5, c6, c7, c8, c9 = st.columns(5)
+        c5.metric("Model spread", f"{corrected.spread:.1f} °C")
+        c6.metric(
             "METAR max so far",
             f"{observed_max:.0f} °C" if observed_max is not None else "Not available",
         )
-        c6.metric(
+        c7.metric(
             "Model warming left",
             f"≤ {remaining_rise:.1f} °C" if remaining_rise is not None else "Not available",
         )
-        c7.metric("Forecast confidence", f"{live_nowcast.forecast_confidence}/100")
-        c8.metric("Day status", day_status.label)
+        c8.metric("Forecast confidence", f"{live_nowcast.forecast_confidence}/100")
+        c9.metric("Day status", day_status.label)
 
         taf = live_nowcast.taf_guidance
         if taf is None:
@@ -486,11 +426,17 @@ with tab_live:
                     st.caption("Peak-window TAF: " + " · ".join(wind_bits))
                 if taf.change_summary:
                     st.info(f"Change from previous TAF: {taf.change_summary}.")
+                if not taf.temperature_influence_active and taf.max_temp_c is not None:
+                    st.success(
+                        "TAF TX temperature influence is off: its peak time has passed and "
+                        "the METAR series is cooling. The archived TX remains visible for scoring."
+                    )
                 st.code(taf.raw_taf, language=None, wrap_lines=True)
                 st.caption(
                     f"TAF effect: {taf.center_adjustment_c:+.2f} °C on the final center and "
-                    f"+{taf.spread_addition_c:.2f} °C uncertainty floor. The raw weather-model "
-                    "consensus above is unchanged; METAR takes precedence intraday."
+                    f"+{taf.spread_addition_c:.2f} °C uncertainty floor. This is the single "
+                    "TAF temperature path and is capped at ±0.25 °C; the raw, bias-corrected "
+                    "and METAR-conditioned stages above remain unchanged."
                 )
 
         with st.expander("Dynamic model weights and confidence"):
@@ -561,7 +507,7 @@ with tab_live:
             [{"bucket": bucket, "probability": value} for bucket, value in probabilities.items()]
         )
         probs = probs[probs.probability >= 0.005]
-        st.subheader("METAR-conditioned bucket probabilities")
+        st.subheader("Final bucket probabilities")
         st.dataframe(
             probs.assign(
                 probability=lambda frame: frame.probability.map(lambda value: f"{value:.1%}")
@@ -610,10 +556,13 @@ with tab_market:
             st.info("The stored market does not contain recognizable Celsius ranges.")
         else:
             market_closed = latest_markets.closed.fillna(False).astype(bool).all()
+            market_conflict = detect_market_model_conflict(probabilities, latest_markets)
+            metar_pending = bool(live_nowcast and live_nowcast.metar_pending)
             trading_suppressed = (
                 market_closed
                 or bool(day_status and day_status.is_locked)
-                or metar_pending_for_target
+                or metar_pending
+                or market_conflict.is_conflict
             )
             actionable = comparison[comparison.best_ask.notna()]
             best = actionable.iloc[0] if not actionable.empty else comparison.iloc[0]
@@ -621,29 +570,42 @@ with tab_market:
             m1, m2, m3 = st.columns(3)
             if trading_suppressed:
                 top_market = comparison.sort_values("yes_price", ascending=False).iloc[0]
-                if metar_pending_for_target and not market_closed:
-                    expected_local = pd.Timestamp(metar_guard.expected_at).tz_convert(timezone_name)
-                    m1.metric("Status", "METAR pending")
-                    m2.metric("Expected report", f"{expected_local:%H:%M}")
-                    m3.metric("Current market leader", top_market.bucket_label)
-                    comparison["signal"] = "METAR pending"
-                    st.error(
-                        "No live edge is actionable: a new routine METAR is already due, but the "
-                        "official feed still shows the previous report. Wait for the live monitor "
-                        "to clear this lock."
-                    )
-                else:
-                    status_label = (
-                        "Officially resolved" if market_closed else "Daily peak locked"
-                    )
-                    m1.metric("Status", status_label)
-                    m2.metric("Leading / winning range", top_market.bucket_label)
-                    m3.metric("Market probability", f"{top_market.yes_price:.1%}")
+                if market_closed:
+                    status_label = "Officially resolved"
                     comparison["signal"] = "Day complete"
-                    st.success(
-                        "The temperature day is complete. Weatherman no longer displays new edge "
+                    message = (
+                        "The market is resolved. Weatherman no longer displays new edge signals."
+                    )
+                elif day_status and day_status.is_locked:
+                    status_label = "Daily peak locked"
+                    comparison["signal"] = "Day complete"
+                    message = (
+                        "The temperature peak is locked. Weatherman no longer displays new edge "
                         "signals for this date."
                     )
+                elif metar_pending:
+                    status_label = "METAR pending"
+                    comparison["signal"] = "METAR pending"
+                    message = (
+                        "A routine METAR is due but not yet available. Signals are blocked until "
+                        "the official feed publishes it."
+                    )
+                else:
+                    status_label = "Market–model conflict"
+                    comparison["signal"] = "Market-model conflict"
+                    message = (
+                        f"The market assigns {market_conflict.market_probability:.1%} to "
+                        f"{market_conflict.bucket_label}, while Weatherman assigns "
+                        f"{market_conflict.model_probability:.1%}. The market is not copied into "
+                        "the forecast, but new edge signals are blocked as a safety warning."
+                    )
+                m1.metric("Status", status_label)
+                m2.metric("Leading / winning range", top_market.bucket_label)
+                m3.metric("Market probability", f"{top_market.yes_price:.1%}")
+                if market_closed or bool(day_status and day_status.is_locked):
+                    st.success(message)
+                else:
+                    st.warning(message)
             else:
                 m1.metric("Best model difference", f"{best.edge:+.1%}")
                 m2.metric("Temperature range", best.bucket_label)
@@ -679,6 +641,7 @@ with tab_market:
                     "No clear edge": "No clear edge",
                     "Day complete": "Day complete",
                     "METAR pending": "METAR pending",
+                    "Market-model conflict": "Market-model conflict",
                 }
             )
             shown = shown.rename(
@@ -1102,6 +1065,75 @@ with tab_airports:
 
 
 with tab_accuracy:
+    st.subheader("Forecast ladder · same timestamp, separate transformations")
+    st.caption(
+        "This measures the raw model mean, bias-corrected ensemble, METAR-conditioned nowcast "
+        "and final forecast including TAF separately. Live snapshots are split by hours to the "
+        "modelled peak so a late nowcast is never compared as if it had D-1 information. Airport "
+        "METAR maxima are the preferred actual; archive data is only a fallback."
+    )
+    selected_ladder = (
+        ladder_metrics[ladder_metrics.airport == airport].copy()
+        if not ladder_metrics.empty
+        else ladder_metrics
+    )
+    if selected_ladder.empty:
+        st.info(
+            "Forecast-ladder tracking starts with the first v9.3.1 collection. Results appear "
+            "after matching target days have completed. Existing forecasts are not reconstructed "
+            "with later information."
+        )
+    else:
+        timing_options = selected_ladder[
+            ["timing", "lead_bucket"]
+        ].drop_duplicates().sort_values(["timing", "lead_bucket"])
+        timing_options["selection"] = (
+            timing_options.timing.astype(str) + " · " + timing_options.lead_bucket.astype(str)
+        )
+        ladder_selection = st.selectbox(
+            "Comparable forecast information set",
+            timing_options.selection.tolist(),
+            key="forecast_ladder_timing",
+        )
+        chosen = timing_options[timing_options.selection == ladder_selection].iloc[0]
+        ladder_table = selected_ladder[
+            (selected_ladder.timing == chosen.timing)
+            & (selected_ladder.lead_bucket == chosen.lead_bucket)
+        ][
+            [
+                "stage",
+                "n_days",
+                "bias",
+                "mae",
+                "rmse",
+                "exact_hit",
+                "within_1c",
+                "mae_gain_vs_raw",
+            ]
+        ].copy()
+        for column in ["bias", "mae", "rmse", "mae_gain_vs_raw"]:
+            ladder_table[column] = ladder_table[column].map(
+                lambda value: f"{value:+.2f} °C" if column in {"bias", "mae_gain_vs_raw"}
+                else f"{value:.2f} °C"
+            )
+        for column in ["exact_hit", "within_1c"]:
+            ladder_table[column] = ladder_table[column].map(lambda value: f"{value:.1%}")
+        ladder_table = ladder_table.rename(
+            columns={
+                "stage": "Forecast stage",
+                "n_days": "Independent days",
+                "bias": "Bias",
+                "mae": "MAE",
+                "rmse": "RMSE",
+                "exact_hit": "Exact bucket",
+                "within_1c": "Within ±1 °C",
+                "mae_gain_vs_raw": "MAE gain vs raw",
+            }
+        )
+        st.dataframe(ladder_table, hide_index=True, width="stretch")
+
+    st.divider()
+    st.subheader("Individual weather-model accuracy")
     horizon = st.selectbox("Forecast timing", ["D-1", "D0-morning", "Live"])
     selected = forecasts[forecasts.horizon == horizon] if not forecasts.empty else forecasts
     scored = score_frame(selected, actuals)
@@ -1160,7 +1192,8 @@ with tab_data:
         f"Forecast rows: {len(forecasts):,} · Hourly rows: {len(hourly):,} · "
         f"Actual rows: {len(actuals):,} · METAR rows: {len(observations):,} · "
         f"TAF rows: {len(tafs):,} · "
-        f"Market rows: {len(market_snapshots):,} · Signal rows: {len(signal_snapshots):,}"
+        f"Market rows: {len(market_snapshots):,} · Signal rows: {len(signal_snapshots):,} · "
+        f"Forecast-ladder rows: {len(all_forecast_snapshots):,}"
     )
     models = catalog[airport]["models"] + ["meteoblue"]
     coverage = pd.DataFrame({"model": models})
@@ -1179,7 +1212,7 @@ with tab_data:
     st.dataframe(coverage, hide_index=True, width="stretch")
     taf_scored = taf_verification_frame(
         all_tafs,
-        all_actuals,
+        station_actuals,
         {code: item["timezone"] for code, item in catalog.items()},
     )
     taf_metrics = taf_verification_metrics(taf_scored)

@@ -152,4 +152,73 @@ def test_taf_conflict_broadens_and_cautiously_lowers_live_distribution():
     mean_without = sum(k * v for k, v in without_taf.probabilities.items())
     mean_with = sum(k * v for k, v in with_taf.probabilities.items())
     assert mean_with < mean_without
+    assert with_taf.metar_conditioned_mean == without_taf.metar_conditioned_mean
+    assert abs(with_taf.taf_adjustment_c) <= 0.25
     assert with_taf.forecast_confidence < without_taf.forecast_confidence
+
+
+def test_evening_model_path_is_anchored_to_metar_and_observed_maximum():
+    as_of = datetime(2026, 7, 21, 21, tzinfo=ZoneInfo("Europe/Madrid"))
+    as_of_utc = as_of.astimezone(timezone.utc)
+    target = as_of.date()
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "model": "ECMWF",
+                "run_at": as_of_utc - timedelta(minutes=20),
+                "target_date": target,
+                "max_temp_c": 38.0,
+                "source": "open-meteo",
+                "horizon": "Live",
+            }
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "observed_at": as_of_utc - timedelta(hours=2),
+                "temp_c": 37.0,
+                "dewpoint_c": 8.0,
+            },
+            {
+                "airport": "LEMD",
+                "observed_at": as_of_utc - timedelta(minutes=5),
+                "temp_c": 35.0,
+                "dewpoint_c": 8.0,
+            },
+        ]
+    )
+    hourly = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "model": "ECMWF",
+                "run_at": as_of_utc - timedelta(minutes=20),
+                "valid_at": valid_at,
+                "temp_c": temp_c,
+                "cloud_cover": 0.0,
+                "temp_850hpa_c": 20.0,
+                "radiation_wm2": 0.0,
+            }
+            for valid_at, temp_c in [
+                (as_of_utc, 33.0),
+                (as_of_utc + timedelta(hours=1), 34.0),
+            ]
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=observations,
+        hourly=hourly,
+        markets=pd.DataFrame(),
+        timezone_name="Europe/Madrid",
+        target=target,
+        as_of=as_of,
+    )
+    assert result is not None
+    assert result.remaining_rise_c == 0
+    assert result.day_status.label == "Peak locked"
+    assert result.probabilities == {37: 1.0}

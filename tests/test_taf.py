@@ -72,8 +72,8 @@ def test_taf_conflict_is_limited_and_flags_peak_weather():
     )
     assert guidance is not None
     assert guidance.agreement == "Contradicts model"
-    assert guidance.center_adjustment_c == -0.5
-    assert guidance.spread_addition_c == 0.55
+    assert guidance.center_adjustment_c == -0.25
+    assert guidance.spread_addition_c == 0.45
     assert guidance.thunderstorm_risk
     assert guidance.heat_score_points == -12
 
@@ -102,6 +102,54 @@ def test_taf_without_tx_guides_conditions_without_moving_temperature_center():
     assert guidance.agreement == "Neutral · no TX issued"
     assert guidance.center_adjustment_c == 0
     assert guidance.cloud_risk == "No significant cloud near peak"
+
+
+def test_taf_temperature_influence_expires_after_tx_when_metar_is_cooling():
+    target = date(2026, 7, 21)
+    tafs = pd.DataFrame(
+        [
+            report(
+                issue=datetime(2026, 7, 21, 10, tzinfo=timezone.utc),
+                maximum=39,
+                maximum_at=datetime(2026, 7, 21, 16, tzinfo=timezone.utc),
+            )
+        ]
+    )
+    guidance = build_taf_guidance(
+        tafs,
+        timezone_name="Europe/Madrid",
+        target=target,
+        as_of=datetime(2026, 7, 21, 19, tzinfo=timezone.utc),
+        model_mean=37,
+        observed_cooling=True,
+    )
+    assert guidance is not None
+    assert guidance.max_temp_c == 39
+    assert not guidance.temperature_influence_active
+    assert guidance.center_adjustment_c == 0
+    assert guidance.spread_addition_c == 0
+
+
+def test_next_day_taf_tx_does_not_move_selected_day():
+    tafs = pd.DataFrame(
+        [
+            report(
+                issue=datetime(2026, 7, 21, 17, tzinfo=timezone.utc),
+                maximum=41,
+                maximum_at=datetime(2026, 7, 22, 16, tzinfo=timezone.utc),
+            )
+        ]
+    )
+    guidance = build_taf_guidance(
+        tafs,
+        timezone_name="Europe/Madrid",
+        target=date(2026, 7, 21),
+        as_of=datetime(2026, 7, 21, 18, tzinfo=timezone.utc),
+        model_mean=37,
+    )
+    assert guidance is not None
+    assert guidance.max_temp_c is None
+    assert guidance.center_adjustment_c == 0
 
 
 def test_taf_change_and_timing_verification_use_latest_available_report():

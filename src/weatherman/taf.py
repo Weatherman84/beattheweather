@@ -32,6 +32,7 @@ class TafGuidance:
     precipitation_risk: bool
     thunderstorm_risk: bool
     signals: tuple[str, ...]
+    temperature_influence_active: bool
     change_summary: str | None = None
 
 
@@ -91,15 +92,34 @@ def _peak_conditions(
     row: pd.Series,
     timezone_name: str,
     target: date,
+    as_of: datetime,
     wind_profile: dict | None,
 ) -> dict:
     timezone = ZoneInfo(timezone_name)
     peak_start = pd.Timestamp(datetime.combine(target, time(11), timezone))
     peak_end = pd.Timestamp(datetime.combine(target, time(19), timezone))
+    as_of_utc = _utc(as_of)
+    assert as_of_utc is not None
+    as_of_local = as_of_utc.tz_convert(timezone_name)
+    active_start = max(peak_start, as_of_local)
+    if active_start >= peak_end:
+        return {
+            "wind_speed": None,
+            "wind_direction": None,
+            "wind_gust": None,
+            "cloud_risk": "Heating window ended",
+            "precipitation": False,
+            "thunderstorm": False,
+            "heat_points": 0,
+            "heat_adjustment": 0.0,
+            "signals": [
+                "The TAF heating window has ended; its conditions no longer adjust today's peak"
+            ],
+        }
     overlapping = [
         period
         for period in _periods(row.get("periods_json"))
-        if _overlaps(peak_start.tz_convert("UTC"), peak_end.tz_convert("UTC"), period)
+        if _overlaps(active_start.tz_convert("UTC"), peak_end.tz_convert("UTC"), period)
     ]
     directions: list[float] = []
     speeds: list[float] = []
@@ -204,6 +224,7 @@ def _guidance_for_row(
     as_of: datetime,
     model_mean: float,
     wind_profile: dict | None,
+    observed_cooling: bool,
 ) -> TafGuidance:
     issue = _utc(row.get("issue_time"))
     assert issue is not None
@@ -220,6 +241,8 @@ def _guidance_for_row(
         maximum_at_timestamp = None
     maximum_at = maximum_at_timestamp.to_pydatetime() if maximum_at_timestamp is not None else None
     difference = maximum - model_mean if maximum is not None else None
+    temperature_influence_active = maximum is not None
+    temperature_influence_expired = False
     if difference is None:
         agreement = "Neutral · no TX issued"
         confidence_score = 55
@@ -233,17 +256,31 @@ def _guidance_for_row(
     elif abs(difference) <= 2:
         agreement = "Mild conflict"
         confidence_score = 62
-        center_adjustment = max(-0.35, min(0.35, 0.20 * difference))
-        spread_addition = 0.25
+        center_adjustment = max(-0.20, min(0.20, 0.10 * difference))
+        spread_addition = 0.20
     else:
         agreement = "Contradicts model"
         confidence_score = 30
-        center_adjustment = 0.5 if difference > 0 else -0.5
-        spread_addition = 0.55
+        center_adjustment = 0.25 if difference > 0 else -0.25
+        spread_addition = 0.45
     if age_hours > 12:
         confidence_score = max(20, confidence_score - 15)
         center_adjustment *= 0.5
-    conditions = _peak_conditions(row, timezone_name, target, wind_profile)
+    conditions = _peak_conditions(row, timezone_name, target, as_of, wind_profile)
+    if conditions["thunderstorm"] or conditions["precipitation"]:
+        spread_addition = max(spread_addition, 0.25)
+    maximum_at_utc = _utc(maximum_at)
+    if (
+        maximum_at_utc is not None
+        and as_of_utc >= maximum_at_utc
+        and observed_cooling
+    ):
+        temperature_influence_active = False
+        temperature_influence_expired = True
+        center_adjustment = 0.0
+        spread_addition = 0.0
+        agreement = f"{agreement} · TX passed"
+    center_adjustment = max(-0.25, min(0.25, center_adjustment))
     signals = list(conditions["signals"])
     if maximum is not None:
         signals.insert(
@@ -252,6 +289,11 @@ def _guidance_for_row(
         )
     else:
         signals.insert(0, "This TAF does not contain an explicit TX maximum")
+    if temperature_influence_expired:
+        signals.insert(
+            1,
+            "TAF TX influence is disabled because its valid peak time passed and METAR is cooling",
+        )
     return TafGuidance(
         issue_time=issue.to_pydatetime(),
         age_hours=age_hours,
@@ -274,6 +316,7 @@ def _guidance_for_row(
         precipitation_risk=bool(conditions["precipitation"]),
         thunderstorm_risk=bool(conditions["thunderstorm"]),
         signals=tuple(signals),
+        temperature_influence_active=temperature_influence_active,
     )
 
 
@@ -285,6 +328,7 @@ def build_taf_guidance(
     as_of: datetime,
     model_mean: float,
     wind_profile: dict | None = None,
+    observed_cooling: bool = False,
 ) -> TafGuidance | None:
     if tafs is None or tafs.empty:
         return None
@@ -311,6 +355,7 @@ def build_taf_guidance(
         as_of=as_of,
         model_mean=model_mean,
         wind_profile=wind_profile,
+        observed_cooling=observed_cooling,
     )
     if len(available) < 2:
         return latest
@@ -321,6 +366,7 @@ def build_taf_guidance(
         as_of=as_of,
         model_mean=model_mean,
         wind_profile=wind_profile,
+        observed_cooling=observed_cooling,
     )
     changes: list[str] = []
     if latest.max_temp_c is not None and previous.max_temp_c is not None:

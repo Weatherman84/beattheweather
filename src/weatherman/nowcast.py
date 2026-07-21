@@ -15,6 +15,7 @@ from .analytics import (
     condition_probability_range,
     consensus,
     heat_spike_assessment,
+    metar_schedule_status,
     model_metrics,
     model_weight_map,
     resolved_market_range,
@@ -45,6 +46,19 @@ class LiveNowcast:
     confidence_factors: dict[str, float]
     model_weights: dict[str, float]
     taf_guidance: TafGuidance | None
+    raw_model_mean: float
+    raw_model_spread: float
+    metar_conditioned_probabilities: dict[int, float]
+    metar_conditioned_mean: float
+    metar_conditioned_spread: float
+    final_forecast_mean: float
+    final_forecast_spread: float
+    taf_adjustment_c: float
+    latest_observation_at: datetime | None
+    expected_peak_at: datetime | None
+    hours_to_peak: float | None
+    metar_pending: bool
+    metar_due_at: datetime | None
 
 
 def local_observations(
@@ -143,6 +157,8 @@ def remaining_heating_context(
     timezone_name: str,
     target: date,
     as_of: datetime,
+    current_observed_temp: float | None = None,
+    observed_max: float | None = None,
 ) -> tuple[float | None, float | None]:
     result = _hourly_for_target(frame, timezone_name, target, as_of)
     if result.empty:
@@ -164,13 +180,57 @@ def remaining_heating_context(
             rises.append(0.0)
             future_radiation.append(0.0)
             continue
-        rises.append(max(0.0, float(future.temp_c.max()) - expected_now))
+        if current_observed_temp is not None and observed_max is not None:
+            # Anchor every future model path to the latest METAR before comparing
+            # it with the maximum already observed. This prevents an evening model
+            # path from keeping the heating window open merely because it rises
+            # relative to its own (wrong) evening baseline.
+            anchor = float(current_observed_temp) - expected_now
+            anchored_peak = float((future.temp_c.astype(float) + anchor).max())
+            rises.append(max(0.0, anchored_peak - float(observed_max)))
+        else:
+            rises.append(max(0.0, float(future.temp_c.max()) - expected_now))
         radiation_values = future.radiation_wm2.dropna()
         if not radiation_values.empty:
             future_radiation.append(float(radiation_values.max()))
     remaining_rise = max(rises) if rises else None
     radiation_max = max(future_radiation) if future_radiation else None
     return remaining_rise, radiation_max
+
+
+def expected_peak_time(
+    frame: pd.DataFrame,
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+) -> datetime | None:
+    result = _hourly_for_target(frame, timezone_name, target, as_of)
+    if result.empty:
+        return None
+    peak_timestamps: list[float] = []
+    for _, model_frame in result.groupby("model"):
+        latest_run = model_frame.run_at.max()
+        model_frame = model_frame[model_frame.run_at == latest_run].sort_values("valid_at")
+        if model_frame.empty or model_frame.temp_c.dropna().empty:
+            continue
+        peak_row = model_frame.loc[model_frame.temp_c.astype(float).idxmax()]
+        peak_timestamps.append(pd.Timestamp(peak_row.valid_at).timestamp())
+    if not peak_timestamps:
+        return None
+    epoch = float(pd.Series(peak_timestamps).median())
+    return datetime.fromtimestamp(epoch, tz=ZoneInfo("UTC"))
+
+
+def probability_moments(probabilities: dict[int, float]) -> tuple[float, float]:
+    total = sum(probabilities.values())
+    if total <= 0:
+        raise ValueError("Probability distribution must contain positive mass")
+    mean = sum(float(bucket) * probability for bucket, probability in probabilities.items()) / total
+    variance = sum(
+        probability * (float(bucket) - mean) ** 2
+        for bucket, probability in probabilities.items()
+    ) / total
+    return float(mean), float(math.sqrt(max(0.0, variance)))
 
 
 def model_run_trend(
@@ -208,6 +268,7 @@ def build_live_nowcast(
     target: date,
     as_of: datetime,
     wind_profile: dict | None = None,
+    routine_metar_minutes: list[int] | tuple[int, ...] | None = None,
 ) -> LiveNowcast | None:
     if forecasts.empty:
         return None
@@ -253,14 +314,6 @@ def build_live_nowcast(
         weights=current.model_weight.tolist(),
     )
     wind_profile = wind_profile or {}
-    taf_guidance = build_taf_guidance(
-        tafs if tafs is not None else pd.DataFrame(),
-        timezone_name=timezone_name,
-        target=target,
-        as_of=as_of,
-        model_mean=corrected.mean,
-        wind_profile=wind_profile,
-    )
 
     obs_today = local_observations(observations, timezone_name, target, as_of)
     latest_obs = obs_today.iloc[-1] if not obs_today.empty else None
@@ -277,6 +330,22 @@ def build_live_nowcast(
                 (recent_obs.temp_c.iloc[-1] - recent_obs.temp_c.iloc[0]) / elapsed
             )
 
+    observed_cooling = False
+    if latest_obs is not None and observed_max is not None:
+        observed_cooling = (
+            float(latest_obs.temp_c) <= observed_max - 0.5
+            or (heating_rate is not None and heating_rate <= 0.0)
+        )
+    taf_guidance = build_taf_guidance(
+        tafs if tafs is not None else pd.DataFrame(),
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        model_mean=corrected.mean,
+        wind_profile=wind_profile,
+        observed_cooling=observed_cooling,
+    )
+
     (
         expected_now,
         cloud_cover,
@@ -285,8 +354,20 @@ def build_live_nowcast(
         model_wind_speed,
         model_wind_direction,
     ) = hourly_context(hourly, timezone_name, target, as_of)
+    current_observed_temp = float(latest_obs.temp_c) if latest_obs is not None else None
     remaining_rise, future_radiation = remaining_heating_context(
-        hourly, timezone_name, target, as_of
+        hourly,
+        timezone_name,
+        target,
+        as_of,
+        current_observed_temp=current_observed_temp,
+        observed_max=observed_max,
+    )
+    peak_at = expected_peak_time(hourly, timezone_name, target, as_of)
+    hours_to_peak = (
+        (peak_at - as_of_utc.to_pydatetime()).total_seconds() / 3600
+        if peak_at is not None
+        else None
     )
     observation_age_hours = None
     if latest_obs is not None:
@@ -294,6 +375,16 @@ def build_live_nowcast(
             0.0,
             (as_of_utc - pd.Timestamp(latest_obs.observed_at)).total_seconds() / 3600,
         )
+    latest_observation_at = (
+        pd.Timestamp(latest_obs.observed_at).to_pydatetime()
+        if latest_obs is not None
+        else None
+    )
+    schedule = metar_schedule_status(
+        as_of=as_of,
+        latest_observation_at=latest_observation_at,
+        routine_minutes=routine_metar_minutes,
+    )
     trend = model_run_trend(available, target, as_of)
     recent_baseline = None
     if not prior_actuals.empty:
@@ -345,7 +436,7 @@ def build_live_nowcast(
             taf_guidance.heat_score_points if taf_guidance is not None else 0
         ),
         guidance_adjustment_c=(
-            taf_guidance.heat_adjustment_c if taf_guidance is not None else 0.0
+            0.0
         ),
         guidance_signals=(taf_guidance.signals if taf_guidance is not None else None),
     )
@@ -355,10 +446,10 @@ def build_live_nowcast(
     taf_spread_addition = (
         taf_guidance.spread_addition_c if taf_guidance is not None else 0.0
     )
-    unconditioned = consensus(
-        (current.corrected_max + heat.adjustment_c + taf_center_adjustment).tolist(),
+    metar_unconditioned = consensus(
+        (current.corrected_max + heat.adjustment_c).tolist(),
         weights=current.model_weight.tolist(),
-        sigma_floor=0.65 + taf_spread_addition,
+        sigma_floor=0.65,
     )
     resolution = resolved_market_range(markets)
     day_status = assess_day_status(
@@ -372,11 +463,23 @@ def build_live_nowcast(
         resolved_lower_c=resolution[0] if resolution is not None else None,
         resolved_upper_c=resolution[1] if resolution is not None else None,
     )
-    probabilities = condition_probability_range(
-        unconditioned.probability_by_bucket,
+    metar_probabilities = condition_probability_range(
+        metar_unconditioned.probability_by_bucket,
         day_status.minimum_bucket,
         day_status.maximum_bucket,
     )
+    final_unconditioned = consensus(
+        (current.corrected_max + heat.adjustment_c + taf_center_adjustment).tolist(),
+        weights=current.model_weight.tolist(),
+        sigma_floor=0.65 + taf_spread_addition,
+    )
+    probabilities = condition_probability_range(
+        final_unconditioned.probability_by_bucket,
+        day_status.minimum_bucket,
+        day_status.maximum_bucket,
+    )
+    metar_mean, metar_spread = probability_moments(metar_probabilities)
+    final_mean, final_spread = probability_moments(probabilities)
     if not d1_scored.empty:
         residual_errors = d1_scored.copy()
         residual_errors["residual_abs_error"] = (
@@ -454,4 +557,17 @@ def build_live_nowcast(
         confidence_factors=confidence_factors,
         model_weights=dict(zip(current.model.astype(str), current.model_weight.astype(float))),
         taf_guidance=taf_guidance,
+        raw_model_mean=float(current.max_temp_c.mean()),
+        raw_model_spread=float(current.max_temp_c.astype(float).std(ddof=0)),
+        metar_conditioned_probabilities=metar_probabilities,
+        metar_conditioned_mean=metar_mean,
+        metar_conditioned_spread=metar_spread,
+        final_forecast_mean=final_mean,
+        final_forecast_spread=final_spread,
+        taf_adjustment_c=float(taf_center_adjustment),
+        latest_observation_at=latest_observation_at,
+        expected_peak_at=peak_at,
+        hours_to_peak=hours_to_peak,
+        metar_pending=schedule.is_pending,
+        metar_due_at=schedule.due_at,
     )

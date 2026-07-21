@@ -65,13 +65,6 @@ class Observation(Base):
     wind_kph: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_direction: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    first_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        nullable=True,
-        index=True,
-    )
-    source: Mapped[str] = mapped_column(String(50), default="aviationweather.gov")
 
 
 class TafReport(Base):
@@ -166,6 +159,40 @@ class SignalSnapshot(Base):
     model_count: Mapped[int] = mapped_column(Integer)
 
 
+class ForecastSnapshot(Base):
+    """Immutable point forecasts for each step of the forecast ladder."""
+
+    __tablename__ = "forecast_snapshots"
+    __table_args__ = (
+        UniqueConstraint("airport", "target_date", "captured_at"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    timing: Mapped[str] = mapped_column(String(30), index=True)
+    raw_model_mean_c: Mapped[float] = mapped_column(Float)
+    bias_corrected_c: Mapped[float] = mapped_column(Float)
+    metar_conditioned_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_forecast_c: Mapped[float] = mapped_column(Float)
+    raw_spread_c: Mapped[float] = mapped_column(Float)
+    bias_corrected_spread_c: Mapped[float] = mapped_column(Float)
+    metar_conditioned_spread_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_spread_c: Mapped[float] = mapped_column(Float)
+    observed_max_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    latest_metar_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expected_peak_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    hours_to_peak: Mapped[float | None] = mapped_column(Float, nullable=True)
+    day_phase: Mapped[str] = mapped_column(String(20), index=True)
+    model_count: Mapped[int] = mapped_column(Integer)
+    taf_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    taf_conflict: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 def engine():
     if settings.database_url.startswith("sqlite:///"):
         path = ROOT / settings.database_url.removeprefix("sqlite:///")
@@ -207,20 +234,3 @@ def init_db() -> None:
                 connection.execute(
                     text("ALTER TABLE observations ADD COLUMN wind_direction FLOAT")
                 )
-            if "first_seen_at" not in observation_columns:
-                connection.execute(
-                    text("ALTER TABLE observations ADD COLUMN first_seen_at DATETIME")
-                )
-            if "source" not in observation_columns:
-                connection.execute(
-                    text(
-                        "ALTER TABLE observations ADD COLUMN source VARCHAR(50) "
-                        "DEFAULT 'aviationweather.gov'"
-                    )
-                )
-            connection.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS ix_observations_first_seen_at "
-                    "ON observations (first_seen_at)"
-                )
-            )

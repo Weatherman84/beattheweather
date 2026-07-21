@@ -34,6 +34,21 @@ class DayStatus:
     explanation: str
 
 
+@dataclass(frozen=True)
+class MetarScheduleStatus:
+    is_pending: bool
+    due_at: datetime | None
+    explanation: str
+
+
+@dataclass(frozen=True)
+class MarketModelConflict:
+    is_conflict: bool
+    bucket_label: str | None
+    market_probability: float | None
+    model_probability: float | None
+
+
 def consensus(
     values: list[float],
     biases: list[float] | None = None,
@@ -102,6 +117,45 @@ def condition_probability_range(
         fallback = minimum_bucket if minimum_bucket is not None else maximum_bucket
         return {fallback: 1.0} if fallback is not None else probabilities
     return {bucket: probability / total for bucket, probability in possible.items()}
+
+
+def metar_schedule_status(
+    *,
+    as_of: datetime,
+    latest_observation_at: datetime | None,
+    routine_minutes: list[int] | tuple[int, ...] | None,
+) -> MetarScheduleStatus:
+    """Flag the short interval in which a routine METAR is due but not yet available."""
+    minutes = sorted({int(value) % 60 for value in (routine_minutes or [])})
+    if not minutes:
+        return MetarScheduleStatus(False, None, "No routine METAR schedule is configured.")
+    now = pd.Timestamp(as_of)
+    now = now.tz_localize("UTC") if now.tzinfo is None else now.tz_convert("UTC")
+    candidates = []
+    hour = now.floor("h")
+    for hour_offset in (-1, 0, 1):
+        base = hour + pd.Timedelta(hours=hour_offset)
+        candidates.extend(base + pd.Timedelta(minutes=minute) for minute in minutes)
+    # Protection starts one minute before the nominal issue minute. It remains
+    # active until an observation carrying that timestamp arrives.
+    eligible = [candidate for candidate in candidates if candidate <= now + pd.Timedelta(minutes=1)]
+    due = max(eligible) if eligible else None
+    if due is None:
+        return MetarScheduleStatus(False, None, "No routine report is currently due.")
+    latest = None
+    if latest_observation_at is not None:
+        latest = pd.Timestamp(latest_observation_at)
+        latest = latest.tz_localize("UTC") if latest.tzinfo is None else latest.tz_convert("UTC")
+    pending = latest is None or latest < due
+    return MetarScheduleStatus(
+        pending,
+        due.to_pydatetime(),
+        (
+            "The next routine METAR is due but has not reached the official feed yet."
+            if pending
+            else "The latest scheduled METAR has arrived."
+        ),
+    )
 
 
 def assess_day_status(
@@ -282,6 +336,183 @@ def market_edges(probabilities: dict[int, float], markets: pd.DataFrame) -> pd.D
     result.loc[actionable & (result.edge >= 0.04), "signal"] = "Watch"
     result.loc[actionable & (result.edge >= 0.08), "signal"] = "Possible edge"
     return result.sort_values("edge", ascending=False)
+
+
+def detect_market_model_conflict(
+    probabilities: dict[int, float],
+    markets: pd.DataFrame,
+    *,
+    market_threshold: float = 0.98,
+    gap_threshold: float = 0.10,
+) -> MarketModelConflict:
+    """Use a near-certain market only as a safety brake, never as forecast input."""
+    if markets.empty:
+        return MarketModelConflict(False, None, None, None)
+    latest = markets.copy()
+    if "captured_at" in latest:
+        latest["captured_at"] = pd.to_datetime(latest.captured_at, utc=True)
+        latest = latest.sort_values("captured_at").drop_duplicates("market_id", keep="last")
+    if "closed" in latest and latest.closed.fillna(False).astype(bool).all():
+        return MarketModelConflict(False, None, None, None)
+    leader = latest.sort_values("yes_price", ascending=False).iloc[0]
+    market_probability = float(leader.yes_price)
+    lower = float(leader.bucket_low_c) if pd.notna(leader.bucket_low_c) else None
+    upper = float(leader.bucket_high_c) if pd.notna(leader.bucket_high_c) else None
+    model_probability = probability_for_range(probabilities, lower, upper)
+    is_conflict = (
+        market_probability >= market_threshold
+        and market_probability - model_probability >= gap_threshold
+    )
+    return MarketModelConflict(
+        is_conflict,
+        str(leader.bucket_label),
+        market_probability,
+        float(model_probability),
+    )
+
+
+def preferred_station_actuals(
+    observations: pd.DataFrame,
+    fallback_actuals: pd.DataFrame,
+    timezone_by_airport: dict[str, str],
+) -> pd.DataFrame:
+    """Prefer the relevant airport METAR maximum; use archive actuals only as fallback."""
+    frames: list[pd.DataFrame] = []
+    if not fallback_actuals.empty:
+        fallback = fallback_actuals[["airport", "target_date", "max_temp_c"]].copy()
+        fallback["target_date"] = pd.to_datetime(fallback.target_date).dt.date
+        fallback["actual_source"] = "archive fallback"
+        fallback["source_rank"] = 0
+        frames.append(fallback)
+    if not observations.empty:
+        metar = observations[["airport", "observed_at", "temp_c"]].copy()
+        metar["observed_at"] = pd.to_datetime(metar.observed_at, utc=True)
+        metar["target_date"] = metar.apply(
+            lambda row: row.observed_at.tz_convert(
+                timezone_by_airport.get(str(row.airport), "UTC")
+            ).date(),
+            axis=1,
+        )
+        metar = metar.groupby(["airport", "target_date"], as_index=False).agg(
+            max_temp_c=("temp_c", "max")
+        )
+        metar["actual_source"] = "airport METAR"
+        metar["source_rank"] = 1
+        frames.append(metar)
+    if not frames:
+        return pd.DataFrame(
+            columns=["airport", "target_date", "max_temp_c", "actual_source"]
+        )
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.sort_values("source_rank").drop_duplicates(
+        ["airport", "target_date"], keep="last"
+    )
+    return combined.drop(columns="source_rank").reset_index(drop=True)
+
+
+def _lead_bucket(timing: str, hours_to_peak: object) -> str:
+    if timing == "D-1 or earlier":
+        return "D-1"
+    if timing == "D0 morning":
+        return "D0 morning"
+    if hours_to_peak is None or pd.isna(hours_to_peak):
+        return "D0 live · peak unknown"
+    hours = float(hours_to_peak)
+    if hours > 6:
+        return "D0 live · >6 h to peak"
+    if hours > 3:
+        return "D0 live · 3–6 h to peak"
+    if hours > 1:
+        return "D0 live · 1–3 h to peak"
+    if hours >= 0:
+        return "D0 live · <1 h to peak"
+    return "D0 live · after model peak"
+
+
+def forecast_ladder_frame(
+    snapshots: pd.DataFrame,
+    actuals: pd.DataFrame,
+) -> pd.DataFrame:
+    """Score all forecast transformations without mixing their information sets."""
+    if snapshots.empty or actuals.empty:
+        return pd.DataFrame()
+    frame = snapshots.copy()
+    frame["captured_at"] = pd.to_datetime(frame.captured_at, utc=True)
+    frame["target_date"] = pd.to_datetime(frame.target_date).dt.date
+    actual = actuals[["airport", "target_date", "max_temp_c", "actual_source"]].copy()
+    actual["target_date"] = pd.to_datetime(actual.target_date).dt.date
+    merged = frame.merge(actual, on=["airport", "target_date"], how="inner")
+    if merged.empty:
+        return merged
+    merged["lead_bucket"] = merged.apply(
+        lambda row: _lead_bucket(str(row.timing), row.get("hours_to_peak")), axis=1
+    )
+    stage_columns = {
+        "Raw model mean": "raw_model_mean_c",
+        "Bias corrected": "bias_corrected_c",
+        "METAR conditioned": "metar_conditioned_c",
+        "Final incl. TAF": "final_forecast_c",
+    }
+    rows = []
+    for stage, column in stage_columns.items():
+        if column not in merged:
+            continue
+        selected = merged[merged[column].notna()].copy()
+        if selected.empty:
+            continue
+        selected["stage"] = stage
+        selected["forecast_c"] = selected[column].astype(float)
+        rows.append(selected)
+    if not rows:
+        return pd.DataFrame()
+    scored = pd.concat(rows, ignore_index=True)
+    # One independent airport-day observation per comparable information bucket.
+    scored = scored.sort_values("captured_at").drop_duplicates(
+        ["airport", "target_date", "timing", "lead_bucket", "stage"], keep="last"
+    )
+    scored["error"] = scored.forecast_c - scored.max_temp_c
+    scored["abs_error"] = scored.error.abs()
+    return scored
+
+
+def forecast_ladder_metrics(scored: pd.DataFrame) -> pd.DataFrame:
+    if scored.empty:
+        return pd.DataFrame()
+    rows = []
+    for keys, frame in scored.groupby(
+        ["airport", "timing", "lead_bucket", "stage"], dropna=False
+    ):
+        airport, timing, lead_bucket, stage = keys
+        rows.append(
+            {
+                "airport": airport,
+                "timing": timing,
+                "lead_bucket": lead_bucket,
+                "stage": stage,
+                "n_days": int(frame.target_date.nunique()),
+                "bias": float(frame.error.mean()),
+                "mae": float(frame.abs_error.mean()),
+                "rmse": float(math.sqrt((frame.error**2).mean())),
+                "exact_hit": float((frame.abs_error < 0.5).mean()),
+                "within_1c": float((frame.abs_error <= 1).mean()),
+            }
+        )
+    result = pd.DataFrame(rows)
+    raw = result[result.stage == "Raw model mean"][
+        ["airport", "timing", "lead_bucket", "mae"]
+    ].rename(columns={"mae": "raw_mae"})
+    result = result.merge(raw, on=["airport", "timing", "lead_bucket"], how="left")
+    result["mae_gain_vs_raw"] = result.raw_mae - result.mae
+    order = {
+        "Raw model mean": 0,
+        "Bias corrected": 1,
+        "METAR conditioned": 2,
+        "Final incl. TAF": 3,
+    }
+    result["stage_order"] = result.stage.map(order)
+    return result.sort_values(
+        ["airport", "timing", "lead_bucket", "stage_order"]
+    ).drop(columns="stage_order")
 
 
 def resolved_market_outcomes(markets: pd.DataFrame) -> pd.DataFrame:

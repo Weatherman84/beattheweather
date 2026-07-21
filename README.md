@@ -255,28 +255,42 @@ TAF-Archiv wächst ab dem ersten v9.2-Lauf automatisch.
 
 ## Neu in Version 9.3
 
-- Ein neuer **Live METAR monitor** fragt die offizielle Aviation-Weather-API automatisch
-  einmal pro Minute ab, solange das Dashboard im Browser geöffnet ist. Es ist kein manueller
-  Refresh mehr nötig.
-- Nur der ausgewählte Flughafen wird abgefragt. Ein minutenweiser Komplettabruf aller
-  Wettermodelle, TAFs und Märkte wird dadurch vermieden.
-- Sobald ein neuer Bericht erkannt wird, speichert Weatherman ihn und berechnet den gesamten
-  METAR-Nowcast sowie die Temperaturbereiche automatisch neu.
-- Das Live-Modul zeigt Temperatur, Beobachtungszeit, Alter, letzten API-Check, Roh-METAR und
-  den Zeitpunkt, zu dem Weatherman den Bericht erstmals gesehen hat. Dadurch wird die echte
-  Verteilungslatenz künftig messbar.
-- Die Routinezeiten sind flughafenspezifisch hinterlegt: Madrid und Warschau `:00/:30`,
-  Amsterdam `:25/:55`, Ankara `:20/:50`.
-- Eine Minute vor dem nächsten Routinebericht beginnt ein **METAR pending**-Schutzfenster.
-  Ist der Bericht fällig, aber noch nicht eingetroffen, werden Live-Edge-Signale gesperrt.
-  Der vorherige METAR bleibt sichtbar, darf aber nicht als aktuelle Handelsgrundlage dienen.
-- Die Quelle selbst kann einen Bericht erst ausliefern, nachdem er am Flughafen erstellt und
-  übermittelt wurde. Auto-Refresh entfernt die zusätzliche Webseiten- und Bedienverzögerung,
-  kann aber keine noch nicht veröffentlichte Beobachtung vorwegnehmen.
+- Solange das Dashboard geöffnet ist, prüft ein leichter Live-Poller die offizielle
+  Aviation-Weather-Quelle automatisch alle 60 Sekunden auf einen neuen METAR. TAFs werden in
+  diesem Live-Modus alle zehn Minuten geprüft.
+- Ein neuer Bericht führt sofort zu einer Neuberechnung des Nowcasts; ein manueller Refresh
+  oder App-Reboot ist nicht erforderlich.
+- Das Dashboard zeigt den letzten API-Check und den ersten Erkennungszeitpunkt des neuesten
+  METAR an.
+- Flughafenspezifische Routinezeiten aktivieren kurz vor einem fälligen Bericht den Schutz
+  **METAR pending – do not trade**. Bis der neue Bericht tatsächlich vorliegt, werden neue
+  Edge-Signale gesperrt.
 
-Nach dem Upload von Version 9.3 nur **2 - Collect current forecasts** einmal ausführen und im
-Dashboard **Rerun** wählen. Ein Backfill ist nicht erforderlich. Für den minutengenauen
-Live-Modus muss der Dashboard-Tab geöffnet bleiben.
+## Korrektur und Messung in Version 9.3.1
+
+- Der TAF wirkt nur noch über einen einzigen Temperaturpfad und kann den finalen Mittelpunkt
+  insgesamt höchstens um ±0,25 °C verschieben. Raw Model Mean, Bias Corrected und METAR
+  Conditioned bleiben davon unverändert.
+- Ein TAF-TX gilt ausschließlich für sein exaktes Zieldatum. Ist der angegebene TX-Zeitpunkt
+  vorbei und die METAR-Reihe fällt, wird sein Temperatureinfluss für diesen Tag auf null
+  gesetzt. Der archivierte TX bleibt für die spätere Genauigkeitsmessung erhalten.
+- Die Peak-Lock-Logik verankert künftige stündliche Modellpfade am aktuellen METAR und
+  vergleicht sie mit dem bereits gemessenen Tagesmaximum. Ein falsches Abendniveau des Modells
+  kann das Aufheizfenster dadurch nicht mehr künstlich offen halten.
+- Bei einer nahezu sicheren Marktmeinung von mindestens 98 %, die dem Weatherman-Modell um
+  mindestens zehn Prozentpunkte widerspricht, erscheint **Market–model conflict**. Der Markt
+  verändert die Wetterprognose nicht, blockiert aber vorsorglich neue Edge-Signale.
+- Jeder Sammellauf speichert ab jetzt vier getrennte Forecast-Stufen mit identischem
+  Zeitstempel: **Raw model mean**, **Bias corrected**, **METAR conditioned** und **Final incl.
+  TAF**.
+- Der Accuracy-Reiter misst Bias, MAE, RMSE, exakte Bucket-Treffer und Treffer innerhalb
+  ±1 °C für jede Stufe getrennt. Live-Ergebnisse werden zusätzlich nach Stunden bis zum
+  modellierten Peak aufgeteilt. Als Ist-Wert wird bevorzugt das Tagesmaximum der relevanten
+  Flughafen-METARs verwendet; Archivdaten dienen nur als Fallback.
+
+Nach dem Upload von Version 9.3.1 reicht **2 - Collect current forecasts** und einmal
+**Rerun**. Die neue Forecast-Ladder beginnt bewusst erst mit diesem Lauf; ältere Zwischenstufen
+werden nicht mit später bekannten Daten rekonstruiert. Ein Backfill ist nicht erforderlich.
 
 ## Wichtig zum Dashboard
 
