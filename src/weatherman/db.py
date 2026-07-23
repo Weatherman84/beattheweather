@@ -35,6 +35,16 @@ class Forecast(Base):
     max_temp_c: Mapped[float] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(40), default="forecast")
     horizon: Mapped[str] = mapped_column(String(20), default="Live", index=True)
+    model_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    provenance_status: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
 
 class HourlyForecast(Base):
@@ -64,6 +74,8 @@ class Observation(Base):
     dewpoint_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_kph: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_direction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cloud_cover: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cloud_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
@@ -134,6 +146,7 @@ class MarketSnapshot(Base):
     closed: Mapped[bool] = mapped_column(Boolean, default=False)
     yes_won: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     resolution_source: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    price_kind: Mapped[str] = mapped_column(String(50), default="live")
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
@@ -172,10 +185,16 @@ class ForecastSnapshot(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     timing: Mapped[str] = mapped_column(String(30), index=True)
     raw_model_mean_c: Mapped[float] = mapped_column(Float)
+    weighted_raw_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bias_corrected_equal_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     bias_corrected_c: Mapped[float] = mapped_column(Float)
     metar_conditioned_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_forecast_c: Mapped[float] = mapped_column(Float)
     raw_spread_c: Mapped[float] = mapped_column(Float)
+    weighted_raw_spread_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bias_corrected_equal_spread_c: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     bias_corrected_spread_c: Mapped[float] = mapped_column(Float)
     metar_conditioned_spread_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_spread_c: Mapped[float] = mapped_column(Float)
@@ -191,6 +210,42 @@ class ForecastSnapshot(Base):
     model_count: Mapped[int] = mapped_column(Integer)
     taf_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     taf_conflict: Mapped[bool] = mapped_column(Boolean, default=False)
+    temp_anchor_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    dryness_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    cloud_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    heating_rate_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    recent_error_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    radiation_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    wind_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    run_trend_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    live_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    features_json: Mapped[str] = mapped_column(Text, default="{}")
+    peak_lock_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class StrategySnapshot(Base):
+    """One hypothetical consensus-bucket entry per strategy and information set."""
+
+    __tablename__ = "strategy_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "airport", "target_date", "captured_at", "timing", "strategy"
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    timing: Mapped[str] = mapped_column(String(30), index=True)
+    strategy: Mapped[str] = mapped_column(String(60), index=True)
+    market_id: Mapped[str] = mapped_column(String(100), index=True)
+    bucket_label: Mapped[str] = mapped_column(String(80))
+    model_bucket_c: Mapped[int] = mapped_column(Integer)
+    model_probability: Mapped[float] = mapped_column(Float)
+    market_probability: Mapped[float] = mapped_column(Float)
+    buy_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_basis: Mapped[str] = mapped_column(String(40), default="live best ask")
+    day_phase: Mapped[str] = mapped_column(String(20))
 
 
 def engine():
@@ -234,3 +289,62 @@ def init_db() -> None:
                 connection.execute(
                     text("ALTER TABLE observations ADD COLUMN wind_direction FLOAT")
                 )
+            if "cloud_cover" not in observation_columns:
+                connection.execute(
+                    text("ALTER TABLE observations ADD COLUMN cloud_cover FLOAT")
+                )
+            if "cloud_base_ft" not in observation_columns:
+                connection.execute(
+                    text("ALTER TABLE observations ADD COLUMN cloud_base_ft FLOAT")
+                )
+
+            def add_columns(table: str, definitions: dict[str, str]) -> None:
+                existing = {
+                    row[1]
+                    for row in connection.execute(text(f"PRAGMA table_info({table})"))
+                }
+                for name, definition in definitions.items():
+                    if name not in existing:
+                        connection.execute(
+                            text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+                        )
+
+            add_columns(
+                "forecasts",
+                {
+                    "model_run_at": "DATETIME",
+                    "available_at": "DATETIME",
+                    "fetched_at": "DATETIME",
+                    "provenance_status": "VARCHAR(120)",
+                },
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_forecasts_model_run_at "
+                    "ON forecasts (model_run_at)"
+                )
+            )
+            add_columns(
+                "forecast_snapshots",
+                {
+                    "weighted_raw_c": "FLOAT",
+                    "bias_corrected_equal_c": "FLOAT",
+                    "weighted_raw_spread_c": "FLOAT",
+                    "bias_corrected_equal_spread_c": "FLOAT",
+                    "temp_anchor_adjustment_c": "FLOAT DEFAULT 0",
+                    "dryness_adjustment_c": "FLOAT DEFAULT 0",
+                    "cloud_adjustment_c": "FLOAT DEFAULT 0",
+                    "heating_rate_adjustment_c": "FLOAT DEFAULT 0",
+                    "recent_error_adjustment_c": "FLOAT DEFAULT 0",
+                    "radiation_adjustment_c": "FLOAT DEFAULT 0",
+                    "wind_adjustment_c": "FLOAT DEFAULT 0",
+                    "run_trend_adjustment_c": "FLOAT DEFAULT 0",
+                    "live_adjustment_c": "FLOAT DEFAULT 0",
+                    "features_json": "TEXT DEFAULT '{}'",
+                    "peak_lock_json": "TEXT DEFAULT '{}'",
+                },
+            )
+            add_columns(
+                "market_snapshots",
+                {"price_kind": "VARCHAR(50) DEFAULT 'live'"},
+            )

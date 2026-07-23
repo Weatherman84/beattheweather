@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: weatherman-trading
+Version: 9.4.0
+Summary: Model consensus, nowcast and backtesting for daily maximum-temperature markets
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: httpx[socks]<1,>=0.27
+Requires-Dist: pandas<3,>=2.2
+Requires-Dist: plotly<7,>=5.22
+Requires-Dist: python-dotenv<2,>=1.0
+Requires-Dist: streamlit<2,>=1.59
+Requires-Dist: sqlalchemy<3,>=2.0
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8; extra == "dev"
+Requires-Dist: ruff<1,>=0.5; extra == "dev"
+
 # Weatherman – nur über GitHub starten
 
 Du musst **keine Befehle eingeben**, nichts programmieren und nichts auf deinem Computer

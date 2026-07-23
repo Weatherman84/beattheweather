@@ -19,6 +19,7 @@ PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 TAF_URL = "https://aviationweather.gov/api/data/taf"
 POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com"
+POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
 
 MONTH_SLUGS = (
     "",
@@ -48,7 +49,7 @@ def _get(
     with httpx.Client(
         timeout=settings.timeout if timeout is None else timeout,
         follow_redirects=True,
-        headers={"User-Agent": "Weatherman/9.3.1 temperature-market research"},
+        headers={"User-Agent": "Weatherman/9.4 temperature-market research"},
     ) as client:
         for attempt in range(attempts):
             try:
@@ -90,15 +91,30 @@ def open_meteo_forecast(airport: dict, model: str, days: int = 3) -> list[dict]:
         },
     )
     daily = payload.get("daily", {})
-    run_at = datetime.now(timezone.utc)
+    fetched_at = datetime.now(timezone.utc)
+    # The regular Forecast response does not currently identify the underlying
+    # NWP initialization. Preserve that fact instead of labelling fetch time as
+    # the model run time.
+    model_run_at = _api_datetime(payload.get("modelrun_utc"))
+    available_at = _api_datetime(payload.get("modelrun_updatetime_utc"))
     return [
         {
             "model": model,
-            "run_at": run_at,
+            "run_at": fetched_at,
             "target_date": date.fromisoformat(day),
             "max_temp_c": float(value),
             "source": "open-meteo",
-            "horizon": _forecast_horizon(run_at, date.fromisoformat(day), airport["timezone"]),
+            "horizon": _forecast_horizon(
+                fetched_at, date.fromisoformat(day), airport["timezone"]
+            ),
+            "model_run_at": model_run_at,
+            "available_at": available_at,
+            "fetched_at": fetched_at,
+            "provenance_status": (
+                "Model run supplied by provider"
+                if model_run_at is not None
+                else "Model run not exposed in forecast response"
+            ),
         }
         for day, value in zip(daily.get("time", []), daily.get("temperature_2m_max", []))
         if value is not None
@@ -194,17 +210,35 @@ def meteoblue_forecast(airport: dict) -> list[dict]:
     )
     payload = _get(url)
     daily = payload.get("data_day", {})
+    metadata = payload.get("metadata") or {}
     times = daily.get("time", [])
     temps = daily.get("temperature_max", [])
-    now = datetime.now(timezone.utc)
+    fetched_at = datetime.now(timezone.utc)
+    model_run_at = _api_datetime(
+        payload.get("modelrun_utc") or metadata.get("modelrun_utc")
+    )
+    available_at = _api_datetime(
+        payload.get("modelrun_updatetime_utc")
+        or metadata.get("modelrun_updatetime_utc")
+    )
     return [
         {
             "model": "meteoblue",
-            "run_at": now,
+            "run_at": fetched_at,
             "target_date": date.fromisoformat(day[:10]),
             "max_temp_c": float(value),
             "source": "meteoblue",
-            "horizon": _forecast_horizon(now, date.fromisoformat(day[:10]), airport["timezone"]),
+            "horizon": _forecast_horizon(
+                fetched_at, date.fromisoformat(day[:10]), airport["timezone"]
+            ),
+            "model_run_at": model_run_at,
+            "available_at": available_at,
+            "fetched_at": fetched_at,
+            "provenance_status": (
+                "meteoblue mLM model run"
+                if model_run_at is not None
+                else "meteoblue run metadata unavailable"
+            ),
         }
         for day, value in zip(times, temps)
         if value is not None
@@ -296,6 +330,10 @@ def previous_run_d1(airport: dict, model: str, start: date, end: date) -> list[d
                 "max_temp_c": max_temp,
                 "source": "previous-runs",
                 "horizon": "D-1",
+                "model_run_at": run_local.astimezone(timezone.utc) - timedelta(days=1),
+                "available_at": None,
+                "fetched_at": datetime.now(timezone.utc),
+                "provenance_status": "Open-Meteo Previous Runs fixed D-1",
             }
         )
     return rows
@@ -331,6 +369,7 @@ def recent_metars(
         except (TypeError, ValueError):
             # Variable winds are commonly reported as VRB and have no single direction.
             wind_direction = None
+        cloud_cover, cloud_base_ft = _metar_clouds(row, str(row.get("rawOb") or ""))
         rows.append(
             {
                 "observed_at": observed_at.astimezone(timezone.utc),
@@ -338,10 +377,42 @@ def recent_metars(
                 "dewpoint_c": float(row["dewp"]) if row.get("dewp") is not None else None,
                 "wind_kph": (float(row["wspd"]) * 1.852 if row.get("wspd") is not None else None),
                 "wind_direction": wind_direction,
+                "cloud_cover": cloud_cover,
+                "cloud_base_ft": cloud_base_ft,
                 "raw": row.get("rawOb"),
             }
         )
     return sorted(rows, key=lambda item: item["observed_at"])
+
+
+def _metar_clouds(row: dict, raw: str) -> tuple[float | None, float | None]:
+    """Convert decoded/raw METAR layers to a conservative total-cover proxy."""
+    cover_map = {"SKC": 0.0, "CLR": 0.0, "NSC": 0.0, "NCD": 0.0,
+                 "FEW": 20.0, "SCT": 45.0, "BKN": 75.0, "OVC": 100.0}
+    covers: list[float] = []
+    bases: list[float] = []
+    for layer in row.get("clouds") or []:
+        token = str(layer.get("cover") or "").upper()
+        if token in cover_map:
+            covers.append(cover_map[token])
+        base = layer.get("base")
+        try:
+            if base is not None:
+                bases.append(float(base))
+        except (TypeError, ValueError):
+            pass
+    for token, height in re.findall(
+        r"\b(SKC|CLR|NSC|NCD|FEW|SCT|BKN|OVC)(\d{3})?\b", raw.upper()
+    ):
+        covers.append(cover_map[token])
+        if height:
+            bases.append(float(height) * 100)
+    if "CAVOK" in raw.upper():
+        covers.append(0.0)
+    return (
+        max(covers) if covers else None,
+        min(bases) if bases else None,
+    )
 
 
 def _api_datetime(value: Any) -> datetime | None:
@@ -567,7 +638,104 @@ def polymarket_prices(airport: dict, target: date) -> list[dict]:
                 "closed": closed,
                 "yes_won": yes_won,
                 "resolution_source": event.get("resolutionSource"),
+                "price_kind": "live",
                 "captured_at": captured_at,
             }
         )
+    return rows
+
+
+def polymarket_historical_prices(
+    airport: dict,
+    target: date,
+    sample_times: list[datetime],
+) -> list[dict]:
+    """Sample past YES trade prices near predefined decision times.
+
+    Historical CLOB data does not reproduce the old order book or executable ask.
+    Rows are therefore explicitly labelled as historical trade-price samples.
+    """
+    if not sample_times:
+        return []
+    event_slug = polymarket_event_slug(airport, target)
+    if not event_slug:
+        return []
+    try:
+        event = _get(f"{POLYMARKET_GAMMA_URL}/events/slug/{event_slug}")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return []
+        raise
+    if not isinstance(event, dict):
+        return []
+
+    start_ts = int(min(sample_times).timestamp()) - 4 * 3600
+    end_ts = int(max(sample_times).timestamp()) + 4 * 3600
+    rows: list[dict] = []
+    for market in event.get("markets", []):
+        outcomes = _json_array(market.get("outcomes"))
+        tokens = _json_array(market.get("clobTokenIds"))
+        try:
+            yes_index = [str(outcome).casefold() for outcome in outcomes].index("yes")
+            token_id = str(tokens[yes_index])
+        except (ValueError, IndexError, TypeError):
+            continue
+        label = str(market.get("groupItemTitle") or market.get("question") or "")
+        low, high = _temperature_range(label)
+        if low is None and high is None:
+            continue
+        history = _get(
+            f"{POLYMARKET_CLOB_URL}/prices-history",
+            {
+                "market": token_id,
+                "startTs": start_ts,
+                "endTs": end_ts,
+                "fidelity": 30,
+            },
+            attempts=3,
+        )
+        points = history.get("history", []) if isinstance(history, dict) else []
+        usable = [
+            (datetime.fromtimestamp(float(point["t"]), tz=timezone.utc), float(point["p"]))
+            for point in points
+            if point.get("t") is not None and point.get("p") is not None
+        ]
+        if not usable:
+            continue
+        closed = bool(market.get("closed"))
+        latest_prices = _json_array(market.get("outcomePrices"))
+        try:
+            final_yes = float(latest_prices[yes_index])
+        except (IndexError, TypeError, ValueError):
+            final_yes = 0.0
+        for sample_at in sample_times:
+            observed_at, price = min(
+                usable, key=lambda point: abs(point[0] - sample_at)
+            )
+            if abs((observed_at - sample_at).total_seconds()) > 4 * 3600:
+                continue
+            rows.append(
+                {
+                    "target_date": target,
+                    "event_slug": event_slug,
+                    "market_id": str(market["id"]),
+                    "market_slug": str(market.get("slug") or ""),
+                    "token_id": token_id,
+                    "bucket_label": label,
+                    "bucket_low_c": low,
+                    "bucket_high_c": high,
+                    "yes_price": price,
+                    "best_bid": None,
+                    "best_ask": None,
+                    "spread": None,
+                    "volume": _number(market.get("volumeNum") or market.get("volume")),
+                    "liquidity": None,
+                    "closed": closed,
+                    "yes_won": final_yes >= 0.999 if closed else None,
+                    "resolution_source": event.get("resolutionSource"),
+                    "price_kind": "historical trade-price sample",
+                    "captured_at": sample_at,
+                }
+            )
+        time.sleep(0.12)
     return rows

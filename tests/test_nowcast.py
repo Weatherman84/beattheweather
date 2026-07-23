@@ -222,3 +222,94 @@ def test_evening_model_path_is_anchored_to_metar_and_observed_maximum():
     assert result.remaining_rise_c == 0
     assert result.day_status.label == "Peak locked"
     assert result.probabilities == {37: 1.0}
+
+
+def test_live_conditioning_records_all_observed_weather_contributions():
+    as_of = datetime(2026, 7, 22, 14, tzinfo=ZoneInfo("Europe/Madrid"))
+    now_utc = as_of.astimezone(timezone.utc)
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "target_date": as_of.date(),
+                "max_temp_c": maximum,
+                "source": "open-meteo",
+                "horizon": "Live",
+            }
+            for model, maximum in [("ECMWF", 36.0), ("GFS", 37.0)]
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "observed_at": now_utc - timedelta(hours=1),
+                "temp_c": 31.0,
+                "dewpoint_c": 7.0,
+                "cloud_cover": 20.0,
+                "wind_kph": 15.0,
+                "wind_direction": 180.0,
+            },
+            {
+                "airport": "LEMD",
+                "observed_at": now_utc,
+                "temp_c": 33.0,
+                "dewpoint_c": 5.0,
+                "cloud_cover": 0.0,
+                "wind_kph": 18.0,
+                "wind_direction": 180.0,
+            },
+        ]
+    )
+    hourly = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "valid_at": valid_at,
+                "temp_c": temp,
+                "dewpoint_c": 15.0,
+                "cloud_cover": 70.0,
+                "temp_850hpa_c": 18.0,
+                "radiation_wm2": 600.0,
+                "wind_kph": 12.0,
+                "wind_direction": 180.0,
+            }
+            for model in ["ECMWF", "GFS"]
+            for valid_at, temp in [
+                (now_utc - timedelta(hours=1), 31.0),
+                (now_utc, 32.0),
+                (now_utc + timedelta(hours=1), 34.0),
+            ]
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=observations,
+        hourly=hourly,
+        markets=pd.DataFrame(),
+        timezone_name="Europe/Madrid",
+        target=as_of.date(),
+        as_of=as_of,
+        wind_profile={"warm_sectors": [[120, 230]], "cool_sectors": [[280, 60]]},
+    )
+    assert result is not None
+    assert result.adjustment_contributions["temperature_anchor"] > 0
+    assert result.adjustment_contributions["dryness"] > 0
+    assert result.adjustment_contributions["cloud"] > 0
+    assert result.adjustment_contributions["heating_rate"] > 0
+    assert result.adjustment_contributions["radiation"] > 0
+    assert result.adjustment_contributions["wind"] > 0
+    assert result.adjustment_contributions["total"] > 0
+    assert set(result.stage_probabilities) == {
+        "Raw model mean",
+        "Weighted raw ensemble",
+        "Bias corrected · equal weight",
+        "Bias corrected · performance weighted",
+        "METAR conditioned",
+        "Final incl. TAF",
+    }

@@ -20,12 +20,16 @@ from weatherman.analytics import (
     forecast_ladder_frame,
     forecast_ladder_metrics,
     forecast_scorecards,
+    historical_d1_ladder,
+    historical_price_strategy_simulation,
+    live_factor_diagnostics,
     market_edges,
     model_metrics,
     preferred_station_actuals,
     score_frame,
     settled_probability_comparison,
     settled_signal_performance,
+    settled_strategy_performance,
     trading_airport_scorecards,
 )
 from weatherman.db import (
@@ -37,6 +41,7 @@ from weatherman.db import (
     Observation,
     Session,
     SignalSnapshot,
+    StrategySnapshot,
     TafReport,
     init_db,
     refresh_database_connections,
@@ -221,6 +226,7 @@ with Session() as session:
     )
     all_market_snapshots = pd.read_sql(select(MarketSnapshot), session.bind)
     all_signal_snapshots = pd.read_sql(select(SignalSnapshot), session.bind)
+    all_strategy_snapshots = pd.read_sql(select(StrategySnapshot), session.bind)
     all_forecast_snapshots = pd.read_sql(select(ForecastSnapshot), session.bind)
     all_tafs = pd.read_sql(select(TafReport), session.bind)
 
@@ -249,6 +255,11 @@ signal_snapshots = (
     if not all_signal_snapshots.empty
     else all_signal_snapshots
 )
+strategy_snapshots = (
+    all_strategy_snapshots[all_strategy_snapshots.airport == airport].copy()
+    if not all_strategy_snapshots.empty
+    else all_strategy_snapshots
+)
 tafs = all_tafs[all_tafs.airport == airport].copy() if not all_tafs.empty else all_tafs
 
 target_markets = (
@@ -274,16 +285,31 @@ probability_comparison = settled_probability_comparison(
 trade_scorecards = trading_airport_scorecards(
     settled_performance, probability_comparison
 )
-airport_forecast_scorecards = cached_forecast_scorecards(
-    all_forecasts, all_actuals
-)
 station_actuals = preferred_station_actuals(
     all_observations,
     all_actuals,
     {code: item["timezone"] for code, item in catalog.items()},
 )
+airport_station_actuals = station_actuals[
+    station_actuals.airport == airport
+].copy()
+d1_scored = score_frame(d1_forecasts, airport_station_actuals)
+airport_forecast_scorecards = cached_forecast_scorecards(
+    all_forecasts, station_actuals
+)
 ladder_scored = forecast_ladder_frame(all_forecast_snapshots, station_actuals)
 ladder_metrics = forecast_ladder_metrics(ladder_scored)
+historical_ladder = historical_d1_ladder(all_forecasts, station_actuals)
+historical_ladder_metrics = forecast_ladder_metrics(historical_ladder)
+factor_diagnostics = live_factor_diagnostics(
+    all_forecast_snapshots, station_actuals
+)
+strategy_performance = settled_strategy_performance(
+    all_strategy_snapshots, all_market_snapshots
+)
+historical_price_performance = historical_price_strategy_simulation(
+    historical_ladder, all_market_snapshots
+)
 
 st.caption(
     f"Last data update · Forecast: {last_update(forecasts, 'run_at', timezone_name)} · "
@@ -356,30 +382,38 @@ with tab_live:
                 "has not reached the official feed. Edge signals are temporarily blocked."
             )
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Raw model mean", f"{live_nowcast.raw_model_mean:.1f} °C")
-        c2.metric("D-1 bias-corrected", f"{corrected.mean:.1f} °C")
+        c2.metric("Weighted raw ensemble", f"{live_nowcast.weighted_raw_mean:.1f} °C")
         c3.metric(
+            "Bias corrected · equal weight",
+            f"{live_nowcast.bias_corrected_equal_mean:.1f} °C",
+        )
+        c4, c5, c6 = st.columns(3)
+        c4.metric("Bias corrected · weighted", f"{corrected.mean:.1f} °C")
+        c5.metric(
             "METAR-conditioned",
             f"{live_nowcast.metar_conditioned_mean:.1f} °C",
         )
-        c4.metric(
+        c6.metric(
             "Final incl. TAF",
             f"{live_mean:.1f} °C",
             f"TAF {live_nowcast.taf_adjustment_c:+.2f} °C",
         )
-        c5, c6, c7, c8, c9 = st.columns(5)
-        c5.metric("Model spread", f"{corrected.spread:.1f} °C")
-        c6.metric(
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Bias-weighted spread", f"{corrected.spread:.1f} °C")
+        s2.metric(
             "METAR max so far",
             f"{observed_max:.0f} °C" if observed_max is not None else "Not available",
         )
-        c7.metric(
+        s3.metric(
             "Model warming left",
             f"≤ {remaining_rise:.1f} °C" if remaining_rise is not None else "Not available",
         )
-        c8.metric("Forecast confidence", f"{live_nowcast.forecast_confidence}/100")
-        c9.metric("Day status", day_status.label)
+        s4, s5 = st.columns(2)
+        s4.metric("Forecast confidence", f"{live_nowcast.forecast_confidence}/100")
+        s5.metric("Day status", day_status.label)
+        st.caption(day_status.explanation)
 
         taf = live_nowcast.taf_guidance
         if taf is None:
@@ -393,7 +427,7 @@ with tab_live:
             )
             title = f"TAF guidance · {taf.agreement}"
             with st.expander(title, expanded=True):
-                t1, t2, t3, t4 = st.columns(4)
+                t1, t2, t3 = st.columns(3)
                 t1.metric(
                     "TAF TX",
                     f"{taf.max_temp_c:.0f} °C" if taf.max_temp_c is not None else "Not issued",
@@ -412,7 +446,13 @@ with tab_live:
                     if taf.precipitation_risk
                     else taf.cloud_risk
                 )
-                t4.metric("Peak conditions", risk_label)
+                p1, p2 = st.columns(2)
+                p1.metric("Peak conditions", risk_label)
+                p2.metric(
+                    "TAF center effect",
+                    f"{taf.center_adjustment_c:+.2f} °C",
+                    f"spread +{taf.spread_addition_c:.2f} °C",
+                )
                 for signal in taf.signals:
                     st.write(f"• {signal}")
                 wind_bits = []
@@ -438,6 +478,39 @@ with tab_live:
                     "TAF temperature path and is capped at ±0.25 °C; the raw, bias-corrected "
                     "and METAR-conditioned stages above remain unchanged."
                 )
+
+        with st.expander("How the live correction was built", expanded=True):
+            contributions = pd.DataFrame(
+                [
+                    {
+                        "Factor": name.replace("_", " ").title(),
+                        "Center contribution": value,
+                    }
+                    for name, value in live_nowcast.adjustment_contributions.items()
+                    if name != "total"
+                ]
+            )
+            contributions["Center contribution"] = contributions[
+                "Center contribution"
+            ].map(lambda value: f"{value:+.2f} °C")
+            st.dataframe(contributions, hide_index=True, width="stretch")
+            st.caption(
+                f"Bias corrected {corrected.mean:.2f} °C → live factors "
+                f"{live_nowcast.adjustment_contributions['total']:+.2f} °C → "
+                f"METAR conditioned {live_nowcast.metar_conditioned_mean:.2f} °C → "
+                f"TAF {live_nowcast.taf_adjustment_c:+.2f} °C → final "
+                f"{live_nowcast.final_forecast_mean:.2f} °C. TAF remains a separate stage."
+            )
+            features = pd.DataFrame(
+                [
+                    {
+                        "Stored feature": name.replace("_", " ").title(),
+                        "Value": "—" if value is None else f"{value:.2f}",
+                    }
+                    for name, value in live_nowcast.live_features.items()
+                ]
+            )
+            st.dataframe(features, hide_index=True, width="stretch")
 
         with st.expander("Dynamic model weights and confidence"):
             weights = current[["model", "model_weight", "d1_bias"]].copy()
@@ -466,6 +539,39 @@ with tab_live:
             )
 
         st.subheader("Model maximum forecasts")
+        provenance = current[
+            [
+                "model",
+                "model_run_at",
+                "available_at",
+                "fetched_at",
+                "provenance_status",
+            ]
+        ].copy()
+        for column in ["model_run_at", "available_at", "fetched_at"]:
+            provenance[column] = pd.to_datetime(
+                provenance[column], utc=True, errors="coerce"
+            ).dt.tz_convert(timezone_name)
+            provenance[column] = provenance[column].map(
+                lambda value: value.strftime("%d.%m. %H:%M")
+                if pd.notna(value)
+                else "Not supplied"
+            )
+        provenance = provenance.rename(
+            columns={
+                "model": "Model",
+                "model_run_at": "Model initialization",
+                "available_at": "Provider availability",
+                "fetched_at": "Fetched by Weatherman",
+                "provenance_status": "Provenance",
+            }
+        )
+        st.dataframe(provenance, hide_index=True, width="stretch")
+        st.caption(
+            "Fetched time is not relabelled as model initialization. Meteoblue supplies mLM "
+            "run metadata when available; Open-Meteo's regular forecast response may not expose "
+            "the underlying NWP run, which is shown explicitly."
+        )
         chart = current[["model", "max_temp_c", "corrected_max"]].melt(
             id_vars="model", var_name="forecast", value_name="temperature_c"
         )
@@ -600,7 +706,10 @@ with tab_market:
                         "the forecast, but new edge signals are blocked as a safety warning."
                     )
                 m1.metric("Status", status_label)
-                m2.metric("Leading / winning range", top_market.bucket_label)
+                m2.metric(
+                    "Official winning range" if market_closed else "Market-leading range",
+                    top_market.bucket_label,
+                )
                 m3.metric("Market probability", f"{top_market.yes_price:.1%}")
                 if market_closed or bool(day_status and day_status.is_locked):
                     st.success(message)
@@ -720,9 +829,10 @@ with tab_market:
                     "the official market source remains decisive."
                 )
             st.caption(
-                "The displayed market value is an implied probability. Buying YES normally "
-                "requires the ask price, which can be higher. Missing asks use the displayed "
-                "market value only as an approximation."
+                "Market-leading range means the open bucket with the highest displayed YES "
+                "price; it becomes the winning range only after official resolution. Market "
+                "probability is that displayed YES price. Buying YES normally requires the ask, "
+                "which can be higher. Missing asks use the displayed value only as an approximation."
             )
 
 
@@ -863,6 +973,90 @@ with tab_performance:
             "limits. Multiple qualifying temperature ranges are evaluated separately."
         )
 
+    st.divider()
+    st.subheader("Always-consensus strategy benchmarks")
+    st.caption(
+        "Each strategy buys exactly one bucket: the bucket with that forecast stage's highest "
+        "probability. No minimum edge is required. Results are separated by information timing, "
+        "and every entry uses a hypothetical $1 stake."
+    )
+    if strategy_performance.empty:
+        tracked = len(all_strategy_snapshots)
+        st.info(
+            f"{tracked} consensus-strategy entries are journaled. Results appear after their "
+            "markets resolve; tracking begins with v9.4."
+        )
+    else:
+        strategy_summary = strategy_performance.groupby(
+            ["strategy", "timing"], as_index=False
+        ).agg(
+            entries=("market_id", "count"),
+            hit_rate=("won", "mean"),
+            pnl=("pnl", "sum"),
+            average_buy_price=("buy_price", "mean"),
+        )
+        strategy_summary["roi"] = strategy_summary.pnl / strategy_summary.entries
+        for column in ["hit_rate", "roi", "average_buy_price"]:
+            strategy_summary[column] = strategy_summary[column].map(
+                lambda value: f"{value:.1%}"
+            )
+        strategy_summary["pnl"] = strategy_summary.pnl.map(
+            lambda value: f"${value:+.2f}"
+        )
+        strategy_summary = strategy_summary.rename(
+            columns={
+                "strategy": "Strategy",
+                "timing": "Information timing",
+                "entries": "Settled days",
+                "hit_rate": "Hit rate",
+                "pnl": "P/L",
+                "average_buy_price": "Average buy price",
+                "roi": "Return",
+            }
+        )
+        st.dataframe(strategy_summary, hide_index=True, width="stretch")
+
+    st.subheader("Historical price simulation")
+    if historical_price_performance.empty:
+        st.info(
+            "Run workflow 3 - Backfill historical market prices. The simulation then combines "
+            "leakage-safe reconstructed D-1 forecasts with the nearest sampled historical YES "
+            "trade price."
+        )
+    else:
+        historical_summary = historical_price_performance.groupby(
+            "strategy", as_index=False
+        ).agg(
+            days=("target_date", "nunique"),
+            hit_rate=("won", "mean"),
+            pnl=("pnl", "sum"),
+            average_price=("buy_price", "mean"),
+        )
+        historical_summary["return"] = historical_summary.pnl / historical_summary.days
+        for column in ["hit_rate", "average_price", "return"]:
+            historical_summary[column] = historical_summary[column].map(
+                lambda value: f"{value:.1%}"
+            )
+        historical_summary["pnl"] = historical_summary.pnl.map(
+            lambda value: f"${value:+.2f}"
+        )
+        historical_summary = historical_summary.rename(
+            columns={
+                "strategy": "D-1 strategy",
+                "days": "Simulated days",
+                "hit_rate": "Hit rate",
+                "pnl": "P/L",
+                "average_price": "Average sampled price",
+                "return": "Return",
+            }
+        )
+        st.dataframe(historical_summary, hide_index=True, width="stretch")
+        st.warning(
+            "Historical CLOB prices are observed trade-price samples, not reconstructed old "
+            "best asks or order books. Forward v9.4 tracking is the higher-quality executable-price "
+            "benchmark."
+        )
+
 
 with tab_airports:
     st.subheader("Airport and model scorecards")
@@ -938,9 +1132,24 @@ with tab_airports:
         st.dataframe(combined, hide_index=True, width="stretch")
 
         selected_models = window_scores[window_scores.airport == airport].copy()
+        expected_models = pd.DataFrame(
+            {"model": catalog[airport]["models"] + ["meteoblue"]}
+        )
+        selected_models = expected_models.merge(
+            selected_models, on="model", how="left"
+        )
+        selected_models["airport"] = selected_models.airport.fillna(airport)
+        selected_models["n"] = pd.to_numeric(
+            selected_models.n, errors="coerce"
+        ).fillna(0).astype(int)
+        selected_models["data_quality"] = selected_models.data_quality.fillna(
+            "No scored D-1 data"
+        )
         current_weights = live_nowcast.model_weights if live_nowcast is not None else {}
         selected_models["current_weight"] = selected_models.model.map(current_weights)
-        selected_models = selected_models.sort_values("forecast_score", ascending=False)
+        selected_models = selected_models.sort_values(
+            "forecast_score", ascending=False, na_position="last"
+        )
         model_table = selected_models[
             [
                 "model",
@@ -956,13 +1165,18 @@ with tab_airports:
             ]
         ].copy()
         for column in ["bias", "mae", "rmse"]:
-            model_table[column] = model_table[column].map(lambda value: f"{value:.2f} °C")
+            model_table[column] = model_table[column].map(
+                lambda value: f"{value:.2f} °C" if pd.notna(value) else "—"
+            )
         for column in ["exact_hit", "within_1c", "current_weight"]:
             model_table[column] = model_table[column].map(
                 lambda value: f"{value:.1%}" if pd.notna(value) else "—"
             )
         model_table["forecast_score"] = model_table.forecast_score.map(
-            lambda value: f"{value:.0f}/100"
+            lambda value: f"{value:.0f}/100" if pd.notna(value) else "—"
+        )
+        model_table["model"] = model_table.model.replace(
+            {"meteoblue": "meteoblue mLM"}
         )
         model_table = model_table.rename(
             columns={
@@ -1079,7 +1293,7 @@ with tab_accuracy:
     )
     if selected_ladder.empty:
         st.info(
-            "Forecast-ladder tracking starts with the first v9.3.1 collection. Results appear "
+            "Live forecast-ladder tracking starts with the first v9.3.1 collection. Results appear "
             "after matching target days have completed. Existing forecasts are not reconstructed "
             "with later information."
         )
@@ -1113,7 +1327,8 @@ with tab_accuracy:
         ].copy()
         for column in ["bias", "mae", "rmse", "mae_gain_vs_raw"]:
             ladder_table[column] = ladder_table[column].map(
-                lambda value: f"{value:+.2f} °C" if column in {"bias", "mae_gain_vs_raw"}
+                lambda value, metric=column: f"{value:+.2f} °C"
+                if metric in {"bias", "mae_gain_vs_raw"}
                 else f"{value:.2f} °C"
             )
         for column in ["exact_hit", "within_1c"]:
@@ -1132,12 +1347,166 @@ with tab_accuracy:
         )
         st.dataframe(ladder_table, hide_index=True, width="stretch")
 
+    historical_selected = (
+        historical_ladder_metrics[
+            historical_ladder_metrics.airport == airport
+        ].copy()
+        if not historical_ladder_metrics.empty
+        else historical_ladder_metrics
+    )
+    st.subheader("Historical D-1 reconstruction")
+    if historical_selected.empty:
+        st.info("Run workflow 1 once to reconstruct historical raw and bias-corrected D-1 stages.")
+    else:
+        history_table = historical_selected[
+            [
+                "stage",
+                "n_days",
+                "bias",
+                "mae",
+                "rmse",
+                "exact_hit",
+                "within_1c",
+                "mae_gain_vs_raw",
+            ]
+        ].copy()
+        for column in ["bias", "mae", "rmse", "mae_gain_vs_raw"]:
+            history_table[column] = history_table[column].map(
+                lambda value, metric=column: f"{value:+.2f} °C"
+                if metric in {"bias", "mae_gain_vs_raw"}
+                else f"{value:.2f} °C"
+            )
+        for column in ["exact_hit", "within_1c"]:
+            history_table[column] = history_table[column].map(
+                lambda value: f"{value:.1%}"
+            )
+        history_table = history_table.rename(
+            columns={
+                "stage": "Forecast stage",
+                "n_days": "Independent days",
+                "bias": "Bias",
+                "mae": "MAE",
+                "rmse": "RMSE",
+                "exact_hit": "Exact bucket",
+                "within_1c": "Within ±1 °C",
+                "mae_gain_vs_raw": "MAE gain vs raw",
+            }
+        )
+        st.dataframe(history_table, hide_index=True, width="stretch")
+        st.caption(
+            "Every historical target day uses only errors from earlier days for its bias and "
+            "performance weights. This avoids hindsight leakage."
+        )
+
+    with st.expander("How to read MAE gain, RMSE and modelled peak"):
+        st.write(
+            "**MAE gain vs raw** = raw-model MAE minus the selected stage's MAE. Positive is "
+            "an improvement; negative means that transformation made accuracy worse."
+        )
+        st.write(
+            "**RMSE** penalizes occasional large errors more heavily than MAE. That matters for "
+            "temperature markets because a 3–4 °C miss crosses several buckets."
+        )
+        st.write(
+            "**After median modelled peak** means the snapshot was taken after the median peak "
+            "time of the latest hourly model paths. It is not the observed METAR peak; the exact "
+            "expected peak time is stored with every snapshot."
+        )
+
+    st.subheader("Live-factor diagnostics")
+    selected_factors = (
+        factor_diagnostics[factor_diagnostics.airport == airport].copy()
+        if not factor_diagnostics.empty
+        else factor_diagnostics
+    )
+    if selected_factors.empty:
+        st.info(
+            "Factor diagnostics start with v9.4 and appear after live snapshots have matching "
+            "completed-day METAR maxima."
+        )
+    else:
+        factor_table = selected_factors[
+            [
+                "factor",
+                "information_set",
+                "n_days",
+                "n_snapshots",
+                "average_contribution_c",
+                "cumulative_mae",
+                "marginal_mae_gain",
+            ]
+        ].copy()
+        for column in [
+            "average_contribution_c",
+            "cumulative_mae",
+            "marginal_mae_gain",
+        ]:
+            factor_table[column] = factor_table[column].map(
+                lambda value, metric=column: f"{value:+.3f} °C"
+                if metric != "cumulative_mae"
+                else f"{value:.3f} °C"
+            )
+        factor_table = factor_table.rename(
+            columns={
+                "factor": "Cumulative factor step",
+                "information_set": "Information set",
+                "n_days": "Independent days",
+                "n_snapshots": "Snapshots",
+                "average_contribution_c": "Average contribution",
+                "cumulative_mae": "MAE after step",
+                "marginal_mae_gain": "Marginal MAE gain",
+            }
+        )
+        st.dataframe(factor_table, hide_index=True, width="stretch")
+        st.caption(
+            "Positive marginal gain means the factor improved MAE at its current conservative "
+            "coefficient; negative means it hurt. Coefficients should only be promoted from "
+            "challenger to champion after stable out-of-sample gains across enough independent "
+            "days, not from the same day's in-sample result."
+        )
+
     st.divider()
     st.subheader("Individual weather-model accuracy")
     horizon = st.selectbox("Forecast timing", ["D-1", "D0-morning", "Live"])
     selected = forecasts[forecasts.horizon == horizon] if not forecasts.empty else forecasts
-    scored = score_frame(selected, actuals)
+    scored = score_frame(selected, airport_station_actuals)
     metrics = model_metrics(scored)
+    expected_accuracy_models = pd.DataFrame(
+        {"model": catalog[airport]["models"] + ["meteoblue"]}
+    )
+    complete_metrics = expected_accuracy_models.merge(metrics, on="model", how="left")
+    complete_metrics["n"] = pd.to_numeric(
+        complete_metrics.n, errors="coerce"
+    ).fillna(0).astype(int)
+    complete_metrics["status"] = complete_metrics.n.map(
+        lambda value: "Scored" if value > 0 else f"No scored {horizon} data"
+    )
+    display_metrics = complete_metrics.copy()
+    display_metrics["model"] = display_metrics.model.replace(
+        {"meteoblue": "meteoblue mLM"}
+    )
+    for column in ["bias", "mae", "rmse"]:
+        display_metrics[column] = display_metrics[column].map(
+            lambda value: f"{value:.2f} °C" if pd.notna(value) else "—"
+        )
+    display_metrics["hit_rate"] = display_metrics.hit_rate.map(
+        lambda value: f"{value:.1%}" if pd.notna(value) else "—"
+    )
+    st.dataframe(
+        display_metrics.rename(
+            columns={
+                "model": "Model",
+                "n": "Days",
+                "bias": "Bias",
+                "mae": "MAE",
+                "rmse": "RMSE",
+                "hit_rate": "Exact bucket",
+                "status": "Data status",
+            }
+        ),
+        hide_index=True,
+        width="stretch",
+    )
     if metrics.empty:
         snapshot_days = selected.target_date.nunique() if not selected.empty else 0
         if horizon == "D-1":
@@ -1155,9 +1524,6 @@ with tab_accuracy:
                 "appear about one week later."
             )
     else:
-        shown = metrics.copy()
-        shown["hit_rate"] = shown.hit_rate.map(lambda value: f"{value:.1%}")
-        st.dataframe(shown, hide_index=True, width="stretch")
         st.plotly_chart(
             px.bar(metrics, x="model", y="mae", title=f"{horizon} MAE (lower is better)"),
             width="stretch",
@@ -1193,6 +1559,7 @@ with tab_data:
         f"Actual rows: {len(actuals):,} · METAR rows: {len(observations):,} · "
         f"TAF rows: {len(tafs):,} · "
         f"Market rows: {len(market_snapshots):,} · Signal rows: {len(signal_snapshots):,} · "
+        f"Strategy rows: {len(strategy_snapshots):,} · "
         f"Forecast-ladder rows: {len(all_forecast_snapshots):,}"
     )
     models = catalog[airport]["models"] + ["meteoblue"]

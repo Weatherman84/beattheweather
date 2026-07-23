@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 from weatherman import providers
 
@@ -8,6 +9,7 @@ AIRPORT = {
     "longitude": 20.967,
     "timezone": "Europe/Warsaw",
     "market_city": "warsaw",
+    "elevation_m": 110,
 }
 
 
@@ -39,7 +41,14 @@ def test_recent_metars_skips_incomplete_reports(monkeypatch):
         "_get",
         lambda *_args, **_kwargs: [
             {"obsTime": None, "temp": 30},
-            {"obsTime": 1_752_921_600, "temp": 31, "dewp": 14, "wspd": 10, "wdir": 240},
+            {
+                "obsTime": 1_752_921_600,
+                "temp": 31,
+                "dewp": 14,
+                "wspd": 10,
+                "wdir": 240,
+                "rawOb": "EPWA 191200Z 24010KT CAVOK 31/14 Q1014",
+            },
         ],
     )
     rows = providers.recent_metars("EPWA")
@@ -47,6 +56,7 @@ def test_recent_metars_skips_incomplete_reports(monkeypatch):
     assert rows[0]["temp_c"] == 31
     assert round(rows[0]["wind_kph"], 2) == 18.52
     assert rows[0]["wind_direction"] == 240
+    assert rows[0]["cloud_cover"] == 0
 
 
 def test_recent_metars_accepts_variable_wind_without_direction(monkeypatch):
@@ -59,6 +69,38 @@ def test_recent_metars_accepts_variable_wind_without_direction(monkeypatch):
     )
     rows = providers.recent_metars("EPWA")
     assert rows[0]["wind_direction"] is None
+
+
+def test_meteoblue_preserves_model_run_metadata(monkeypatch):
+    monkeypatch.setattr(
+        providers,
+        "settings",
+        SimpleNamespace(
+            meteoblue_api_key="test",
+            meteoblue_url_template=(
+                "https://example.test?lat={lat}&lon={lon}&asl={elevation}&apikey={apikey}"
+            ),
+            timeout=30,
+        ),
+    )
+    monkeypatch.setattr(
+        providers,
+        "_get",
+        lambda *_args, **_kwargs: {
+            "metadata": {
+                "modelrun_utc": "2026-07-22T12:00:00Z",
+                "modelrun_updatetime_utc": "2026-07-22T13:10:00Z",
+            },
+            "data_day": {
+                "time": ["2026-07-23"],
+                "temperature_max": [29.5],
+            },
+        },
+    )
+    row = providers.meteoblue_forecast(AIRPORT)[0]
+    assert row["model"] == "meteoblue"
+    assert row["model_run_at"] == datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+    assert row["available_at"] == datetime(2026, 7, 22, 13, 10, tzinfo=timezone.utc)
 
 
 def test_recent_tafs_parse_tx_tn_and_decoded_peak_periods(monkeypatch):

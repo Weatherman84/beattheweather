@@ -20,6 +20,7 @@ from .analytics import (
     model_weight_map,
     resolved_market_range,
     score_frame,
+    wind_heat_adjustment,
 )
 from .taf import TafGuidance, build_taf_guidance
 
@@ -48,6 +49,13 @@ class LiveNowcast:
     taf_guidance: TafGuidance | None
     raw_model_mean: float
     raw_model_spread: float
+    weighted_raw_mean: float
+    weighted_raw_spread: float
+    bias_corrected_equal_mean: float
+    bias_corrected_equal_spread: float
+    stage_probabilities: dict[str, dict[int, float]]
+    adjustment_contributions: dict[str, float]
+    live_features: dict[str, float | None]
     metar_conditioned_probabilities: dict[int, float]
     metar_conditioned_mean: float
     metar_conditioned_spread: float
@@ -106,10 +114,12 @@ def hourly_context(
     float | None,
     float | None,
     float | None,
+    float | None,
+    float | None,
 ]:
     result = _hourly_for_target(frame, timezone_name, target, as_of)
     if result.empty:
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
     result = result.sort_values("run_at").drop_duplicates(
         ["model", "valid_at"], keep="last"
     )
@@ -122,6 +132,27 @@ def hourly_context(
     reference_utc = pd.Timestamp(reference).tz_convert("UTC")
     result["distance"] = (result.valid_at - reference_utc).abs()
     nearest = result.sort_values("distance").drop_duplicates("model", keep="first")
+    rates: list[float] = []
+    for _, model_frame in result.groupby("model"):
+        latest_run = model_frame.run_at.max()
+        model_frame = model_frame[model_frame.run_at == latest_run].sort_values("valid_at")
+        if len(model_frame) < 2:
+            continue
+        current_index = (model_frame.valid_at - reference_utc).abs().idxmin()
+        current_time = pd.Timestamp(model_frame.loc[current_index, "valid_at"])
+        prior = model_frame[
+            (model_frame.valid_at < current_time)
+            & (model_frame.valid_at >= current_time - timedelta(hours=2))
+        ]
+        if prior.empty:
+            continue
+        prior_row = prior.iloc[-1]
+        elapsed = (current_time - pd.Timestamp(prior_row.valid_at)).total_seconds() / 3600
+        if elapsed > 0:
+            rates.append(
+                (float(model_frame.loc[current_index, "temp_c"]) - float(prior_row.temp_c))
+                / elapsed
+            )
 
     def median(column: str) -> float | None:
         if column not in nearest:
@@ -144,11 +175,13 @@ def hourly_context(
 
     return (
         median("temp_c"),
+        median("dewpoint_c"),
         median("cloud_cover"),
         median("temp_850hpa_c"),
         median("radiation_wm2"),
         median("wind_kph"),
         circular_mean("wind_direction"),
+        float(pd.Series(rates).median()) if rates else None,
     )
 
 
@@ -256,6 +289,60 @@ def model_run_trend(
     return float(pd.Series(changes).median()) if changes else None
 
 
+def recent_station_residual(scored: pd.DataFrame) -> float | None:
+    """Recent error left after each model's longer-run bias, newest days weighted most."""
+    if scored.empty:
+        return None
+    frame = scored.copy()
+    frame["target_date"] = pd.to_datetime(frame.target_date).dt.date
+    frame["model_bias"] = frame.groupby("model").error.transform("mean")
+    # Positive means the station recently finished hotter than its bias-corrected
+    # model values.
+    frame["station_residual"] = -(frame.error - frame.model_bias)
+    daily = (
+        frame.groupby("target_date", as_index=False)
+        .station_residual.median()
+        .sort_values("target_date")
+        .tail(7)
+    )
+    if daily.empty:
+        return None
+    weights = pd.Series([0.72 ** index for index in range(len(daily) - 1, -1, -1)])
+    return float((daily.station_residual.reset_index(drop=True) * weights).sum() / weights.sum())
+
+
+def _scaled_live_adjustments(contributions: dict[str, float]) -> dict[str, float]:
+    raw_total = sum(contributions.values())
+    clipped_total = max(-1.5, min(1.5, raw_total))
+    if abs(raw_total) > 1e-9 and clipped_total != raw_total:
+        scale = clipped_total / raw_total
+        contributions = {name: value * scale for name, value in contributions.items()}
+    return {**contributions, "total": clipped_total}
+
+
+def observed_heating_rates(observations: pd.DataFrame) -> dict[str, float | None]:
+    """Calculate comparable 30/60/120-minute station heating rates."""
+    rates: dict[str, float | None] = {"30m": None, "60m": None, "120m": None}
+    if len(observations) < 2:
+        return rates
+    frame = observations.sort_values("observed_at")
+    latest = frame.iloc[-1]
+    latest_at = pd.Timestamp(latest.observed_at)
+    for minutes in (30, 60, 120):
+        earlier = frame[frame.observed_at < latest_at]
+        if earlier.empty:
+            continue
+        desired = latest_at - timedelta(minutes=minutes)
+        index = (earlier.observed_at - desired).abs().idxmin()
+        prior = earlier.loc[index]
+        elapsed = (latest_at - pd.Timestamp(prior.observed_at)).total_seconds() / 3600
+        # Do not label a five-minute comparison as a 60-minute rate.
+        if elapsed < minutes / 60 * 0.5 or elapsed > minutes / 60 * 1.75:
+            continue
+        rates[f"{minutes}m"] = (float(latest.temp_c) - float(prior.temp_c)) / elapsed
+    return rates
+
+
 def build_live_nowcast(
     *,
     forecasts: pd.DataFrame,
@@ -308,6 +395,15 @@ def build_live_nowcast(
     current["corrected_max"] = current.max_temp_c - current.d1_bias
     current["model_weight"] = current.model.map(weight_map).fillna(fallback_weight).astype(float)
     current["model_weight"] = current.model_weight / current.model_weight.sum()
+    raw_equal = consensus(current.max_temp_c.tolist())
+    weighted_raw = consensus(
+        current.max_temp_c.tolist(),
+        weights=current.model_weight.tolist(),
+    )
+    bias_equal = consensus(
+        current.max_temp_c.tolist(),
+        current.d1_bias.tolist(),
+    )
     corrected = consensus(
         current.max_temp_c.tolist(),
         current.d1_bias.tolist(),
@@ -329,6 +425,12 @@ def build_live_nowcast(
             heating_rate = float(
                 (recent_obs.temp_c.iloc[-1] - recent_obs.temp_c.iloc[0]) / elapsed
             )
+    heating_rates = observed_heating_rates(obs_today)
+    comparable_rates = [
+        value for value in heating_rates.values() if value is not None
+    ]
+    if comparable_rates:
+        heating_rate = float(pd.Series(comparable_rates).median())
 
     observed_cooling = False
     if latest_obs is not None and observed_max is not None:
@@ -348,11 +450,13 @@ def build_live_nowcast(
 
     (
         expected_now,
+        expected_dewpoint,
         cloud_cover,
         temp_850,
         radiation,
         model_wind_speed,
         model_wind_direction,
+        model_heating_rate,
     ) = hourly_context(hourly, timezone_name, target, as_of)
     current_observed_temp = float(latest_obs.temp_c) if latest_obs is not None else None
     remaining_rise, future_radiation = remaining_heating_context(
@@ -413,20 +517,28 @@ def build_live_nowcast(
         wind_speed = model_wind_speed
         wind_direction = model_wind_direction
         wind_source = "model"
+    observed_dewpoint = (
+        float(latest_obs.dewpoint_c)
+        if latest_obs is not None and pd.notna(latest_obs.dewpoint_c)
+        else None
+    )
+    observed_cloud = (
+        float(latest_obs.cloud_cover)
+        if latest_obs is not None
+        and "cloud_cover" in latest_obs.index
+        and pd.notna(latest_obs.cloud_cover)
+        else None
+    )
     heat = heat_spike_assessment(
         forecast_mean=corrected.mean,
         recent_baseline=recent_baseline,
         run_trend=trend,
         model_spread=corrected.spread,
         observed_temp=float(latest_obs.temp_c) if latest_obs is not None else None,
-        observed_dewpoint=(
-            float(latest_obs.dewpoint_c)
-            if latest_obs is not None and pd.notna(latest_obs.dewpoint_c)
-            else None
-        ),
+        observed_dewpoint=observed_dewpoint,
         expected_temp_now=expected_now if target == local_now.date() else None,
         heating_rate=heating_rate,
-        cloud_cover=cloud_cover,
+        cloud_cover=observed_cloud if observed_cloud is not None else cloud_cover,
         wind_speed_kph=wind_speed,
         wind_direction_deg=wind_direction,
         warm_wind_sectors=wind_profile.get("warm_sectors"),
@@ -446,16 +558,127 @@ def build_live_nowcast(
     taf_spread_addition = (
         taf_guidance.spread_addition_c if taf_guidance is not None else 0.0
     )
+    live_observation_available = (
+        target == local_now.date()
+        and current_observed_temp is not None
+        and observation_age_hours is not None
+        and observation_age_hours <= 2
+    )
+    temperature_anomaly = (
+        current_observed_temp - expected_now
+        if live_observation_available and expected_now is not None
+        else None
+    )
+    observed_dryness = (
+        current_observed_temp - observed_dewpoint
+        if live_observation_available and observed_dewpoint is not None
+        else None
+    )
+    model_dryness = (
+        expected_now - expected_dewpoint
+        if expected_now is not None and expected_dewpoint is not None
+        else None
+    )
+    dryness_surprise = (
+        observed_dryness - model_dryness
+        if observed_dryness is not None and model_dryness is not None
+        else None
+    )
+    cloud_surprise = (
+        cloud_cover - observed_cloud
+        if live_observation_available
+        and cloud_cover is not None
+        and observed_cloud is not None
+        else None
+    )
+    heating_surprise = (
+        heating_rate - model_heating_rate
+        if live_observation_available
+        and heating_rate is not None
+        and model_heating_rate is not None
+        else None
+    )
+    station_residual = recent_station_residual(d1_scored)
+
+    def limited(value: float | None, lower: float, upper: float) -> float:
+        return max(lower, min(upper, float(value))) if value is not None else 0.0
+
+    contributions = {
+        "temperature_anchor": limited(
+            0.45 * temperature_anomaly if temperature_anomaly is not None else None,
+            -0.90,
+            0.90,
+        ),
+        "dryness": limited(
+            0.025 * dryness_surprise if dryness_surprise is not None else None,
+            -0.20,
+            0.20,
+        ),
+        "cloud": limited(
+            0.003 * cloud_surprise if cloud_surprise is not None else None,
+            -0.20,
+            0.20,
+        ),
+        "heating_rate": limited(
+            0.18 * heating_surprise if heating_surprise is not None else None,
+            -0.30,
+            0.30,
+        ),
+        "recent_station_error": limited(
+            0.15 * station_residual
+            if live_observation_available and station_residual is not None
+            else None,
+            -0.25,
+            0.25,
+        ),
+        "radiation": limited(
+            0.20 * (cloud_surprise / 100) * (radiation / 800)
+            if cloud_surprise is not None and radiation is not None
+            else None,
+            -0.15,
+            0.15,
+        ),
+        "wind": (
+            wind_heat_adjustment(
+                speed_kph=wind_speed,
+                direction_deg=wind_direction,
+                warm_sectors=wind_profile.get("warm_sectors"),
+                cool_sectors=wind_profile.get("cool_sectors"),
+                source=wind_source or "model",
+            )
+            if live_observation_available and wind_source == "METAR"
+            else 0.0
+        ),
+        "run_trend": limited(
+            0.15 * trend
+            if live_observation_available and trend is not None
+            else None,
+            -0.20,
+            0.20,
+        ),
+    }
+    adjustments = _scaled_live_adjustments(contributions)
+    live_adjustment = adjustments["total"]
+    heat = HeatSpikeAssessment(
+        heat.score,
+        heat.status,
+        live_adjustment,
+        heat.signals,
+    )
+    signed = [value for name, value in adjustments.items() if name != "total" and abs(value) >= 0.05]
+    contradictory = any(value > 0 for value in signed) and any(value < 0 for value in signed)
+    live_sigma_floor = 0.80 if contradictory else 0.60 if len(signed) >= 4 else 0.65
     metar_unconditioned = consensus(
-        (current.corrected_max + heat.adjustment_c).tolist(),
+        (current.corrected_max + live_adjustment).tolist(),
         weights=current.model_weight.tolist(),
-        sigma_floor=0.65,
+        sigma_floor=live_sigma_floor,
     )
     resolution = resolved_market_range(markets)
     day_status = assess_day_status(
         target_date=target,
         local_now=local_now,
         observed_max=observed_max,
+        latest_observed_temp=current_observed_temp,
         observation_age_hours=observation_age_hours,
         heating_rate=heating_rate,
         remaining_model_rise=remaining_rise,
@@ -469,9 +692,9 @@ def build_live_nowcast(
         day_status.maximum_bucket,
     )
     final_unconditioned = consensus(
-        (current.corrected_max + heat.adjustment_c + taf_center_adjustment).tolist(),
+        (current.corrected_max + live_adjustment + taf_center_adjustment).tolist(),
         weights=current.model_weight.tolist(),
-        sigma_floor=0.65 + taf_spread_addition,
+        sigma_floor=live_sigma_floor + taf_spread_addition,
     )
     probabilities = condition_probability_range(
         final_unconditioned.probability_by_bucket,
@@ -480,6 +703,33 @@ def build_live_nowcast(
     )
     metar_mean, metar_spread = probability_moments(metar_probabilities)
     final_mean, final_spread = probability_moments(probabilities)
+    stage_probabilities = {
+        "Raw model mean": raw_equal.probability_by_bucket,
+        "Weighted raw ensemble": weighted_raw.probability_by_bucket,
+        "Bias corrected · equal weight": bias_equal.probability_by_bucket,
+        "Bias corrected · performance weighted": corrected.probability_by_bucket,
+        "METAR conditioned": metar_probabilities,
+        "Final incl. TAF": probabilities,
+    }
+    live_features = {
+        "temperature_anomaly_c": temperature_anomaly,
+        "observed_dryness_c": observed_dryness,
+        "model_dryness_c": model_dryness,
+        "dryness_surprise_c": dryness_surprise,
+        "observed_cloud_cover_pct": observed_cloud,
+        "model_cloud_cover_pct": cloud_cover,
+        "cloud_surprise_pct": cloud_surprise,
+        "observed_heating_rate_cph": heating_rate,
+        "observed_heating_rate_30m_cph": heating_rates["30m"],
+        "observed_heating_rate_60m_cph": heating_rates["60m"],
+        "observed_heating_rate_120m_cph": heating_rates["120m"],
+        "model_heating_rate_cph": model_heating_rate,
+        "heating_rate_surprise_cph": heating_surprise,
+        "recent_station_residual_c": station_residual,
+        "model_radiation_wm2": radiation,
+        "future_radiation_max_wm2": future_radiation,
+        "remaining_model_rise_c": remaining_rise,
+    }
     if not d1_scored.empty:
         residual_errors = d1_scored.copy()
         residual_errors["residual_abs_error"] = (
@@ -557,8 +807,15 @@ def build_live_nowcast(
         confidence_factors=confidence_factors,
         model_weights=dict(zip(current.model.astype(str), current.model_weight.astype(float))),
         taf_guidance=taf_guidance,
-        raw_model_mean=float(current.max_temp_c.mean()),
-        raw_model_spread=float(current.max_temp_c.astype(float).std(ddof=0)),
+        raw_model_mean=raw_equal.mean,
+        raw_model_spread=raw_equal.spread,
+        weighted_raw_mean=weighted_raw.mean,
+        weighted_raw_spread=weighted_raw.spread,
+        bias_corrected_equal_mean=bias_equal.mean,
+        bias_corrected_equal_spread=bias_equal.spread,
+        stage_probabilities=stage_probabilities,
+        adjustment_contributions=adjustments,
+        live_features=live_features,
         metar_conditioned_probabilities=metar_probabilities,
         metar_conditioned_mean=metar_mean,
         metar_conditioned_spread=metar_spread,

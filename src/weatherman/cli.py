@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from .service import backfill, collect
+from .service import backfill, backfill_market_history, collect
 
 
 def main() -> None:
@@ -14,12 +14,16 @@ def main() -> None:
     backfill_cmd = subs.add_parser("backfill")
     backfill_cmd.add_argument("--airports", nargs="*")
     backfill_cmd.add_argument("--days", type=int, default=365)
+    market_cmd = subs.add_parser("backfill-market-history")
+    market_cmd.add_argument("--airports", nargs="*")
+    market_cmd.add_argument("--days", type=int, default=30)
     args = parser.parse_args()
-    result = (
-        collect(args.airports, args.days)
-        if args.command == "collect"
-        else backfill(args.days, args.airports)
-    )
+    if args.command == "collect":
+        result = collect(args.airports, args.days)
+    elif args.command == "backfill-market-history":
+        result = backfill_market_history(args.days, args.airports)
+    else:
+        result = backfill(args.days, args.airports)
     print(result)
 
 

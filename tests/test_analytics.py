@@ -14,6 +14,7 @@ from weatherman.analytics import (
     forecast_ladder_metrics,
     forecast_scorecards,
     heat_spike_assessment,
+    historical_d1_ladder,
     market_edges,
     metar_schedule_status,
     model_metrics,
@@ -66,6 +67,8 @@ def test_forecast_ladder_scores_each_stage_separately():
                 "timing": "D0 live",
                 "hours_to_peak": 3.5,
                 "raw_model_mean_c": 39.0,
+                "weighted_raw_c": 38.7,
+                "bias_corrected_equal_c": 38.2,
                 "bias_corrected_c": 38.0,
                 "metar_conditioned_c": 37.2,
                 "final_forecast_c": 37.4,
@@ -86,7 +89,9 @@ def test_forecast_ladder_scores_each_stage_separately():
     metrics = forecast_ladder_metrics(scored)
     assert metrics.stage.tolist() == [
         "Raw model mean",
-        "Bias corrected",
+        "Weighted raw ensemble",
+        "Bias corrected · equal weight",
+        "Bias corrected · performance weighted",
         "METAR conditioned",
         "Final incl. TAF",
     ]
@@ -94,6 +99,41 @@ def test_forecast_ladder_scores_each_stage_separately():
     final = metrics[metrics.stage == "Final incl. TAF"].iloc[0]
     assert round(metar.mae, 2) == 0.20
     assert round(final.mae, 2) == 0.40
+
+
+def test_historical_d1_ladder_uses_only_earlier_errors():
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "model": model,
+                "run_at": datetime(2026, 7, day - 1, 12, tzinfo=ZoneInfo("UTC")),
+                "target_date": date(2026, 7, day),
+                "max_temp_c": forecast,
+                "horizon": "D-1",
+            }
+            for day, model, forecast in [
+                (10, "a", 31.0),
+                (10, "b", 30.0),
+                (11, "a", 32.0),
+                (11, "b", 31.0),
+            ]
+        ]
+    )
+    actuals = pd.DataFrame(
+        [
+            {"airport": "LEMD", "target_date": date(2026, 7, 10), "max_temp_c": 30.0},
+            {"airport": "LEMD", "target_date": date(2026, 7, 11), "max_temp_c": 31.0},
+        ]
+    )
+    result = historical_d1_ladder(forecasts, actuals)
+    day_two = result[result.target_date == date(2026, 7, 11)]
+    raw = day_two[day_two.stage == "Raw model mean"].iloc[0]
+    corrected = day_two[
+        day_two.stage == "Bias corrected · equal weight"
+    ].iloc[0]
+    assert raw.forecast_c == 31.5
+    assert corrected.forecast_c == 31.0
 
 
 def test_consensus_bias_correction():
@@ -192,6 +232,21 @@ def test_day_stays_open_while_sunlight_and_warming_remain():
     assert status.label == "Heating window open"
     assert not status.is_locked
     assert status.maximum_bucket is None
+
+
+def test_late_evening_cooling_can_lock_when_radiation_is_missing():
+    status = assess_day_status(
+        target_date=date(2026, 7, 20),
+        local_now=datetime(2026, 7, 20, 21, tzinfo=ZoneInfo("Europe/Madrid")),
+        observed_max=37.0,
+        latest_observed_temp=35.0,
+        observation_age_hours=0.1,
+        heating_rate=-1.0,
+        remaining_model_rise=0.0,
+        future_radiation_max=None,
+    )
+    assert status.label == "Peak locked"
+    assert status.minimum_bucket == status.maximum_bucket == 37
 
 
 def test_heat_spike_confirmation():

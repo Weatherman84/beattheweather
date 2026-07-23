@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterable
 from datetime import date, datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from .db import (
     Observation,
     Session,
     SignalSnapshot,
+    StrategySnapshot,
     TafReport,
     init_db,
 )
@@ -28,6 +30,7 @@ from .providers import (
     open_meteo_forecast,
     open_meteo_hourly,
     polymarket_prices,
+    polymarket_historical_prices,
     previous_run_d1,
     recent_metars,
     recent_tafs,
@@ -138,12 +141,16 @@ def _record_forecast_snapshot(
         "captured_at": captured_at,
         "timing": _signal_timing(captured_at, target, airport["timezone"]),
         "raw_model_mean_c": nowcast.raw_model_mean,
+        "weighted_raw_c": nowcast.weighted_raw_mean,
+        "bias_corrected_equal_c": nowcast.bias_corrected_equal_mean,
         "bias_corrected_c": nowcast.corrected.mean,
         "metar_conditioned_c": (
             nowcast.metar_conditioned_mean if metar_conditioned_available else None
         ),
         "final_forecast_c": nowcast.final_forecast_mean,
         "raw_spread_c": nowcast.raw_model_spread,
+        "weighted_raw_spread_c": nowcast.weighted_raw_spread,
+        "bias_corrected_equal_spread_c": nowcast.bias_corrected_equal_spread,
         "bias_corrected_spread_c": nowcast.corrected.spread,
         "metar_conditioned_spread_c": (
             nowcast.metar_conditioned_spread if metar_conditioned_available else None
@@ -157,6 +164,37 @@ def _record_forecast_snapshot(
         "model_count": len(nowcast.current),
         "taf_adjustment_c": nowcast.taf_adjustment_c,
         "taf_conflict": taf_conflict,
+        "temp_anchor_adjustment_c": nowcast.adjustment_contributions.get(
+            "temperature_anchor", 0.0
+        ),
+        "dryness_adjustment_c": nowcast.adjustment_contributions.get("dryness", 0.0),
+        "cloud_adjustment_c": nowcast.adjustment_contributions.get("cloud", 0.0),
+        "heating_rate_adjustment_c": nowcast.adjustment_contributions.get(
+            "heating_rate", 0.0
+        ),
+        "recent_error_adjustment_c": nowcast.adjustment_contributions.get(
+            "recent_station_error", 0.0
+        ),
+        "radiation_adjustment_c": nowcast.adjustment_contributions.get(
+            "radiation", 0.0
+        ),
+        "wind_adjustment_c": nowcast.adjustment_contributions.get("wind", 0.0),
+        "run_trend_adjustment_c": nowcast.adjustment_contributions.get(
+            "run_trend", 0.0
+        ),
+        "live_adjustment_c": nowcast.adjustment_contributions.get("total", 0.0),
+        "features_json": json.dumps(nowcast.live_features, separators=(",", ":")),
+        "peak_lock_json": json.dumps(
+            {
+                "phase": nowcast.day_status.phase,
+                "label": nowcast.day_status.label,
+                "explanation": nowcast.day_status.explanation,
+                "remaining_model_rise_c": nowcast.remaining_rise_c,
+                "future_radiation_max_wm2": nowcast.future_radiation_max,
+                "observed_max_c": nowcast.observed_max,
+            },
+            separators=(",", ":"),
+        ),
     }
     return _upsert_batch(
         session,
@@ -241,6 +279,97 @@ def _record_signal_snapshots(
     )
 
 
+def _record_strategy_snapshots(
+    session,
+    code: str,
+    airport: dict,
+    market_rows: list[dict],
+    nowcast,
+) -> int:
+    """Record one mode-bucket benchmark entry for every forecast stage."""
+    if nowcast is None or not market_rows or all(bool(row.get("closed")) for row in market_rows):
+        return 0
+    captured_at = max(row["captured_at"] for row in market_rows)
+    target = market_rows[0]["target_date"]
+    timing = _signal_timing(captured_at, target, airport["timezone"])
+    local_capture = captured_at.astimezone(ZoneInfo(airport["timezone"]))
+    rows = []
+    for strategy, probabilities in nowcast.stage_probabilities.items():
+        if (
+            strategy == "METAR conditioned"
+            and (target != local_capture.date() or nowcast.observed_max is None)
+        ):
+            continue
+        model_bucket = max(probabilities, key=probabilities.get)
+        matches = [
+            market
+            for market in market_rows
+            if (
+                market.get("bucket_low_c") is None
+                or model_bucket >= float(market["bucket_low_c"])
+            )
+            and (
+                market.get("bucket_high_c") is None
+                or model_bucket <= float(market["bucket_high_c"])
+            )
+        ]
+        if not matches:
+            continue
+        market = min(
+            matches,
+            key=lambda item: (
+                float("inf")
+                if item.get("bucket_low_c") is None or item.get("bucket_high_c") is None
+                else float(item["bucket_high_c"]) - float(item["bucket_low_c"])
+            ),
+        )
+        buy_price = (
+            float(market["best_ask"])
+            if market.get("best_ask") is not None
+            else float(market["yes_price"])
+        )
+        rows.append(
+            {
+                "airport": code,
+                "target_date": target,
+                "captured_at": captured_at,
+                "timing": timing,
+                "strategy": strategy,
+                "market_id": str(market["market_id"]),
+                "bucket_label": str(market["bucket_label"]),
+                "model_bucket_c": int(model_bucket),
+                "model_probability": float(probabilities[model_bucket]),
+                "market_probability": float(market["yes_price"]),
+                "buy_price": buy_price,
+                "price_basis": (
+                    "live best ask"
+                    if market.get("best_ask") is not None
+                    else "displayed market price"
+                ),
+                "day_phase": nowcast.day_status.phase,
+            }
+        )
+    return _upsert_batch(
+        session,
+        StrategySnapshot,
+        rows,
+        lambda item: {
+            "airport": item["airport"],
+            "target_date": item["target_date"],
+            "captured_at": item["captured_at"],
+            "timing": item["timing"],
+            "strategy": item["strategy"],
+        },
+        lambda item: {
+            key: value
+            for key, value in item.items()
+            if key
+            not in {"airport", "target_date", "captured_at", "timing", "strategy"}
+        },
+        f"{code}/strategy journal/{target}",
+    )
+
+
 def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, int]:
     init_db()
     counts = {
@@ -250,6 +379,7 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
         "taf_reports": 0,
         "market_prices": 0,
         "signals": 0,
+        "strategy_snapshots": 0,
         "forecast_snapshots": 0,
         "actuals": 0,
     }
@@ -313,6 +443,10 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                     "max_temp_c": item["max_temp_c"],
                     "source": item["source"],
                     "horizon": item["horizon"],
+                    "model_run_at": item.get("model_run_at"),
+                    "available_at": item.get("available_at"),
+                    "fetched_at": item.get("fetched_at", item["run_at"]),
+                    "provenance_status": item.get("provenance_status"),
                 },
                 f"{code} daily forecasts",
             )
@@ -421,6 +555,9 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                         counts["signals"] += _record_signal_snapshots(
                             session, code, airport, market_rows, nowcast=nowcast
                         )
+                        counts["strategy_snapshots"] += _record_strategy_snapshots(
+                            session, code, airport, market_rows, nowcast
+                        )
                     except Exception as exc:
                         print(f"WARN {code}/forecast journal/{market_target}: {exc}")
         session.commit()
@@ -528,6 +665,10 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
                             "max_temp_c": item["max_temp_c"],
                             "source": item["source"],
                             "horizon": item["horizon"],
+                            "model_run_at": item.get("model_run_at"),
+                            "available_at": item.get("available_at"),
+                            "fetched_at": item.get("fetched_at"),
+                            "provenance_status": item.get("provenance_status"),
                         },
                         f"{code}/{model} backfill",
                     )
@@ -538,4 +679,67 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
                 # Keep the free data endpoint below burst-rate limits.
                 time.sleep(1)
         session.commit()
+    return counts
+
+
+def backfill_market_history(
+    days: int = 30,
+    airport_codes: list[str] | None = None,
+) -> dict[str, int]:
+    """Sample historical Polymarket prices at fixed D-1 and D0 decision times."""
+    init_db()
+    catalog = airports()
+    counts = {"market_prices": 0, "airport_days": 0}
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=max(1, days) - 1)
+    with Session() as session:
+        for code in airport_codes or list(catalog):
+            airport = catalog[code]
+            zone = ZoneInfo(airport["timezone"])
+            for offset in range((end - start).days + 1):
+                target = start + timedelta(days=offset)
+                sample_times = [
+                    datetime(
+                        target.year,
+                        target.month,
+                        target.day,
+                        18,
+                        tzinfo=zone,
+                    ).astimezone(timezone.utc)
+                    - timedelta(days=1),
+                    datetime(
+                        target.year,
+                        target.month,
+                        target.day,
+                        9,
+                        tzinfo=zone,
+                    ).astimezone(timezone.utc),
+                ]
+                try:
+                    rows = polymarket_historical_prices(airport, target, sample_times)
+                except Exception as exc:
+                    print(f"WARN {code}/historical market/{target}: {exc}")
+                    continue
+                stored = _upsert_batch(
+                    session,
+                    MarketSnapshot,
+                    rows,
+                    lambda item: {
+                        "market_id": item["market_id"],
+                        "captured_at": item["captured_at"],
+                    },
+                    lambda item: {
+                        "airport": code,
+                        **{
+                            key: value
+                            for key, value in item.items()
+                            if key not in {"market_id", "captured_at"}
+                        },
+                    },
+                    f"{code}/historical market/{target}",
+                )
+                counts["market_prices"] += stored
+                counts["airport_days"] += int(stored > 0)
+                session.commit()
+                time.sleep(0.25)
     return counts

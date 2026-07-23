@@ -134,11 +134,11 @@ def metar_schedule_status(
     candidates = []
     hour = now.floor("h")
     for hour_offset in (-1, 0, 1):
-        base = hour + pd.Timedelta(hours=hour_offset)
-        candidates.extend(base + pd.Timedelta(minutes=minute) for minute in minutes)
+        base = hour + timedelta(hours=hour_offset)
+        candidates.extend(base + timedelta(minutes=minute) for minute in minutes)
     # Protection starts one minute before the nominal issue minute. It remains
     # active until an observation carrying that timestamp arrives.
-    eligible = [candidate for candidate in candidates if candidate <= now + pd.Timedelta(minutes=1)]
+    eligible = [candidate for candidate in candidates if candidate <= now + timedelta(minutes=1)]
     due = max(eligible) if eligible else None
     if due is None:
         return MetarScheduleStatus(False, None, "No routine report is currently due.")
@@ -163,6 +163,7 @@ def assess_day_status(
     target_date: date,
     local_now: datetime,
     observed_max: float | None,
+    latest_observed_temp: float | None = None,
     observation_age_hours: float | None,
     heating_rate: float | None,
     remaining_model_rise: float | None,
@@ -170,12 +171,7 @@ def assess_day_status(
     resolved_lower_c: float | None = None,
     resolved_upper_c: float | None = None,
 ) -> DayStatus:
-    """Decide whether a daily maximum can still change.
-
-    The live lock is deliberately conservative: it requires a fresh observation, a
-    non-rising temperature, almost no remaining sunlight and no meaningful rise in
-    the latest hourly model paths. A settled market may supply an official range.
-    """
+    """Decide whether a daily maximum can still change."""
     minimum_bucket = math.floor(observed_max + 0.5) if observed_max is not None else None
     has_resolution = resolved_lower_c is not None or resolved_upper_c is not None
     if has_resolution:
@@ -230,13 +226,20 @@ def assess_day_status(
     not_heating = heating_rate is not None and heating_rate <= 0.2
     sunlight_gone = future_radiation_max is not None and future_radiation_max <= 50
     models_done = remaining_model_rise is not None and remaining_model_rise <= 0.4
+    cooling_from_peak = (
+        observed_max is not None
+        and latest_observed_temp is not None
+        and latest_observed_temp <= observed_max - 0.5
+    )
+    decisive_evening = local_now.hour >= 20 and cooling_from_peak
+    heating_window_closed = sunlight_gone or decisive_evening
     if (
         minimum_bucket is not None
         and fresh_observation
         and late_enough
         and not_heating
-        and sunlight_gone
         and models_done
+        and heating_window_closed
     ):
         return DayStatus(
             phase="locked",
@@ -246,8 +249,8 @@ def assess_day_status(
             maximum_bucket=minimum_bucket,
             remaining_heating_c=max(0.0, remaining_model_rise),
             explanation=(
-                "Fresh METAR observations are no longer rising, sunlight is nearly gone and "
-                "the hourly models show no meaningful remaining warming."
+                "Fresh METAR observations are cooling and the METAR-anchored model paths "
+                "cannot reach the next temperature bucket."
             ),
         )
 
@@ -259,7 +262,22 @@ def assess_day_status(
         explanation = "The last observation is too old to decide whether the daily peak is final."
     else:
         label = "Heating window open"
-        explanation = "Further warming is still possible; only already-impossible lower buckets are removed."
+        blockers = []
+        if not late_enough:
+            blockers.append("it is still before 16:00 local")
+        if not not_heating:
+            blockers.append("the METAR trend is still rising or unavailable")
+        if not models_done:
+            blockers.append("an anchored model path can still reach a higher bucket")
+        if not heating_window_closed:
+            blockers.append("meaningful solar heating may remain")
+        explanation = (
+            "Further warming is still possible. Lock blockers: "
+            + "; ".join(blockers)
+            + "."
+            if blockers
+            else "Further warming is still possible."
+        )
     return DayStatus(
         phase="active",
         label=label,
@@ -426,7 +444,7 @@ def _lead_bucket(timing: str, hours_to_peak: object) -> str:
         return "D0 live · 1–3 h to peak"
     if hours >= 0:
         return "D0 live · <1 h to peak"
-    return "D0 live · after model peak"
+    return "D0 live · after median modelled peak"
 
 
 def forecast_ladder_frame(
@@ -449,7 +467,9 @@ def forecast_ladder_frame(
     )
     stage_columns = {
         "Raw model mean": "raw_model_mean_c",
-        "Bias corrected": "bias_corrected_c",
+        "Weighted raw ensemble": "weighted_raw_c",
+        "Bias corrected · equal weight": "bias_corrected_equal_c",
+        "Bias corrected · performance weighted": "bias_corrected_c",
         "METAR conditioned": "metar_conditioned_c",
         "Final incl. TAF": "final_forecast_c",
     }
@@ -505,14 +525,285 @@ def forecast_ladder_metrics(scored: pd.DataFrame) -> pd.DataFrame:
     result["mae_gain_vs_raw"] = result.raw_mae - result.mae
     order = {
         "Raw model mean": 0,
-        "Bias corrected": 1,
-        "METAR conditioned": 2,
-        "Final incl. TAF": 3,
+        "Weighted raw ensemble": 1,
+        "Bias corrected · equal weight": 2,
+        "Bias corrected · performance weighted": 3,
+        "METAR conditioned": 4,
+        "Final incl. TAF": 5,
     }
     result["stage_order"] = result.stage.map(order)
     return result.sort_values(
         ["airport", "timing", "lead_bucket", "stage_order"]
     ).drop(columns="stage_order")
+
+
+def historical_d1_ladder(
+    forecasts: pd.DataFrame,
+    actuals: pd.DataFrame,
+    lookback_days: int = 90,
+) -> pd.DataFrame:
+    """Leakage-safe reconstruction of four D-1 ensemble stages."""
+    if forecasts.empty or actuals.empty:
+        return pd.DataFrame()
+    d1 = forecasts[forecasts.horizon == "D-1"].copy()
+    if d1.empty:
+        return pd.DataFrame()
+    d1["target_date"] = pd.to_datetime(d1.target_date).dt.date
+    d1 = d1.sort_values("run_at").drop_duplicates(
+        ["airport", "model", "target_date"], keep="last"
+    )
+    actual = actuals[["airport", "target_date", "max_temp_c"]].copy()
+    actual["target_date"] = pd.to_datetime(actual.target_date).dt.date
+    paired = d1.merge(
+        actual,
+        on=["airport", "target_date"],
+        how="inner",
+        suffixes=("", "_actual"),
+    )
+    if paired.empty:
+        return pd.DataFrame()
+    paired["error"] = paired.max_temp_c - paired.max_temp_c_actual
+    rows: list[dict] = []
+    stages = (
+        "Raw model mean",
+        "Weighted raw ensemble",
+        "Bias corrected · equal weight",
+        "Bias corrected · performance weighted",
+    )
+    for airport, airport_frame in paired.groupby("airport"):
+        for target in sorted(airport_frame.target_date.unique()):
+            today = airport_frame[airport_frame.target_date == target]
+            history = airport_frame[
+                (airport_frame.target_date < target)
+                & (airport_frame.target_date >= target - timedelta(days=lookback_days))
+            ]
+            scored_history = history.rename(
+                columns={
+                    "max_temp_c": "max_temp_c_forecast",
+                    "max_temp_c_actual": "max_temp_c_actual",
+                }
+            )
+            bias_map = history.groupby("model").error.mean().to_dict()
+            weights = model_weight_map(scored_history) if not history.empty else {}
+            fallback = (
+                float(pd.Series(list(weights.values())).median()) if weights else 1.0
+            )
+            values = today.max_temp_c.astype(float).tolist()
+            biases = [float(bias_map.get(model, 0.0)) for model in today.model]
+            model_weights = [float(weights.get(model, fallback)) for model in today.model]
+            predictions = (
+                consensus(values).mean,
+                consensus(values, weights=model_weights).mean,
+                consensus(values, biases=biases).mean,
+                consensus(values, biases=biases, weights=model_weights).mean,
+            )
+            actual_value = float(today.max_temp_c_actual.iloc[0])
+            for stage, prediction in zip(stages, predictions):
+                rows.append(
+                    {
+                        "airport": str(airport),
+                        "target_date": target,
+                        "timing": "D-1 reconstructed",
+                        "lead_bucket": "D-1 historical",
+                        "stage": stage,
+                        "forecast_c": float(prediction),
+                        "max_temp_c": actual_value,
+                        "error": float(prediction) - actual_value,
+                        "abs_error": abs(float(prediction) - actual_value),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def live_factor_diagnostics(
+    snapshots: pd.DataFrame,
+    actuals: pd.DataFrame,
+) -> pd.DataFrame:
+    """Measure each conservative live factor as a cumulative walk through the center."""
+    if snapshots.empty or actuals.empty:
+        return pd.DataFrame()
+    required = [
+        "temp_anchor_adjustment_c",
+        "dryness_adjustment_c",
+        "cloud_adjustment_c",
+        "heating_rate_adjustment_c",
+        "recent_error_adjustment_c",
+        "radiation_adjustment_c",
+        "wind_adjustment_c",
+        "run_trend_adjustment_c",
+    ]
+    if any(column not in snapshots for column in required):
+        return pd.DataFrame()
+    frame = snapshots.copy()
+    frame["target_date"] = pd.to_datetime(frame.target_date).dt.date
+    actual = actuals[["airport", "target_date", "max_temp_c"]].copy()
+    actual["target_date"] = pd.to_datetime(actual.target_date).dt.date
+    merged = frame.merge(actual, on=["airport", "target_date"], how="inner")
+    merged = merged[merged.metar_conditioned_c.notna()].copy()
+    if merged.empty:
+        return pd.DataFrame()
+    merged["information_set"] = merged.apply(
+        lambda row: _lead_bucket(str(row.timing), row.get("hours_to_peak")),
+        axis=1,
+    )
+    labels = {
+        "temp_anchor_adjustment_c": "Temperature anchor",
+        "dryness_adjustment_c": "Dryness surprise",
+        "cloud_adjustment_c": "Cloud surprise",
+        "heating_rate_adjustment_c": "Heating-rate surprise",
+        "recent_error_adjustment_c": "Recent station error",
+        "radiation_adjustment_c": "Radiation proxy",
+        "wind_adjustment_c": "Observed wind sector",
+        "run_trend_adjustment_c": "Model-run trend",
+    }
+    rows = []
+    for (airport, information_set), airport_frame in merged.groupby(
+        ["airport", "information_set"]
+    ):
+        running = airport_frame.bias_corrected_c.astype(float).copy()
+        previous_mae = float((running - airport_frame.max_temp_c).abs().mean())
+        rows.append(
+            {
+                "airport": airport,
+                "information_set": information_set,
+                "factor": "Bias-corrected baseline",
+                "n_snapshots": len(airport_frame),
+                "n_days": int(airport_frame.target_date.nunique()),
+                "average_contribution_c": 0.0,
+                "cumulative_mae": previous_mae,
+                "marginal_mae_gain": 0.0,
+            }
+        )
+        for column in required:
+            contribution = pd.to_numeric(
+                airport_frame[column], errors="coerce"
+            ).fillna(0.0)
+            running = running + contribution
+            mae = float((running - airport_frame.max_temp_c).abs().mean())
+            rows.append(
+                {
+                    "airport": airport,
+                    "information_set": information_set,
+                    "factor": labels[column],
+                    "n_snapshots": len(airport_frame),
+                    "n_days": int(airport_frame.target_date.nunique()),
+                    "average_contribution_c": float(contribution.mean()),
+                    "cumulative_mae": mae,
+                    "marginal_mae_gain": previous_mae - mae,
+                }
+            )
+            previous_mae = mae
+    return pd.DataFrame(rows)
+
+
+def settled_strategy_performance(
+    strategies: pd.DataFrame,
+    markets: pd.DataFrame,
+    stake: float = 1.0,
+) -> pd.DataFrame:
+    """Settle one consensus-bucket entry per strategy, timing and airport-day."""
+    if strategies.empty or markets.empty:
+        return pd.DataFrame()
+    candidates = strategies.copy()
+    candidates["captured_at"] = pd.to_datetime(candidates.captured_at, utc=True)
+    candidates["buy_price"] = pd.to_numeric(candidates.buy_price, errors="coerce")
+    candidates = candidates[
+        (candidates.buy_price > 0) & (candidates.buy_price < 1)
+    ]
+    if candidates.empty:
+        return pd.DataFrame()
+    entries = candidates.sort_values("captured_at").drop_duplicates(
+        ["airport", "target_date", "timing", "strategy"], keep="first"
+    )
+    outcomes = resolved_market_outcomes(markets)
+    settled = entries.merge(outcomes, on="market_id", how="inner")
+    if settled.empty:
+        return settled
+    settled["won"] = settled.yes_won.astype(bool)
+    settled["pnl"] = settled.apply(
+        lambda row: stake / row.buy_price - stake if row.won else -stake,
+        axis=1,
+    )
+    settled = settled.sort_values(["target_date", "captured_at"])
+    settled["cumulative_pnl"] = settled.groupby(
+        ["strategy", "timing"]
+    ).pnl.cumsum()
+    return settled
+
+
+def historical_price_strategy_simulation(
+    reconstructed: pd.DataFrame,
+    markets: pd.DataFrame,
+    stake: float = 1.0,
+) -> pd.DataFrame:
+    """Combine reconstructed D-1 forecasts with sampled historical trade prices."""
+    if reconstructed.empty or markets.empty:
+        return pd.DataFrame()
+    history = markets.copy()
+    history["captured_at"] = pd.to_datetime(history.captured_at, utc=True)
+    history["target_date"] = pd.to_datetime(history.target_date).dt.date
+    if "price_kind" in history:
+        history = history[
+            history.price_kind == "historical trade-price sample"
+        ].copy()
+    else:
+        history = history[history.best_ask.isna()].copy()
+    history = history[history.yes_won.notna()].copy()
+    if history.empty:
+        return pd.DataFrame()
+    rows = []
+    for forecast in reconstructed.itertuples():
+        target_markets = history[
+            (history.airport == forecast.airport)
+            & (history.target_date == forecast.target_date)
+        ]
+        if target_markets.empty:
+            continue
+        # The market-history backfill stores D-1 samples before D0 samples.
+        sampled_at = target_markets.captured_at.min()
+        sample = target_markets[target_markets.captured_at == sampled_at]
+        bucket = math.floor(float(forecast.forecast_c) + 0.5)
+        match = sample[
+            sample.apply(
+                lambda row, selected_bucket=bucket: (
+                    (
+                        pd.isna(row.bucket_low_c)
+                        or selected_bucket >= float(row.bucket_low_c)
+                    )
+                    and (
+                        pd.isna(row.bucket_high_c)
+                        or selected_bucket <= float(row.bucket_high_c)
+                    )
+                ),
+                axis=1,
+            )
+        ]
+        if match.empty:
+            continue
+        market = match.iloc[0]
+        price = float(market.yes_price)
+        if not 0 < price < 1:
+            continue
+        won = bool(market.yes_won)
+        rows.append(
+            {
+                "airport": forecast.airport,
+                "target_date": forecast.target_date,
+                "timing": "D-1 historical price",
+                "strategy": forecast.stage,
+                "bucket_label": market.bucket_label,
+                "model_bucket_c": bucket,
+                "buy_price": price,
+                "won": won,
+                "pnl": stake / price - stake if won else -stake,
+                "price_basis": "historical trade-price sample",
+            }
+        )
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        result = result.sort_values("target_date")
+        result["cumulative_pnl"] = result.groupby("strategy").pnl.cumsum()
+    return result
 
 
 def resolved_market_outcomes(markets: pd.DataFrame) -> pd.DataFrame:
@@ -826,6 +1117,24 @@ def _wind_heat_effect(
             f"Strong {source_label} wind ({wind_label}) makes local spike heating less reliable",
         )
     return 0, 0.0, f"{source_label} wind is neutral ({wind_label})"
+
+
+def wind_heat_adjustment(
+    *,
+    speed_kph: float | None,
+    direction_deg: float | None,
+    warm_sectors=None,
+    cool_sectors=None,
+    source: str = "model",
+) -> float:
+    """Expose the numerical part of the airport wind-sector correction."""
+    return _wind_heat_effect(
+        speed_kph=speed_kph,
+        direction_deg=direction_deg,
+        warm_sectors=warm_sectors,
+        cool_sectors=cool_sectors,
+        source=source,
+    )[1]
 
 
 def heat_spike_assessment(
