@@ -1,0 +1,44 @@
+name: 3 - Backfill historical market prices
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Past market days to sample (start with 14–30)"
+        required: true
+        default: "30"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weatherman-database
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Weatherman
+        run: pip install .
+
+      - name: Sample historical prices
+        run: python -m weatherman.cli backfill-market-history --days ${{ inputs.days }}
+
+      - name: Save price history in repository
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -f data/weatherman.db
+          git diff --cached --quiet || git commit -m "data: historical market-price samples"
+          git push
