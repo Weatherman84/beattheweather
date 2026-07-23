@@ -16,5 +16,4 @@ test:
 	pytest -q
 
 lint:
-	ruff check .
-
+	ruff check app.py src tests

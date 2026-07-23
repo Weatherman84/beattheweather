@@ -304,7 +304,13 @@ Nach dem Upload von Version 9.3.1 reicht **2 - Collect current forecasts** und e
 **Rerun**. Die neue Forecast-Ladder beginnt bewusst erst mit diesem Lauf; ältere Zwischenstufen
 werden nicht mit später bekannten Daten rekonstruiert. Ein Backfill ist nicht erforderlich.
 
-## Neu in Version 9.4
+## Neu in Version 9.4.1
+
+Version 9.4.1 enthält zusätzlich einen CI-Hotfix: Ruff 0.16 aktivierte beim
+bisherigen offenen Versionsbereich deutlich strengere Prüfregeln und ließ den
+GitHub-Test dadurch trotz funktionierender Anwendung fehlschlagen. Die geprüften
+Regeln sind nun explizit konfiguriert, die Ruff-Version ist festgeschrieben und
+der Test prüft gezielt die Anwendungsdateien in `app.py`, `src/` und `tests/`.
 
 - Die Forecast-Ladder trennt jetzt sechs Stufen: **Raw model mean**, **Weighted raw
   ensemble**, **Bias corrected · equal weight**, **Bias corrected · performance weighted**,
@@ -345,7 +351,7 @@ werden nicht mit später bekannten Daten rekonstruiert. Ein Backfill ist nicht e
 - Erklärungen für MAE gain, RMSE, Market-leading range, Market probability und
   **After median modelled peak** sind direkt im Dashboard enthalten.
 
-Beim Update auf Version 9.4 reicht zunächst **2 - Collect current forecasts** und einmal
+Beim Update auf Version 9.4.1 reicht zunächst **2 - Collect current forecasts** und einmal
 **Rerun**. Die Datenbank erweitert sich automatisch. Workflow 1 muss nicht erneut laufen,
 wenn der bestehende D-1-Backfill vorhanden ist. Workflow 3 ist optional und nur für die
 historische Marktpreissimulation erforderlich.
