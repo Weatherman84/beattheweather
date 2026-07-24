@@ -412,6 +412,19 @@ historische Marktpreissimulation erforderlich.
 Die bestehende Datenbank und alle v9.4.1-Snapshots bleiben erhalten. Die neue
 Universe-Tabelle und alle benötigten Indizes werden automatisch ergänzt.
 
+## Korrektur in Version 9.5.1
+
+Streamlit kann bei einem Update einzelne Python-Module der vorherigen Version bis
+zum nächsten Prozessneustart im Arbeitsspeicher behalten. Dadurch konnte die neue
+v9.5-App bereits geladen sein, während `weatherman.settings` noch aus v9.4.1
+stammte. Der Start brach dann beim Import von `trading_airports` ab.
+
+Version 9.5.1 erkennt und verwirft solche veralteten Weatherman-Module vor dem
+Start. Die neuen Trading-, Research- und City-Mapping-Kataloge sind außerdem in
+einem abwärtskompatiblen Modul gekapselt, das nur die bereits in v9.4.1 vorhandene
+`airports()`-Funktion voraussetzt. Datenbank und gespeicherte Forecasts bleiben
+unverändert.
+
 ## Wichtig zum Dashboard
 
 Die GitHub-Workflows sammeln und speichern die Daten. Eine normale GitHub-Seite führt das

@@ -10,6 +10,7 @@ import pandas as pd
 from sqlalchemy import select
 
 from .analytics import detect_market_model_conflict, market_edges
+from .catalog import market_city_index, research_airports, trading_airports
 from .db import (
     AirportMarketUniverse,
     DailyActual,
@@ -37,12 +38,7 @@ from .providers import (
     recent_metars,
     recent_tafs,
 )
-from .settings import (
-    airports,
-    market_city_index,
-    research_airports,
-    trading_airports,
-)
+from .settings import airports
 
 
 def _upsert(session, model, keys: dict, values: dict) -> None:

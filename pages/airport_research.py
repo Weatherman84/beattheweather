@@ -5,9 +5,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "src"
+APP_ROOT = Path(__file__).resolve().parents[1]
+SRC = APP_ROOT / "src"
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
+from runtime_bootstrap import discard_stale_weatherman_modules
+
+discard_stale_weatherman_modules("9.5.1")
 
 import pandas as pd
 import plotly.express as px
@@ -42,7 +49,7 @@ from weatherman.db import (
     init_db,
     refresh_database_connections,
 )
-from weatherman.settings import research_airports
+from weatherman.catalog import research_airports
 
 
 st.set_page_config(

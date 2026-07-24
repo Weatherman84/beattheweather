@@ -9,6 +9,10 @@ SRC = Path(__file__).resolve().parent / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from runtime_bootstrap import discard_stale_weatherman_modules
+
+discard_stale_weatherman_modules("9.5.1")
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -38,7 +42,7 @@ from weatherman.db import (
 )
 from weatherman.nowcast import build_live_nowcast
 from weatherman.service import collect, collect_live_aviation
-from weatherman.settings import trading_airports
+from weatherman.catalog import trading_airports
 from weatherman.taf import taf_verification_frame, taf_verification_metrics
 
 
