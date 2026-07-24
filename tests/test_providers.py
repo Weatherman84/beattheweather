@@ -186,3 +186,33 @@ def test_polymarket_prices_parse_exact_and_boundary_ranges(monkeypatch):
     assert rows[0]["bucket_high_c"] == 25
     assert rows[1]["bucket_low_c"] == rows[1]["bucket_high_c"] == 26
     assert rows[1]["token_id"] == "yes-exact"
+
+
+def test_temperature_market_discovery_keeps_unknown_cities(monkeypatch):
+    monkeypatch.setattr(
+        providers,
+        "_get",
+        lambda *_args, **_kwargs: [
+            {
+                "slug": "highest-temperature-in-new-city-on-july-25-2026",
+                "title": "Highest temperature in New City on July 25?",
+                "active": True,
+                "closed": False,
+                "resolutionSource": "https://example.test/new-city",
+                "markets": [{"groupItemTitle": "90-91°F"}],
+            },
+            {"slug": "will-it-rain-tomorrow", "title": "Will it rain?"},
+        ],
+    )
+    rows = providers.discover_polymarket_temperature_events(max_pages=1)
+    assert rows == [
+        {
+            "market_city": "new-city",
+            "display_name": "New City",
+            "target_date": date(2026, 7, 25),
+            "event_slug": "highest-temperature-in-new-city-on-july-25-2026",
+            "resolution_source": "https://example.test/new-city",
+            "market_unit": "F",
+            "active": True,
+        }
+    ]

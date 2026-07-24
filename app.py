@@ -17,20 +17,10 @@ from sqlalchemy import func, select
 from weatherman.analytics import (
     flat_bet_simulation,
     detect_market_model_conflict,
-    forecast_ladder_frame,
-    forecast_ladder_metrics,
     forecast_scorecards,
-    historical_d1_ladder,
-    historical_price_strategy_simulation,
-    live_factor_diagnostics,
     market_edges,
     model_metrics,
-    preferred_station_actuals,
     score_frame,
-    settled_probability_comparison,
-    settled_signal_performance,
-    settled_strategy_performance,
-    trading_airport_scorecards,
 )
 from weatherman.db import (
     DailyActual,
@@ -48,7 +38,7 @@ from weatherman.db import (
 )
 from weatherman.nowcast import build_live_nowcast
 from weatherman.service import collect, collect_live_aviation
-from weatherman.settings import airports
+from weatherman.settings import trading_airports
 from weatherman.taf import taf_verification_frame, taf_verification_metrics
 
 
@@ -92,15 +82,21 @@ def cached_forecast_scorecards(
     return forecast_scorecards(forecast_frame, actual_frame)
 
 
-st.set_page_config(page_title="Weatherman", page_icon="🌡️", layout="wide")
+st.set_page_config(page_title="Weatherman · Trading Desk", page_icon="🌡️", layout="wide")
 # A GitHub workflow can replace the SQLite file while Streamlit is still alive.
 # Reopening pooled handles on every rerun makes that new snapshot visible without
 # requiring the user to reboot the whole app.
 refresh_database_connections()
 init_db()
-catalog = airports()
+catalog = trading_airports()
 
-st.title("Weatherman · Temperature Market Lab")
+st.sidebar.markdown(
+    "### Navigation\n"
+    "- [🌡️ Trading Desk](/)\n"
+    "- [📊 Airport Research](/airport_research)"
+)
+st.sidebar.divider()
+st.title("Weatherman · Trading Desk")
 airport = st.sidebar.selectbox(
     "Airport", list(catalog), format_func=lambda code: f"{code} · {catalog[code]['name']}"
 )
@@ -218,17 +214,34 @@ if st.sidebar.button("Refresh forecasts + METAR + TAF", type="primary"):
         st.rerun()
 
 with Session() as session:
-    all_forecasts = pd.read_sql(select(Forecast), session.bind)
-    all_actuals = pd.read_sql(select(DailyActual), session.bind)
-    all_observations = pd.read_sql(select(Observation), session.bind)
+    all_forecasts = pd.read_sql(
+        select(Forecast).where(Forecast.airport == airport), session.bind
+    )
+    all_actuals = pd.read_sql(
+        select(DailyActual).where(DailyActual.airport == airport), session.bind
+    )
+    all_observations = pd.read_sql(
+        select(Observation).where(Observation.airport == airport), session.bind
+    )
     hourly = pd.read_sql(
         select(HourlyForecast).where(HourlyForecast.airport == airport), session.bind
     )
-    all_market_snapshots = pd.read_sql(select(MarketSnapshot), session.bind)
-    all_signal_snapshots = pd.read_sql(select(SignalSnapshot), session.bind)
-    all_strategy_snapshots = pd.read_sql(select(StrategySnapshot), session.bind)
-    all_forecast_snapshots = pd.read_sql(select(ForecastSnapshot), session.bind)
-    all_tafs = pd.read_sql(select(TafReport), session.bind)
+    all_market_snapshots = pd.read_sql(
+        select(MarketSnapshot).where(MarketSnapshot.airport == airport), session.bind
+    )
+    all_signal_snapshots = pd.read_sql(
+        select(SignalSnapshot).where(SignalSnapshot.airport == airport), session.bind
+    )
+    all_strategy_snapshots = pd.read_sql(
+        select(StrategySnapshot).where(StrategySnapshot.airport == airport), session.bind
+    )
+    all_forecast_snapshots = pd.read_sql(
+        select(ForecastSnapshot).where(ForecastSnapshot.airport == airport),
+        session.bind,
+    )
+    all_tafs = pd.read_sql(
+        select(TafReport).where(TafReport.airport == airport), session.bind
+    )
 
 forecasts = (
     all_forecasts[all_forecasts.airport == airport].copy()
@@ -276,40 +289,22 @@ else:
     latest_markets = target_markets
 d1_forecasts = forecasts[forecasts.horizon == "D-1"].copy() if not forecasts.empty else forecasts
 d1_scored = score_frame(d1_forecasts, actuals)
-settled_performance = settled_signal_performance(
-    all_signal_snapshots, all_market_snapshots
-)
-probability_comparison = settled_probability_comparison(
-    all_signal_snapshots, all_market_snapshots
-)
-trade_scorecards = trading_airport_scorecards(
-    settled_performance, probability_comparison
-)
-station_actuals = preferred_station_actuals(
-    all_observations,
-    all_actuals,
-    {code: item["timezone"] for code, item in catalog.items()},
-)
-airport_station_actuals = station_actuals[
-    station_actuals.airport == airport
-].copy()
-d1_scored = score_frame(d1_forecasts, airport_station_actuals)
-airport_forecast_scorecards = cached_forecast_scorecards(
-    all_forecasts, station_actuals
-)
-ladder_scored = forecast_ladder_frame(all_forecast_snapshots, station_actuals)
-ladder_metrics = forecast_ladder_metrics(ladder_scored)
-historical_ladder = historical_d1_ladder(all_forecasts, station_actuals)
-historical_ladder_metrics = forecast_ladder_metrics(historical_ladder)
-factor_diagnostics = live_factor_diagnostics(
-    all_forecast_snapshots, station_actuals
-)
-strategy_performance = settled_strategy_performance(
-    all_strategy_snapshots, all_market_snapshots
-)
-historical_price_performance = historical_price_strategy_simulation(
-    historical_ladder, all_market_snapshots
-)
+# Cross-airport scoring is intentionally deferred to the Airport Research page.
+# Keeping placeholders makes the former tab implementation below import-safe while
+# st.stop() prevents it from being rendered on the Trading Desk.
+settled_performance = pd.DataFrame()
+probability_comparison = pd.DataFrame()
+trade_scorecards = pd.DataFrame()
+station_actuals = pd.DataFrame()
+airport_station_actuals = pd.DataFrame()
+d1_scored = pd.DataFrame()
+airport_forecast_scorecards = pd.DataFrame()
+ladder_metrics = pd.DataFrame()
+historical_ladder = pd.DataFrame()
+historical_ladder_metrics = pd.DataFrame()
+factor_diagnostics = pd.DataFrame()
+strategy_performance = pd.DataFrame()
+historical_price_performance = pd.DataFrame()
 
 st.caption(
     f"Last data update · Forecast: {last_update(forecasts, 'run_at', timezone_name)} · "
@@ -320,25 +315,8 @@ st.caption(
     f"({timezone_name} local time)"
 )
 
-(
-    tab_live,
-    tab_market,
-    tab_performance,
-    tab_airports,
-    tab_accuracy,
-    tab_simulation,
-    tab_data,
-) = st.tabs(
-    [
-        "Live forecast",
-        "Market comparison",
-        "Tracked performance",
-        "Airport analysis",
-        "Accuracy by timing",
-        "D-1 $1 simulation",
-        "Data coverage",
-    ]
-)
+tab_live, tab_market = st.tabs(["Live forecast", "Market comparison"])
+tab_performance = tab_airports = tab_accuracy = tab_simulation = tab_data = None
 
 probabilities: dict[int, float] | None = None
 day_status = None
@@ -571,6 +549,11 @@ with tab_live:
             "Fetched time is not relabelled as model initialization. Meteoblue supplies mLM "
             "run metadata when available; Open-Meteo's regular forecast response may not expose "
             "the underlying NWP run, which is shown explicitly."
+        )
+        st.caption(
+            "The scheduled workflow refreshes weather models every three hours. The sidebar "
+            "button performs an immediate full fetch for this airport; a value can remain "
+            "unchanged when the provider still serves the same model run."
         )
         chart = current[["model", "max_temp_c", "corrected_max"]].melt(
             id_vars="model", var_name="forecast", value_name="temperature_c"
@@ -834,6 +817,10 @@ with tab_market:
                 "probability is that displayed YES price. Buying YES normally requires the ask, "
                 "which can be higher. Missing asks use the displayed value only as an approximation."
             )
+
+
+# Airport-wide analytics live on their own page and are not evaluated on Trading Desk reruns.
+st.stop()
 
 
 with tab_performance:

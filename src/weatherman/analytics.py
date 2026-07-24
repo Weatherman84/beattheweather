@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -429,10 +430,14 @@ def preferred_station_actuals(
 
 
 def _lead_bucket(timing: str, hours_to_peak: object) -> str:
+    if timing == "D-1 Evening · 20:00":
+        return "D-1 Evening · 20:00"
+    if timing == "D0 Morning · 10:00":
+        return "D0 Morning · 10:00"
     if timing == "D-1 or earlier":
-        return "D-1"
+        return "D-1 collection"
     if timing == "D0 morning":
-        return "D0 morning"
+        return "D0 collection before noon"
     if hours_to_peak is None or pd.isna(hours_to_peak):
         return "D0 live · peak unknown"
     hours = float(hours_to_peak)
@@ -445,6 +450,64 @@ def _lead_bucket(timing: str, hours_to_peak: object) -> str:
     if hours >= 0:
         return "D0 live · <1 h to peak"
     return "D0 live · after median modelled peak"
+
+
+def fixed_decision_snapshots(
+    snapshots: pd.DataFrame,
+    timezone_by_airport: dict[str, str],
+    *,
+    max_age_hours: float = 6.0,
+) -> pd.DataFrame:
+    """Select the latest snapshot known at two exact local decision cut-offs.
+
+    A snapshot after the cut-off is never used. ``checkpoint_gap_minutes`` exposes
+    how far before 20:00/10:00 the source snapshot was captured, so a delayed
+    workflow cannot be mistaken for an exact historical information set.
+    """
+    if snapshots.empty:
+        return pd.DataFrame()
+    frame = snapshots.copy()
+    frame["captured_at"] = pd.to_datetime(frame.captured_at, utc=True)
+    frame["target_date"] = pd.to_datetime(frame.target_date).dt.date
+    rows: list[pd.Series] = []
+    checkpoints = (
+        ("D-1 Evening · 20:00", -1, 20),
+        ("D0 Morning · 10:00", 0, 10),
+    )
+    for (airport, target), day in frame.groupby(["airport", "target_date"]):
+        timezone_name = timezone_by_airport.get(str(airport))
+        if not timezone_name:
+            continue
+        zone = ZoneInfo(timezone_name)
+        for label, day_offset, hour in checkpoints:
+            local_day = target + timedelta(days=day_offset)
+            decision_at = pd.Timestamp(
+                datetime(
+                    local_day.year,
+                    local_day.month,
+                    local_day.day,
+                    hour,
+                    tzinfo=zone,
+                )
+            ).tz_convert("UTC")
+            minimum_at = pd.Timestamp(
+                decision_at.to_pydatetime()
+                - timedelta(hours=float(max_age_hours))
+            )
+            candidates = day[
+                (day.captured_at <= decision_at)
+                & (day.captured_at >= minimum_at)
+            ]
+            if candidates.empty:
+                continue
+            selected = candidates.sort_values("captured_at").iloc[-1].copy()
+            selected["timing"] = label
+            selected["decision_at"] = decision_at
+            selected["checkpoint_gap_minutes"] = (
+                decision_at - selected["captured_at"]
+            ).total_seconds() / 60
+            rows.append(selected)
+    return pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
 
 
 def forecast_ladder_frame(
@@ -603,8 +666,8 @@ def historical_d1_ladder(
                     {
                         "airport": str(airport),
                         "target_date": target,
-                        "timing": "D-1 reconstructed",
-                        "lead_bucket": "D-1 historical",
+                        "timing": "D-1 · 24h lead",
+                        "lead_bucket": "D-1 · 24h lead",
                         "stage": stage,
                         "forecast_c": float(prediction),
                         "max_temp_c": actual_value,

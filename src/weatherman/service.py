@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from .analytics import detect_market_model_conflict, market_edges
 from .db import (
+    AirportMarketUniverse,
     DailyActual,
     Forecast,
     ForecastSnapshot,
@@ -25,6 +26,7 @@ from .db import (
 )
 from .nowcast import build_live_nowcast
 from .providers import (
+    discover_polymarket_temperature_events,
     historical_actuals,
     meteoblue_forecast,
     open_meteo_forecast,
@@ -35,7 +37,12 @@ from .providers import (
     recent_metars,
     recent_tafs,
 )
-from .settings import airports
+from .settings import (
+    airports,
+    market_city_index,
+    research_airports,
+    trading_airports,
+)
 
 
 def _upsert(session, model, keys: dict, values: dict) -> None:
@@ -77,6 +84,62 @@ def _signal_timing(captured_at: datetime, target: date, timezone_name: str) -> s
     if local.date() > target:
         return "After target day"
     return "D0 morning" if local.hour < 12 else "D0 live"
+
+
+def sync_airport_universe(*, include_closed: bool = False) -> dict[str, int]:
+    """Persist every discovered market city, including cities without a station map."""
+    init_db()
+    events = discover_polymarket_temperature_events(include_closed=include_closed)
+    city_index = market_city_index()
+    now = datetime.now(timezone.utc)
+    mapped = 0
+    unknown = 0
+    with Session() as session:
+        if events and not include_closed:
+            for existing in session.scalars(
+                select(AirportMarketUniverse).where(AirportMarketUniverse.active.is_(True))
+            ):
+                existing.active = False
+        for event in events:
+            match = city_index.get(event["market_city"])
+            code = match[0] if match else None
+            details = match[1] if match else {}
+            status = (
+                details.get("station_match", "candidate station")
+                if match
+                else "station mapping required"
+            )
+            current = session.scalar(
+                select(AirportMarketUniverse).where(
+                    AirportMarketUniverse.market_city == event["market_city"]
+                )
+            )
+            values = {
+                "display_name": event["display_name"],
+                "airport": code,
+                "mapping_status": status,
+                "market_unit": event.get("market_unit"),
+                "resolution_source": event.get("resolution_source"),
+                "last_seen_at": now,
+                "latest_event_slug": event["event_slug"],
+                "latest_target_date": event["target_date"],
+                "active": bool(event.get("active", True)),
+            }
+            if current is None:
+                session.add(
+                    AirportMarketUniverse(
+                        market_city=event["market_city"],
+                        first_seen_at=now,
+                        **values,
+                    )
+                )
+            else:
+                for key, value in values.items():
+                    setattr(current, key, value)
+            mapped += int(code is not None)
+            unknown += int(code is None)
+        session.commit()
+    return {"cities": len(events), "mapped": mapped, "unmapped": unknown}
 
 
 def _build_nowcast_from_session(
@@ -385,6 +448,8 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
     }
     catalog = airports()
     selected_codes = airport_codes or list(catalog)
+    if airport_codes is None:
+        selected_codes = list(trading_airports())
     try:
         fetched_tafs = recent_tafs(selected_codes)
     except Exception as exc:
@@ -564,6 +629,180 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
     return counts
 
 
+def collect_research_checkpoints(
+    airport_codes: list[str] | None = None,
+    *,
+    now: datetime | None = None,
+    window_minutes: int = 30,
+) -> dict[str, int]:
+    """Collect lightweight model snapshots just before 20:00 D-1 and 10:00 D0.
+
+    The workflow may run every 30 minutes, but only airports whose exact local
+    checkpoint is imminent are fetched. Full METAR/TAF/Meteoblue collection remains
+    limited to the Trading Desk airport tier.
+    """
+    init_db()
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    counts = {
+        "universe_cities": 0,
+        "mapped_cities": 0,
+        "unmapped_cities": 0,
+        "airports_due": 0,
+        "forecasts": 0,
+        "forecast_snapshots": 0,
+        "actuals": 0,
+    }
+    try:
+        universe_counts = sync_airport_universe()
+    except Exception as exc:
+        print(f"WARN Polymarket airport-universe sync: {exc}")
+    else:
+        counts["universe_cities"] = universe_counts["cities"]
+        counts["mapped_cities"] = universe_counts["mapped"]
+        counts["unmapped_cities"] = universe_counts["unmapped"]
+
+    catalog = research_airports()
+    with Session() as session:
+        universe_rows = list(
+            session.scalars(
+                select(AirportMarketUniverse).where(
+                    AirportMarketUniverse.active.is_(True),
+                    AirportMarketUniverse.airport.is_not(None),
+                )
+            )
+        )
+        targets_by_airport: dict[str, set[date]] = {}
+        for row in universe_rows:
+            if row.airport and row.latest_target_date:
+                targets_by_airport.setdefault(row.airport, set()).add(row.latest_target_date)
+        selected_codes = airport_codes or sorted(targets_by_airport)
+        for code in selected_codes:
+            if code not in catalog:
+                continue
+            airport = catalog[code]
+            zone = ZoneInfo(airport["timezone"])
+            local_now = current_time.astimezone(zone)
+            targets = targets_by_airport.get(code)
+            if not targets and airport_codes:
+                targets = {local_now.date(), local_now.date() + timedelta(days=1)}
+            due: list[tuple[date, datetime]] = []
+            for target in targets or set():
+                checkpoints = (
+                    datetime(
+                        target.year,
+                        target.month,
+                        target.day,
+                        10,
+                        tzinfo=zone,
+                    ),
+                    datetime(
+                        target.year,
+                        target.month,
+                        target.day,
+                        20,
+                        tzinfo=zone,
+                    )
+                    - timedelta(days=1),
+                )
+                for cutoff in checkpoints:
+                    seconds_to_cutoff = (cutoff - local_now).total_seconds()
+                    if 0 <= seconds_to_cutoff <= window_minutes * 60:
+                        cutoff_utc = cutoff.astimezone(timezone.utc)
+                        existing = session.scalar(
+                            select(ForecastSnapshot.id).where(
+                                ForecastSnapshot.airport == code,
+                                ForecastSnapshot.target_date == target,
+                                ForecastSnapshot.captured_at <= cutoff_utc,
+                                ForecastSnapshot.captured_at
+                                >= cutoff_utc - timedelta(minutes=window_minutes),
+                            )
+                        )
+                        if existing is None:
+                            due.append((target, cutoff_utc))
+            if not due:
+                continue
+            counts["airports_due"] += 1
+            batches: list[dict] = []
+            models = airport.get(
+                "research_models",
+                ["ecmwf_ifs025", "gfs_global", "icon_global"],
+            )
+            for model in models:
+                try:
+                    batches.extend(open_meteo_forecast(airport, model, days=3))
+                except Exception as exc:
+                    print(f"WARN {code}/{model} research checkpoint: {exc}")
+            counts["forecasts"] += _upsert_batch(
+                session,
+                Forecast,
+                batches,
+                lambda item: {
+                    "airport": code,
+                    "model": item["model"],
+                    "run_at": item["run_at"],
+                    "target_date": item["target_date"],
+                },
+                lambda item: {
+                    "max_temp_c": item["max_temp_c"],
+                    "source": item["source"],
+                    "horizon": item["horizon"],
+                    "model_run_at": item.get("model_run_at"),
+                    "available_at": item.get("available_at"),
+                    "fetched_at": item.get("fetched_at", item["run_at"]),
+                    "provenance_status": item.get("provenance_status"),
+                },
+                f"{code}/research checkpoint forecasts",
+            )
+            try:
+                actual_end = date.today() - timedelta(days=6)
+                actual_rows = historical_actuals(
+                    airport, actual_end - timedelta(days=13), actual_end
+                )
+            except Exception as exc:
+                print(f"WARN {code}/research actuals: {exc}")
+            else:
+                counts["actuals"] += _upsert_batch(
+                    session,
+                    DailyActual,
+                    actual_rows,
+                    lambda item: {
+                        "airport": code,
+                        "target_date": item["target_date"],
+                    },
+                    lambda item: {
+                        "max_temp_c": item["max_temp_c"],
+                        "source": "open-meteo-archive",
+                    },
+                    f"{code}/research actuals",
+                )
+            captured_at = max(
+                (item.get("fetched_at", item["run_at"]) for item in batches),
+                default=current_time,
+            )
+            for target, _cutoff in due:
+                try:
+                    nowcast = _build_nowcast_from_session(
+                        session,
+                        code,
+                        airport,
+                        target,
+                        captured_at,
+                        [],
+                    )
+                    counts["forecast_snapshots"] += _record_forecast_snapshot(
+                        session,
+                        code,
+                        airport,
+                        target,
+                        captured_at,
+                        nowcast,
+                    )
+                except Exception as exc:
+                    print(f"WARN {code}/research checkpoint journal/{target}: {exc}")
+            session.commit()
+    return counts
+
+
 def collect_live_aviation(
     airport_code: str,
     *,
@@ -627,7 +866,7 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
     end = date.today() - timedelta(days=6)
     start = end - timedelta(days=days - 1)
     counts = {"forecasts": 0, "actuals": 0}
-    catalog = airports()
+    catalog = research_airports()
     with Session() as session:
         for code in airport_codes or list(catalog):
             airport = catalog[code]
@@ -689,11 +928,12 @@ def backfill_market_history(
     """Sample historical Polymarket prices at fixed D-1 and D0 decision times."""
     init_db()
     catalog = airports()
+    selected_codes = airport_codes or list(trading_airports())
     counts = {"market_prices": 0, "airport_days": 0}
     end = date.today() - timedelta(days=1)
     start = end - timedelta(days=max(1, days) - 1)
     with Session() as session:
-        for code in airport_codes or list(catalog):
+        for code in selected_codes:
             airport = catalog[code]
             zone = ZoneInfo(airport["timezone"])
             for offset in range((end - start).days + 1):
@@ -703,7 +943,7 @@ def backfill_market_history(
                         target.year,
                         target.month,
                         target.day,
-                        18,
+                        20,
                         tzinfo=zone,
                     ).astimezone(timezone.utc)
                     - timedelta(days=1),
@@ -711,7 +951,7 @@ def backfill_market_history(
                         target.year,
                         target.month,
                         target.day,
-                        9,
+                        10,
                         tzinfo=zone,
                     ).astimezone(timezone.utc),
                 ]

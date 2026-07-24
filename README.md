@@ -102,9 +102,15 @@ fehlgeschlagenen Workflow und kopiere die rote Fehlermeldung in den Chat.
 
 ## Enthaltene Flughäfen und Modelle
 
-Das Projekt sammelt Daten für Madrid, Amsterdam, Warschau und Ankara. Verglichen werden
-ECMWF, GFS, ICON, UKMO, ARPEGE, verfügbare AROME/HARMONIE-Modelle sowie optional
-Meteoblue.
+Das **Trading Desk** sammelt die vollständigen Live-Daten weiterhin für Madrid,
+Amsterdam, Warschau und Ankara. **Airport Research** führt zusätzlich einen breiten
+Katalog internationaler Polymarket-Temperaturstationen und entdeckt neue
+Temperaturmarkt-Städte automatisch. Noch nicht zuordenbare Städte bleiben sichtbar als
+`station mapping required`, statt still ausgelassen zu werden.
+
+Für das breite Research werden ECMWF, GFS und ICON sowie feste Entscheidungs-Snapshots
+verwendet. Die regionalen Modelle, Meteoblue, METAR, TAF und die engmaschige
+Polymarket-Preissammlung bleiben auf die aktivierten Trading-Airports begrenzt.
 
 ## Neu in Version 6
 
@@ -355,6 +361,56 @@ Beim Update auf Version 9.4.1 reicht zunächst **2 - Collect current forecasts**
 **Rerun**. Die Datenbank erweitert sich automatisch. Workflow 1 muss nicht erneut laufen,
 wenn der bestehende D-1-Backfill vorhanden ist. Workflow 3 ist optional und nur für die
 historische Marktpreissimulation erforderlich.
+
+## Neu in Version 9.5
+
+- Die Anwendung ist in zwei Arbeitsbereiche getrennt: **Trading Desk** für den
+  ausgewählten Live-Airport und **Airport Research** für alle flughafenübergreifenden
+  Auswertungen.
+- Das Trading Desk lädt nur noch Daten des ausgewählten Airports. Airport Research
+  verwendet einen eigenen 15-Minuten-Cache und berechnet ausschließlich das ausgewählte
+  Analysemodul.
+- Der Begriff D-1 ist nicht mehr doppeldeutig:
+  - **D-1 · 24h lead** ist die standardisierte meteorologische Rekonstruktion mit
+    exakt 24 Stunden Vorlauf pro gültiger Modellstunde.
+  - **D-1 Evening · 20:00** verwendet den letzten Snapshot, der spätestens um
+    20:00 lokaler Airportzeit am Vortag bekannt war.
+  - **D0 Morning · 10:00** verwendet den letzten Snapshot, der spätestens um
+    10:00 lokaler Airportzeit am Zieltag bekannt war.
+  - Ein Snapshot nach dem Cut-off darf niemals rückwirkend verwendet werden. Der
+    Abstand des verwendeten Snapshots zum Cut-off bleibt messbar.
+- Der neue Workflow **4 - Collect airport research checkpoints** läuft alle 30 Minuten,
+  ruft aber nur Airports ab, deren lokaler 20:00- oder 10:00-Cut-off unmittelbar
+  bevorsteht.
+- Polymarket-Temperaturmarkt-Städte werden automatisch entdeckt und in einem eigenen
+  Universe-Verzeichnis gespeichert. Bekannte Städte werden einer Research-Station
+  zugeordnet; unbekannte Städte erscheinen als Mapping-Aufgabe.
+- Das Airport-Leaderboard vergleicht Sample Size, MAE, RMSE, Treffer innerhalb
+  ±1 °C und die exakte Markt-Bucket-Hit-Rate. Celsius- und Fahrenheit-Märkte werden
+  anhand ihrer jeweiligen Bucket-Breite getrennt behandelt.
+- Airport Analysis und Accuracy by Timing sind die Kernmodule der neuen Research-Seite.
+  Forecast Stages, Live-Factor Diagnostics, Strategy Performance und Universe/Data
+  Coverage sind dort als separat ladbare Module integriert.
+- Die eigenständige synthetische **D-1 $1 simulation** wurde entfernt. Standardisierte
+  $1-Kennzahlen bleiben in Strategy Performance erhalten: P/L, ROI, Trefferquote,
+  Entry-Anzahl und maximaler Drawdown. Tatsächlich vorwärts gespeicherte Asks bleiben
+  von historischen Trade-Price-Samples methodisch getrennt.
+- Kandidaten-Stationen müssen vor einer Hochstufung zum Trading-Airport gegen die
+  offizielle Polymarket-Resolution-Source geprüft werden. Das Dashboard zeigt diesen
+  Mapping-Status ausdrücklich an.
+
+### Update von v9.4.1 auf v9.5
+
+1. Den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen und vorhandene Dateien ersetzen.
+2. **2 - Collect current forecasts** einmal starten.
+3. **4 - Collect airport research checkpoints** einmal manuell starten; danach läuft
+   dieser Workflow automatisch.
+4. **1 - Initial history backfill** mit `365` Tagen erneut starten, damit auch die neu
+   aufgenommenen Research-Airports sofort eine historische D-1-24h-Basis erhalten.
+5. Streamlit einmal **Rerun** ausführen.
+
+Die bestehende Datenbank und alle v9.4.1-Snapshots bleiben erhalten. Die neue
+Universe-Tabelle und alle benötigten Indizes werden automatisch ergänzt.
 
 ## Wichtig zum Dashboard
 

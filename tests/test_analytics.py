@@ -9,6 +9,7 @@ from weatherman.analytics import (
     condition_probabilities,
     consensus,
     detect_market_model_conflict,
+    fixed_decision_snapshots,
     flat_bet_simulation,
     forecast_ladder_frame,
     forecast_ladder_metrics,
@@ -25,6 +26,44 @@ from weatherman.analytics import (
     settled_signal_performance,
     trading_airport_scorecards,
 )
+
+
+def test_fixed_decision_snapshots_never_use_future_information():
+    snapshots = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 7, 21),
+                "captured_at": "2026-07-20T17:55:00Z",
+                "raw_model_mean_c": 36.0,
+            },
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 7, 21),
+                "captured_at": "2026-07-20T18:05:00Z",
+                "raw_model_mean_c": 37.0,
+            },
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 7, 21),
+                "captured_at": "2026-07-21T07:55:00Z",
+                "raw_model_mean_c": 38.0,
+            },
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 7, 21),
+                "captured_at": "2026-07-21T08:05:00Z",
+                "raw_model_mean_c": 39.0,
+            },
+        ]
+    )
+    selected = fixed_decision_snapshots(
+        snapshots,
+        {"LEMD": "Europe/Madrid"},
+    ).set_index("timing")
+    assert selected.loc["D-1 Evening · 20:00", "raw_model_mean_c"] == 36.0
+    assert selected.loc["D0 Morning · 10:00", "raw_model_mean_c"] == 38.0
+    assert set(selected.checkpoint_gap_minutes) == {5.0}
 
 
 def test_metar_pending_starts_one_minute_before_routine_issue():

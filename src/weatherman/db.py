@@ -248,6 +248,25 @@ class StrategySnapshot(Base):
     day_phase: Mapped[str] = mapped_column(String(20))
 
 
+class AirportMarketUniverse(Base):
+    """Polymarket temperature cities discovered independently of station mapping."""
+
+    __tablename__ = "airport_market_universe"
+    __table_args__ = (UniqueConstraint("market_city"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    market_city: Mapped[str] = mapped_column(String(120), index=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    airport: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+    mapping_status: Mapped[str] = mapped_column(String(40), index=True)
+    market_unit: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    resolution_source: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    latest_event_slug: Mapped[str] = mapped_column(String(300))
+    latest_target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
 def engine():
     if settings.database_url.startswith("sqlite:///"):
         path = ROOT / settings.database_url.removeprefix("sqlite:///")

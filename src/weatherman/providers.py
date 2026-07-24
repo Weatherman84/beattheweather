@@ -49,7 +49,7 @@ def _get(
     with httpx.Client(
         timeout=settings.timeout if timeout is None else timeout,
         follow_redirects=True,
-        headers={"User-Agent": "Weatherman/9.4 temperature-market research"},
+        headers={"User-Agent": "Weatherman/9.5 temperature-market research"},
     ) as client:
         for attempt in range(attempts):
             try:
@@ -320,7 +320,9 @@ def previous_run_d1(airport: dict, model: str, start: date, end: date) -> list[d
     tz = ZoneInfo(airport["timezone"])
     rows = []
     for target, max_temp in maxima.items():
-        # Noon one day before represents a consistent 24-hour information set.
+        # ``run_at`` is only a stable row key. The maximum itself combines each
+        # valid hour's value produced exactly 24 hours earlier; it is not a
+        # single noon or evening model initialization.
         run_local = datetime.combine(target, datetime.min.time(), tzinfo=tz).replace(hour=12)
         rows.append(
             {
@@ -333,7 +335,7 @@ def previous_run_d1(airport: dict, model: str, start: date, end: date) -> list[d
                 "model_run_at": run_local.astimezone(timezone.utc) - timedelta(days=1),
                 "available_at": None,
                 "fetched_at": datetime.now(timezone.utc),
-                "provenance_status": "Open-Meteo Previous Runs fixed D-1",
+                "provenance_status": "Open-Meteo Previous Runs · per-hour 24h lead",
             }
         )
     return rows
@@ -556,6 +558,94 @@ def polymarket_event_slug(airport: dict, target: date) -> str:
     return (
         f"highest-temperature-in-{city}-on-{MONTH_SLUGS[target.month]}-{target.day}-{target.year}"
     )
+
+
+_TEMPERATURE_EVENT_SLUG = re.compile(
+    r"^highest-temperature-in-(?P<city>.+)-on-"
+    r"(?P<month>january|february|march|april|may|june|july|august|"
+    r"september|october|november|december)-(?P<day>\d{1,2})-(?P<year>\d{4})$",
+    re.IGNORECASE,
+)
+
+
+def _temperature_event_identity(event: dict) -> tuple[str, str, date] | None:
+    slug = str(event.get("slug") or "").strip().casefold()
+    match = _TEMPERATURE_EVENT_SLUG.match(slug)
+    if not match:
+        return None
+    month = MONTH_SLUGS.index(match.group("month").casefold())
+    target = date(int(match.group("year")), month, int(match.group("day")))
+    city_slug = match.group("city").casefold()
+    display_name = city_slug.replace("-", " ").title()
+    title = str(event.get("title") or event.get("question") or "").strip()
+    title_match = re.match(r"^Highest temperature in (.+?) on ", title, re.IGNORECASE)
+    if title_match:
+        display_name = title_match.group(1).strip()
+    return city_slug, display_name, target
+
+
+def discover_polymarket_temperature_events(
+    *,
+    include_closed: bool = False,
+    max_pages: int = 6,
+    page_size: int = 200,
+) -> list[dict]:
+    """Discover temperature-market cities before trying to map them to stations.
+
+    Unknown cities are intentionally returned. The research dashboard can then flag
+    them for station verification instead of silently omitting a new Polymarket city.
+    """
+    discovered: dict[str, dict] = {}
+    cursor: str | None = None
+    for page in range(max_pages):
+        params: dict[str, Any] = {
+            "limit": page_size,
+            "order": "startDate",
+            "ascending": "false",
+            "title_search": "Highest temperature in",
+        }
+        if not include_closed:
+            params["closed"] = "false"
+        if cursor:
+            params["after_cursor"] = cursor
+        payload = _get(f"{POLYMARKET_GAMMA_URL}/events/keyset", params)
+        if isinstance(payload, dict):
+            events = payload.get("events") or []
+            next_cursor = payload.get("next_cursor")
+        else:
+            # Retain compatibility with the legacy list response in tests and
+            # during a provider-side rollout.
+            events = payload if isinstance(payload, list) else []
+            next_cursor = None
+        if not events:
+            break
+        for event in events:
+            identity = _temperature_event_identity(event)
+            if identity is None:
+                continue
+            city_slug, display_name, target = identity
+            markets = event.get("markets") or []
+            labels = " ".join(
+                str(market.get("groupItemTitle") or market.get("question") or "")
+                for market in markets
+            )
+            unit = "F" if re.search(r"°?\s*F\b", labels, re.IGNORECASE) else "C"
+            candidate = {
+                "market_city": city_slug,
+                "display_name": display_name,
+                "target_date": target,
+                "event_slug": str(event.get("slug") or ""),
+                "resolution_source": event.get("resolutionSource"),
+                "market_unit": unit,
+                "active": bool(event.get("active", not event.get("closed", False))),
+            }
+            prior = discovered.get(city_slug)
+            if prior is None or target >= prior["target_date"]:
+                discovered[city_slug] = candidate
+        cursor = str(next_cursor) if next_cursor else None
+        if not cursor:
+            break
+    return sorted(discovered.values(), key=lambda row: row["market_city"])
 
 
 def _json_array(value: Any) -> list:
