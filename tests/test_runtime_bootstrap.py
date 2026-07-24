@@ -14,15 +14,15 @@ def test_stale_streamlit_modules_are_discarded(monkeypatch):
     monkeypatch.setitem(sys.modules, "weatherman", old_package)
     monkeypatch.setitem(sys.modules, "weatherman.settings", old_settings)
 
-    assert discard_stale_weatherman_modules("9.5.1") is True
+    assert discard_stale_weatherman_modules("9.5.2") is True
     assert "weatherman" not in sys.modules
     assert "weatherman.settings" not in sys.modules
 
 
 def test_current_streamlit_modules_are_kept(monkeypatch):
     current_package = ModuleType("weatherman")
-    current_package.__version__ = "9.5.1"
+    current_package.__version__ = "9.5.2"
     monkeypatch.setitem(sys.modules, "weatherman", current_package)
 
-    assert discard_stale_weatherman_modules("9.5.1") is False
+    assert discard_stale_weatherman_modules("9.5.2") is False
     assert sys.modules["weatherman"] is current_package

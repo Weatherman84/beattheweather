@@ -40,6 +40,10 @@ Nach dem Upload sollten auf der Startseite unter anderem diese Einträge sichtba
 - `README.md`
 - `pyproject.toml`
 
+Ab Version 9.5.2 liegt das technische Startmodul innerhalb von `src`. Dadurch kann
+GitHub den Test auch dann vollständig ausführen, wenn bei einem Update keine neue
+Python-Datei im Repository-Hauptverzeichnis angelegt wurde.
+
 ## Schritt 3: Meteoblue-Key hinterlegen
 
 Wenn du Meteoblue noch nicht verwenden möchtest, überspringe diesen Schritt.
@@ -411,6 +415,13 @@ historische Marktpreissimulation erforderlich.
 
 Die bestehende Datenbank und alle v9.4.1-Snapshots bleiben erhalten. Die neue
 Universe-Tabelle und alle benötigten Indizes werden automatisch ergänzt.
+
+## Korrektur in Version 9.5.2
+
+Version 9.5.2 verschiebt das Streamlit-Startmodul `runtime_bootstrap` in den
+installierten `src`-Projektbaum. Damit verwenden Streamlit und GitHub Actions
+denselben Importpfad. Der Testlauf hängt nicht mehr von einer zusätzlichen neuen
+Datei im Repository-Hauptverzeichnis ab.
 
 ## Korrektur in Version 9.5.1
 
