@@ -1,0 +1,34 @@
+name: 4 - Collect airport research checkpoints
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7,37 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weatherman-database
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install .
+      - name: Collect only airports near a local decision checkpoint
+        run: python -m weatherman.cli collect-research-checkpoints --window-minutes 30
+      - name: Persist database snapshot
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -f data/weatherman.db
+          git diff --cached --quiet || git commit -m "data: collect airport research checkpoints"
+          git push
