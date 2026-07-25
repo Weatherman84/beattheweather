@@ -3,26 +3,29 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
+import pytest
+
 from runtime_bootstrap import discard_stale_weatherman_modules
 
 
-def test_stale_streamlit_modules_are_discarded(monkeypatch):
+@pytest.mark.parametrize("old_version", ["9.4.1", "9.5.2"])
+def test_stale_streamlit_modules_are_discarded(monkeypatch, old_version):
     old_package = ModuleType("weatherman")
-    old_package.__version__ = "9.4.1"
+    old_package.__version__ = old_version
     old_settings = ModuleType("weatherman.settings")
     old_settings.airports = lambda: {}
     monkeypatch.setitem(sys.modules, "weatherman", old_package)
     monkeypatch.setitem(sys.modules, "weatherman.settings", old_settings)
 
-    assert discard_stale_weatherman_modules("9.5.2") is True
+    assert discard_stale_weatherman_modules("9.5.4") is True
     assert "weatherman" not in sys.modules
     assert "weatherman.settings" not in sys.modules
 
 
 def test_current_streamlit_modules_are_kept(monkeypatch):
     current_package = ModuleType("weatherman")
-    current_package.__version__ = "9.5.2"
+    current_package.__version__ = "9.5.4"
     monkeypatch.setitem(sys.modules, "weatherman", current_package)
 
-    assert discard_stale_weatherman_modules("9.5.2") is False
+    assert discard_stale_weatherman_modules("9.5.4") is False
     assert sys.modules["weatherman"] is current_package

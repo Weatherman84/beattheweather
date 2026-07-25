@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("9.5.2")
+discard_stale_weatherman_modules("9.5.4")
 
 import pandas as pd
 import plotly.express as px
@@ -19,11 +19,15 @@ import streamlit as st
 from sqlalchemy import func, select
 
 from weatherman.analytics import (
-    flat_bet_simulation,
     detect_market_model_conflict,
+    fixed_decision_snapshots,
+    flat_bet_simulation,
+    forecast_ladder_frame,
     forecast_scorecards,
+    historical_d1_ladder,
     market_edges,
     model_metrics,
+    preferred_station_actuals,
     score_frame,
 )
 from weatherman.db import (
@@ -41,6 +45,8 @@ from weatherman.db import (
     refresh_database_connections,
 )
 from weatherman.nowcast import build_live_nowcast
+from weatherman.navigation import render_app_navigation
+from weatherman.research import filter_target_window, market_timing_metrics
 from weatherman.service import collect, collect_live_aviation
 from weatherman.catalog import trading_airports
 from weatherman.taf import taf_verification_frame, taf_verification_metrics
@@ -86,6 +92,50 @@ def cached_forecast_scorecards(
     return forecast_scorecards(forecast_frame, actual_frame)
 
 
+@st.cache_data(show_spinner=False, ttl=900)
+def cached_airport_timing_metrics(
+    forecast_frame: pd.DataFrame,
+    actual_frame: pd.DataFrame,
+    observation_frame: pd.DataFrame,
+    snapshot_frame: pd.DataFrame,
+    airport_code: str,
+    airport_details: dict,
+    window_days: int,
+) -> pd.DataFrame:
+    timezone_map = {airport_code: airport_details["timezone"]}
+    airport_catalog = {airport_code: airport_details}
+    station_actuals = preferred_station_actuals(
+        observation_frame,
+        actual_frame,
+        timezone_map,
+    )
+    historical_scored = filter_target_window(
+        historical_d1_ladder(forecast_frame, station_actuals),
+        window_days,
+    )
+    fixed = fixed_decision_snapshots(snapshot_frame, timezone_map)
+    fixed_scored = filter_target_window(
+        forecast_ladder_frame(fixed, station_actuals),
+        window_days,
+    )
+    live_scored = filter_target_window(
+        forecast_ladder_frame(snapshot_frame, station_actuals),
+        window_days,
+    )
+    if not live_scored.empty:
+        live_scored = live_scored[
+            live_scored.lead_bucket.str.startswith("D0 live", na=False)
+        ]
+    return pd.concat(
+        [
+            market_timing_metrics(historical_scored, airport_catalog),
+            market_timing_metrics(fixed_scored, airport_catalog),
+            market_timing_metrics(live_scored, airport_catalog),
+        ],
+        ignore_index=True,
+    )
+
+
 st.set_page_config(page_title="Weatherman · Trading Desk", page_icon="🌡️", layout="wide")
 # A GitHub workflow can replace the SQLite file while Streamlit is still alive.
 # Reopening pooled handles on every rerun makes that new snapshot visible without
@@ -94,12 +144,7 @@ refresh_database_connections()
 init_db()
 catalog = trading_airports()
 
-st.sidebar.markdown(
-    "### Navigation\n"
-    "- [🌡️ Trading Desk](/)\n"
-    "- [📊 Airport Research](/airport_research)"
-)
-st.sidebar.divider()
+render_app_navigation(st)
 st.title("Weatherman · Trading Desk")
 airport = st.sidebar.selectbox(
     "Airport", list(catalog), format_func=lambda code: f"{code} · {catalog[code]['name']}"
@@ -319,8 +364,10 @@ st.caption(
     f"({timezone_name} local time)"
 )
 
-tab_live, tab_market = st.tabs(["Live forecast", "Market comparison"])
-tab_performance = tab_airports = tab_accuracy = tab_simulation = tab_data = None
+tab_live, tab_market, tab_accuracy = st.tabs(
+    ["Live forecast", "Market comparison", "Accuracy by timing"]
+)
+tab_performance = tab_airports = tab_simulation = tab_data = None
 
 probabilities: dict[int, float] | None = None
 day_status = None
@@ -821,6 +868,121 @@ with tab_market:
                 "probability is that displayed YES price. Buying YES normally requires the ask, "
                 "which can be higher. Missing asks use the displayed value only as an approximation."
             )
+
+
+with tab_accuracy:
+    st.subheader(f"{airport} · accuracy by information timing")
+    st.caption(
+        "This is the same timing analysis as Airport Research, restricted to the "
+        "airport selected in the Trading Desk sidebar."
+    )
+    accuracy_window = st.selectbox(
+        "Evaluation window",
+        [90, 30, 365],
+        format_func=lambda value: f"Last {value} days",
+        key=f"trading_accuracy_window_{airport}",
+    )
+    with st.spinner(f"Calculating timing accuracy for {airport}…"):
+        timing_metrics = cached_airport_timing_metrics(
+            forecasts,
+            actuals,
+            observations,
+            all_forecast_snapshots,
+            airport,
+            catalog[airport],
+            accuracy_window,
+        )
+    if timing_metrics.empty:
+        st.info(
+            "No completed forecast days are available for this airport yet. "
+            "Historical D-1 results appear after the backfill; fixed 20:00, "
+            "10:00 and Live results grow from collected checkpoints."
+        )
+    else:
+        timing_options = sorted(
+            timing_metrics.lead_bucket.dropna().unique()
+        )
+        timing = st.selectbox(
+            "Comparable information set",
+            timing_options,
+            key=f"trading_accuracy_timing_{airport}",
+        )
+        selected_metrics = timing_metrics[
+            timing_metrics.lead_bucket == timing
+        ].copy()
+        table = selected_metrics[
+            [
+                "stage",
+                "n_days",
+                "bias",
+                "mae",
+                "rmse",
+                "market_exact_hit",
+                "within_1c",
+                "mae_gain_vs_raw",
+            ]
+        ].copy()
+        for column in ["bias", "mae_gain_vs_raw"]:
+            table[column] = table[column].map(
+                lambda value: f"{float(value):+.2f} °C"
+                if pd.notna(value)
+                else "—"
+            )
+        for column in ["mae", "rmse"]:
+            table[column] = table[column].map(
+                lambda value: f"{float(value):.2f} °C"
+                if pd.notna(value)
+                else "—"
+            )
+        for column in ["market_exact_hit", "within_1c"]:
+            table[column] = table[column].map(
+                lambda value: f"{float(value):.1%}"
+                if pd.notna(value)
+                else "—"
+            )
+        st.dataframe(
+            table.rename(
+                columns={
+                    "stage": "Forecast stage",
+                    "n_days": "Independent days",
+                    "bias": "Bias",
+                    "mae": "MAE",
+                    "rmse": "RMSE",
+                    "market_exact_hit": "Exact market bucket",
+                    "within_1c": "Within ±1 °C",
+                    "mae_gain_vs_raw": "MAE gain vs raw",
+                }
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        st.plotly_chart(
+            px.bar(
+                selected_metrics.sort_values("mae"),
+                x="stage",
+                y="mae",
+                title=f"{airport} · {timing} · MAE by forecast stage",
+                labels={"stage": "Forecast stage", "mae": "MAE °C"},
+            ),
+            width="stretch",
+        )
+    with st.expander("Exact timing definitions"):
+        st.write(
+            "**D-1 · 24h lead:** each valid model hour uses the value produced "
+            "exactly 24 hours earlier; this is not a single evening run."
+        )
+        st.write(
+            "**D-1 Evening · 20:00:** latest stored forecast known at or before "
+            "20:00 local airport time on the previous day, maximum age six hours."
+        )
+        st.write(
+            "**D0 Morning · 10:00:** latest stored forecast known at or before "
+            "10:00 local airport time on the target day, maximum age six hours."
+        )
+        st.write(
+            "**Live:** snapshots grouped by hours remaining until the median "
+            "modelled peak."
+        )
 
 
 # Airport-wide analytics live on their own page and are not evaluated on Trading Desk reruns.

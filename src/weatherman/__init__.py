@@ -1,3 +1,3 @@
 """Weatherman temperature-market analytics."""
 
-__version__ = "9.5.2"
+__version__ = "9.5.4"

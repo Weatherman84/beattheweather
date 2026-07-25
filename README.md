@@ -44,6 +44,10 @@ Ab Version 9.5.2 liegt das technische Startmodul innerhalb von `src`. Dadurch ka
 GitHub den Test auch dann vollständig ausführen, wenn bei einem Update keine neue
 Python-Datei im Repository-Hauptverzeichnis angelegt wurde.
 
+Ab Version 9.5.3 wechseln **Trading Desk** und **Airport Research** über
+Streamlits interne Seitennavigation. Beide Bereiche bleiben im selben Browser-Tab;
+der frühere absolute Markdown-Link wird nicht mehr verwendet.
+
 ## Schritt 3: Meteoblue-Key hinterlegen
 
 Wenn du Meteoblue noch nicht verwenden möchtest, überspringe diesen Schritt.
@@ -389,8 +393,9 @@ historische Marktpreissimulation erforderlich.
 - Polymarket-Temperaturmarkt-Städte werden automatisch entdeckt und in einem eigenen
   Universe-Verzeichnis gespeichert. Bekannte Städte werden einer Research-Station
   zugeordnet; unbekannte Städte erscheinen als Mapping-Aufgabe.
-- Das Airport-Leaderboard vergleicht Sample Size, MAE, RMSE, Treffer innerhalb
-  ±1 °C und die exakte Markt-Bucket-Hit-Rate. Celsius- und Fahrenheit-Märkte werden
+- **Airport Analysis** enthält das Airport-Leaderboard und vergleicht Sample Size,
+  MAE, RMSE, Treffer innerhalb ±1 °C und die exakte Markt-Bucket-Hit-Rate.
+  Celsius- und Fahrenheit-Märkte werden
   anhand ihrer jeweiligen Bucket-Breite getrennt behandelt.
 - Airport Analysis und Accuracy by Timing sind die Kernmodule der neuen Research-Seite.
   Forecast Stages, Live-Factor Diagnostics, Strategy Performance und Universe/Data
@@ -415,6 +420,31 @@ historische Marktpreissimulation erforderlich.
 
 Die bestehende Datenbank und alle v9.4.1-Snapshots bleiben erhalten. Die neue
 Universe-Tabelle und alle benötigten Indizes werden automatisch ergänzt.
+
+## Korrektur in Version 9.5.3
+
+Version 9.5.3 ersetzt die bisherigen absoluten Markdown-Links durch interne
+Streamlit-Seitenlinks. **Airport Research** öffnet dadurch zuverlässig die
+Research-Seite im selben Browser-Tab und fällt auf Streamlit Cloud nicht mehr
+auf das Trading Desk zurück. Der laufende Initial History Backfill beeinflusst
+nur die Datenabdeckung, nicht die Navigation.
+
+## Performance-Update in Version 9.5.4
+
+- Airport Research lädt nur noch das ausgewählte Analysemodul, den gewählten
+  Zeitraum und – bei gesetztem Filter – den relevanten Airport.
+- Nicht benötigte Markt-, Strategie-, TAF- und Universe-Tabellen werden beim
+  Öffnen von Airport Analysis nicht mehr geladen oder berechnet.
+- Der historische Walk-forward-Vergleich verwendet dieselben Regeln wie zuvor,
+  vermeidet aber die langsamen vollständigen DataFrame-Scans für jeden einzelnen
+  Airport-Tag. Airport Analysis berechnet das Ensemble außerdem nur noch einmal.
+- **Accuracy by timing** steht zusätzlich im Trading Desk und wird dort
+  ausschließlich für den im Dropdown ausgewählten Airport angezeigt.
+- Die in v9.5.3 zusätzlich eingebauten symbolbasierten Seitenlinks wurden entfernt.
+  Der Seitenwechsel bleibt über Streamlits native Navigation im selben Browser-Tab.
+
+Für das Update von v9.5.3 auf v9.5.4 ist kein erneuter Backfill und kein manueller
+Collect-Workflow erforderlich. Nach dem Upload genügt ein Reboot der Streamlit-App.
 
 ## Korrektur in Version 9.5.2
 

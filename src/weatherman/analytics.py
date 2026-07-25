@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -600,6 +601,68 @@ def forecast_ladder_metrics(scored: pd.DataFrame) -> pd.DataFrame:
     ).drop(columns="stage_order")
 
 
+def _rolling_biases_and_weights(
+    history: list[tuple[date, str, float]],
+    *,
+    weight_lookback_days: int = 90,
+    full_reliability_days: int = 30,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Compute the existing bias and weight rules without per-day DataFrame scans."""
+    if not history:
+        return {}, {}
+
+    errors_by_model: dict[str, list[float]] = {}
+    for _, model, error in history:
+        errors_by_model.setdefault(model, []).append(float(error))
+    biases = {
+        model: sum(errors) / len(errors)
+        for model, errors in errors_by_model.items()
+        if errors
+    }
+
+    latest_history_date = max(item[0] for item in history)
+    weight_cutoff = latest_history_date - timedelta(days=weight_lookback_days - 1)
+    weight_history = [item for item in history if item[0] >= weight_cutoff]
+    weight_errors: dict[str, list[float]] = {}
+    weight_dates: dict[str, set[date]] = {}
+    for target, model, error in weight_history:
+        weight_errors.setdefault(model, []).append(float(error))
+        weight_dates.setdefault(model, set()).add(target)
+    residual_mae = {}
+    for model, errors in weight_errors.items():
+        center = sum(errors) / len(errors)
+        residual_mae[model] = sum(abs(error - center) for error in errors) / len(errors)
+    if not residual_mae:
+        return biases, {}
+
+    baseline_mae = max(0.25, float(statistics.median(residual_mae.values())))
+    raw_weights: dict[str, float] = {}
+    for model, mae in residual_mae.items():
+        reliability = min(
+            1.0,
+            float(len(weight_dates.get(model, set()))) / full_reliability_days,
+        )
+        relative_precision = ((baseline_mae + 0.35) / (mae + 0.35)) ** 2
+        raw_weights[model] = max(
+            0.4,
+            min(2.5, 1.0 + reliability * (relative_precision - 1.0)),
+        )
+    total = sum(raw_weights.values())
+    weights = {
+        model: value / total
+        for model, value in raw_weights.items()
+    }
+    return biases, weights
+
+
+def _weighted_average(values: list[float], weights: list[float]) -> float:
+    usable = [max(0.0, float(weight)) for weight in weights]
+    if sum(usable) <= 0:
+        usable = [1.0] * len(values)
+    total = sum(usable)
+    return sum(value * weight for value, weight in zip(values, usable)) / total
+
+
 def historical_d1_ladder(
     forecasts: pd.DataFrame,
     actuals: pd.DataFrame,
@@ -634,33 +697,32 @@ def historical_d1_ladder(
         "Bias corrected · performance weighted",
     )
     for airport, airport_frame in paired.groupby("airport"):
-        for target in sorted(airport_frame.target_date.unique()):
-            today = airport_frame[airport_frame.target_date == target]
-            history = airport_frame[
-                (airport_frame.target_date < target)
-                & (airport_frame.target_date >= target - timedelta(days=lookback_days))
+        daily: dict[date, list] = {}
+        for item in airport_frame.sort_values("target_date").itertuples(index=False):
+            daily.setdefault(item.target_date, []).append(item)
+        history: list[tuple[date, str, float]] = []
+        for target, today in daily.items():
+            minimum_date = target - timedelta(days=lookback_days)
+            history = [item for item in history if item[0] >= minimum_date]
+            bias_map, weights = _rolling_biases_and_weights(history)
+            fallback = float(statistics.median(weights.values())) if weights else 1.0
+            values = [float(row.max_temp_c) for row in today]
+            biases = [float(bias_map.get(str(row.model), 0.0)) for row in today]
+            model_weights = [
+                float(weights.get(str(row.model), fallback))
+                for row in today
             ]
-            scored_history = history.rename(
-                columns={
-                    "max_temp_c": "max_temp_c_forecast",
-                    "max_temp_c_actual": "max_temp_c_actual",
-                }
-            )
-            bias_map = history.groupby("model").error.mean().to_dict()
-            weights = model_weight_map(scored_history) if not history.empty else {}
-            fallback = (
-                float(pd.Series(list(weights.values())).median()) if weights else 1.0
-            )
-            values = today.max_temp_c.astype(float).tolist()
-            biases = [float(bias_map.get(model, 0.0)) for model in today.model]
-            model_weights = [float(weights.get(model, fallback)) for model in today.model]
+            corrected = [
+                value - bias
+                for value, bias in zip(values, biases)
+            ]
             predictions = (
-                consensus(values).mean,
-                consensus(values, weights=model_weights).mean,
-                consensus(values, biases=biases).mean,
-                consensus(values, biases=biases, weights=model_weights).mean,
+                sum(values) / len(values),
+                _weighted_average(values, model_weights),
+                sum(corrected) / len(corrected),
+                _weighted_average(corrected, model_weights),
             )
-            actual_value = float(today.max_temp_c_actual.iloc[0])
+            actual_value = float(today[0].max_temp_c_actual)
             for stage, prediction in zip(stages, predictions):
                 rows.append(
                     {
@@ -675,6 +737,10 @@ def historical_d1_ladder(
                         "abs_error": abs(float(prediction) - actual_value),
                     }
                 )
+            history.extend(
+                (target, str(row.model), float(row.error))
+                for row in today
+            )
     return pd.DataFrame(rows)
 
 
@@ -1406,41 +1472,50 @@ def walk_forward_ensemble(
     scored["target_date"] = pd.to_datetime(scored.target_date).dt.date
     rows = []
     for airport, airport_frame in scored.groupby("airport"):
-        for target in sorted(airport_frame.target_date.unique()):
-            history = airport_frame[airport_frame.target_date < target]
-            if history.target_date.nunique() < min_history_days:
-                continue
+        daily: dict[date, list] = {}
+        for item in airport_frame.sort_values("target_date").itertuples(index=False):
+            daily.setdefault(item.target_date, []).append(item)
+        recent_history: list[tuple[date, str, float]] = []
+        seen_dates: set[date] = set()
+        for target, today in daily.items():
             history_cutoff = target - timedelta(days=90)
-            recent_history = history[history.target_date >= history_cutoff]
-            today = airport_frame[airport_frame.target_date == target]
-            weights = model_weight_map(recent_history)
-            biases = recent_history.groupby("model").error.mean().to_dict()
-            fallback_weight = min(weights.values()) * 0.5 if weights else 1.0
-            corrected_values = []
-            current_weights = []
-            for row in today.itertuples():
-                corrected_values.append(
-                    float(row.max_temp_c_forecast) - float(biases.get(row.model, 0.0))
-                )
-                current_weights.append(float(weights.get(row.model, fallback_weight)))
-            if not corrected_values:
-                continue
-            total_weight = sum(current_weights)
-            prediction = sum(
-                value * weight for value, weight in zip(corrected_values, current_weights)
-            ) / total_weight
-            actual = float(today.max_temp_c_actual.iloc[0])
-            rows.append(
-                {
-                    "airport": airport,
-                    "model": "Weighted ensemble",
-                    "target_date": target,
-                    "max_temp_c_forecast": prediction,
-                    "max_temp_c_actual": actual,
-                    "error": prediction - actual,
-                    "abs_error": abs(prediction - actual),
-                }
+            recent_history = [
+                item for item in recent_history if item[0] >= history_cutoff
+            ]
+            if len(seen_dates) >= min_history_days:
+                biases, weights = _rolling_biases_and_weights(recent_history)
+                fallback_weight = min(weights.values()) * 0.5 if weights else 1.0
+                corrected_values = [
+                    float(row.max_temp_c_forecast)
+                    - float(biases.get(str(row.model), 0.0))
+                    for row in today
+                ]
+                current_weights = [
+                    float(weights.get(str(row.model), fallback_weight))
+                    for row in today
+                ]
+                if corrected_values:
+                    prediction = _weighted_average(
+                        corrected_values,
+                        current_weights,
+                    )
+                    actual = float(today[0].max_temp_c_actual)
+                    rows.append(
+                        {
+                            "airport": airport,
+                            "model": "Weighted ensemble",
+                            "target_date": target,
+                            "max_temp_c_forecast": prediction,
+                            "max_temp_c_actual": actual,
+                            "error": prediction - actual,
+                            "abs_error": abs(prediction - actual),
+                        }
+                    )
+            recent_history.extend(
+                (target, str(row.model), float(row.error))
+                for row in today
             )
+            seen_dates.add(target)
     return pd.DataFrame(rows)
 
 

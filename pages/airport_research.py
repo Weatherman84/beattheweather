@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import math
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +13,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("9.5.2")
+discard_stale_weatherman_modules("9.5.4")
 
 import pandas as pd
 import plotly.express as px
@@ -24,16 +23,12 @@ from sqlalchemy import select
 from weatherman.analytics import (
     fixed_decision_snapshots,
     forecast_ladder_frame,
-    forecast_ladder_metrics,
-    forecast_scorecards,
     historical_d1_ladder,
     historical_price_strategy_simulation,
     live_factor_diagnostics,
     preferred_station_actuals,
-    settled_probability_comparison,
     settled_signal_performance,
     settled_strategy_performance,
-    trading_airport_scorecards,
 )
 from weatherman.db import (
     AirportMarketUniverse,
@@ -45,11 +40,12 @@ from weatherman.db import (
     Session,
     SignalSnapshot,
     StrategySnapshot,
-    TafReport,
     init_db,
     refresh_database_connections,
 )
 from weatherman.catalog import research_airports
+from weatherman.navigation import render_app_navigation
+from weatherman.research import filter_target_window, market_timing_metrics
 
 
 st.set_page_config(
@@ -57,12 +53,7 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
-st.sidebar.markdown(
-    "### Navigation\n"
-    "- [🌡️ Trading Desk](/)\n"
-    "- [📊 Airport Research](/airport_research)"
-)
-st.sidebar.divider()
+render_app_navigation(st)
 
 refresh_database_connections()
 init_db()
@@ -72,20 +63,132 @@ timezone_by_airport = {
 }
 
 
+def scoped_statement(
+    model: type,
+    airport_codes: tuple[str, ...],
+    *,
+    earliest_target: date | None = None,
+    earliest_observation: datetime | None = None,
+):
+    statement = select(model)
+    if airport_codes and hasattr(model, "airport"):
+        statement = statement.where(model.airport.in_(airport_codes))
+    if earliest_target is not None and hasattr(model, "target_date"):
+        statement = statement.where(model.target_date >= earliest_target)
+    if earliest_observation is not None and hasattr(model, "observed_at"):
+        statement = statement.where(model.observed_at >= earliest_observation)
+    return statement
+
+
 @st.cache_data(show_spinner=False, ttl=900)
-def load_research_data() -> dict[str, pd.DataFrame]:
+def load_weather_research_data(
+    airport_codes: tuple[str, ...],
+    earliest_target: date,
+) -> dict[str, pd.DataFrame]:
+    earliest_observation = datetime.combine(
+        earliest_target - timedelta(days=1),
+        time.min,
+        tzinfo=timezone.utc,
+    )
     with Session() as session:
         return {
-            "forecasts": pd.read_sql(select(Forecast), session.bind),
-            "actuals": pd.read_sql(select(DailyActual), session.bind),
-            "observations": pd.read_sql(select(Observation), session.bind),
-            "snapshots": pd.read_sql(select(ForecastSnapshot), session.bind),
-            "markets": pd.read_sql(select(MarketSnapshot), session.bind),
-            "signals": pd.read_sql(select(SignalSnapshot), session.bind),
-            "strategies": pd.read_sql(select(StrategySnapshot), session.bind),
-            "tafs": pd.read_sql(select(TafReport), session.bind),
-            "universe": pd.read_sql(select(AirportMarketUniverse), session.bind),
+            "forecasts": pd.read_sql(
+                scoped_statement(
+                    Forecast,
+                    airport_codes,
+                    earliest_target=earliest_target,
+                ).where(Forecast.horizon == "D-1"),
+                session.bind,
+            ),
+            "actuals": pd.read_sql(
+                scoped_statement(
+                    DailyActual,
+                    airport_codes,
+                    earliest_target=earliest_target,
+                ),
+                session.bind,
+            ),
+            "observations": pd.read_sql(
+                scoped_statement(
+                    Observation,
+                    airport_codes,
+                    earliest_observation=earliest_observation,
+                ),
+                session.bind,
+            ),
+            "snapshots": pd.read_sql(
+                scoped_statement(
+                    ForecastSnapshot,
+                    airport_codes,
+                    earliest_target=earliest_target,
+                ),
+                session.bind,
+            ),
         }
+
+
+@st.cache_data(show_spinner=False, ttl=900)
+def load_strategy_research_data(
+    airport_codes: tuple[str, ...],
+    earliest_target: date,
+) -> dict[str, pd.DataFrame]:
+    data = load_weather_research_data(airport_codes, earliest_target)
+    with Session() as session:
+        data.update(
+            {
+                "markets": pd.read_sql(
+                    scoped_statement(
+                        MarketSnapshot,
+                        airport_codes,
+                        earliest_target=earliest_target,
+                    ),
+                    session.bind,
+                ),
+                "signals": pd.read_sql(
+                    scoped_statement(
+                        SignalSnapshot,
+                        airport_codes,
+                        earliest_target=earliest_target,
+                    ),
+                    session.bind,
+                ),
+                "strategies": pd.read_sql(
+                    scoped_statement(
+                        StrategySnapshot,
+                        airport_codes,
+                        earliest_target=earliest_target,
+                    ),
+                    session.bind,
+                ),
+            }
+        )
+    return data
+
+
+@st.cache_data(show_spinner=False, ttl=900)
+def load_universe_research_data(
+    airport_codes: tuple[str, ...],
+    earliest_target: date,
+) -> dict[str, pd.DataFrame]:
+    data = load_weather_research_data(airport_codes, earliest_target)
+    with Session() as session:
+        data.update(
+            {
+                "markets": pd.read_sql(
+                    scoped_statement(
+                        MarketSnapshot,
+                        airport_codes,
+                        earliest_target=earliest_target,
+                    ),
+                    session.bind,
+                ),
+                "universe": pd.read_sql(
+                    select(AirportMarketUniverse),
+                    session.bind,
+                ),
+            }
+        )
+    return data
 
 
 def format_percent(value: object) -> str:
@@ -96,45 +199,6 @@ def format_temp(value: object, *, signed: bool = False) -> str:
     if pd.isna(value):
         return "—"
     return f"{float(value):+.2f} °C" if signed else f"{float(value):.2f} °C"
-
-
-def market_bucket_hits(scored: pd.DataFrame) -> pd.DataFrame:
-    """Add a unit-aware Polymarket bucket hit without mixing C and F markets."""
-    if scored.empty:
-        return scored
-    result = scored.copy()
-
-    def bucket(value_c: float, airport: str) -> int:
-        details = catalog.get(str(airport), {})
-        unit = details.get("market_unit", "C")
-        width = max(1, int(details.get("market_bucket_width", 1)))
-        value = value_c * 9 / 5 + 32 if unit == "F" else value_c
-        reported_integer = math.floor(value + 0.5)
-        return math.floor(reported_integer / width)
-
-    result["market_bucket_hit"] = result.apply(
-        lambda row: bucket(float(row.forecast_c), str(row.airport))
-        == bucket(float(row.max_temp_c), str(row.airport)),
-        axis=1,
-    )
-    return result
-
-
-def market_timing_metrics(scored: pd.DataFrame) -> pd.DataFrame:
-    if scored.empty:
-        return pd.DataFrame()
-    frame = market_bucket_hits(scored)
-    base = forecast_ladder_metrics(frame)
-    market_hits = (
-        frame.groupby(["airport", "timing", "lead_bucket", "stage"], as_index=False)
-        .market_bucket_hit.mean()
-        .rename(columns={"market_bucket_hit": "market_exact_hit"})
-    )
-    return base.merge(
-        market_hits,
-        on=["airport", "timing", "lead_bucket", "stage"],
-        how="left",
-    )
 
 
 def canonical_strategy_checkpoints(strategies: pd.DataFrame) -> pd.DataFrame:
@@ -181,6 +245,69 @@ def canonical_strategy_checkpoints(strategies: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
 
 
+@st.cache_data(show_spinner=False, ttl=900)
+def calculate_timing_bundle(
+    airport_codes: tuple[str, ...],
+    window_days: int,
+    *,
+    include_live: bool = False,
+    include_diagnostics: bool = False,
+) -> dict[str, pd.DataFrame]:
+    # The extra history is used only to calibrate walk-forward bias and weights.
+    earliest_target = (
+        datetime.now(timezone.utc).date()
+        - timedelta(days=window_days + 120)
+    )
+    data = load_weather_research_data(airport_codes, earliest_target)
+    local_timezones = {
+        code: timezone_by_airport[code]
+        for code in airport_codes
+        if code in timezone_by_airport
+    }
+    station_actuals = preferred_station_actuals(
+        data["observations"],
+        data["actuals"],
+        local_timezones,
+    )
+    historical_scored = filter_target_window(
+        historical_d1_ladder(data["forecasts"], station_actuals),
+        window_days,
+    )
+    fixed_snapshots = fixed_decision_snapshots(
+        data["snapshots"],
+        local_timezones,
+    )
+    fixed_scored = filter_target_window(
+        forecast_ladder_frame(fixed_snapshots, station_actuals),
+        window_days,
+    )
+    result = {
+        "historical_scored": historical_scored,
+        "historical_metrics": market_timing_metrics(
+            historical_scored,
+            catalog,
+        ),
+        "fixed_snapshots": fixed_snapshots,
+        "fixed_metrics": market_timing_metrics(fixed_scored, catalog),
+    }
+    if include_live:
+        live_scored = filter_target_window(
+            forecast_ladder_frame(data["snapshots"], station_actuals),
+            window_days,
+        )
+        if not live_scored.empty:
+            live_scored = live_scored[
+                live_scored.lead_bucket.str.startswith("D0 live", na=False)
+            ]
+        result["live_metrics"] = market_timing_metrics(live_scored, catalog)
+    if include_diagnostics:
+        result["diagnostics"] = live_factor_diagnostics(
+            filter_target_window(data["snapshots"], window_days),
+            station_actuals,
+        )
+    return result
+
+
 if st.sidebar.button("Reload research data"):
     refresh_database_connections()
     st.cache_data.clear()
@@ -196,7 +323,7 @@ st.caption(
 module = st.radio(
     "Research module",
     [
-        "Airport leaderboard",
+        "Airport Analysis",
         "Accuracy by timing",
         "Forecast stages",
         "Strategy performance",
@@ -220,33 +347,28 @@ window_days = st.selectbox(
     [90, 30, 365],
     format_func=lambda value: f"Last {value} days",
 )
-
-data = load_research_data()
-forecasts = data["forecasts"]
-actuals = data["actuals"]
-observations = data["observations"]
-snapshots = data["snapshots"]
-markets = data["markets"]
-signals = data["signals"]
-strategies = data["strategies"]
-universe = data["universe"]
-
-station_actuals = preferred_station_actuals(
-    observations,
-    actuals,
-    timezone_by_airport,
+airport_codes = (
+    (selected_airport,)
+    if selected_airport
+    else tuple(sorted(catalog))
 )
-fixed_snapshots = fixed_decision_snapshots(
-    snapshots,
-    timezone_by_airport,
-)
-fixed_scored = forecast_ladder_frame(fixed_snapshots, station_actuals)
-fixed_metrics = market_timing_metrics(fixed_scored)
-historical_scored = historical_d1_ladder(forecasts, station_actuals)
-historical_metrics = market_timing_metrics(historical_scored)
+timing_bundle: dict[str, pd.DataFrame] = {}
+if module in {"Airport Analysis", "Accuracy by timing", "Forecast stages"}:
+    with st.spinner(
+        f"Calculating {module} for "
+        f"{selected_airport or f'{len(airport_codes)} airports'}…"
+    ):
+        timing_bundle = calculate_timing_bundle(
+            airport_codes,
+            window_days,
+            include_live=module == "Accuracy by timing",
+            include_diagnostics=module == "Forecast stages",
+        )
+historical_metrics = timing_bundle.get("historical_metrics", pd.DataFrame())
+fixed_metrics = timing_bundle.get("fixed_metrics", pd.DataFrame())
 
 
-if module == "Airport leaderboard":
+if module == "Airport Analysis":
     st.subheader("Airport predictability leaderboard")
     st.caption(
         "D-1 · 24h lead is a standardized meteorological comparison. "
@@ -254,7 +376,6 @@ if module == "Airport leaderboard":
         "20:00 on the previous local day and 10:00 on the target day. A snapshot "
         "after a cut-off is never used."
     )
-    scorecards = forecast_scorecards(forecasts, station_actuals)
     base = pd.DataFrame(
         [
             {
@@ -264,21 +385,46 @@ if module == "Airport leaderboard":
                 "unit": details.get("market_unit", "C"),
             }
             for code, details in catalog.items()
+            if code in airport_codes
         ]
     )
     window = (
-        scorecards[
-            (scorecards.window_days == window_days)
-            & (scorecards.model == "Weighted ensemble")
+        historical_metrics[
+            (
+                historical_metrics.stage
+                == "Bias corrected · performance weighted"
+            )
+            & (historical_metrics.timing == "D-1 · 24h lead")
         ].copy()
-        if not scorecards.empty
+        if not historical_metrics.empty
         else pd.DataFrame()
     )
     if not window.empty:
+        window["mae_score"] = 100 / (1 + (window.mae / 1.0) ** 2)
+        window["rmse_score"] = 100 / (1 + (window.rmse / 1.25) ** 2)
+        window["raw_score"] = (
+            0.35 * window.mae_score
+            + 0.20 * window.rmse_score
+            + 0.25 * window.exact_hit * 100
+            + 0.20 * window.within_1c * 100
+        )
+        window["reliability"] = (window.n_days / 30).clip(upper=1.0)
+        window["forecast_score"] = (
+            50 + window.reliability * (window.raw_score - 50)
+        ).clip(lower=0, upper=100)
+        window["data_quality"] = window.n_days.map(
+            lambda count: (
+                "Strong"
+                if count >= 90
+                else "Moderate"
+                if count >= 30
+                else "Limited"
+            )
+        )
         window = window[
             [
                 "airport",
-                "n",
+                "n_days",
                 "mae",
                 "rmse",
                 "exact_hit",
@@ -286,7 +432,7 @@ if module == "Airport leaderboard":
                 "forecast_score",
                 "data_quality",
             ]
-        ]
+        ].rename(columns={"n_days": "n"})
         base = base.merge(window, on="airport", how="left")
 
     def timing_slice(
@@ -438,13 +584,7 @@ if module == "Airport leaderboard":
 
 elif module == "Accuracy by timing":
     st.subheader("Accuracy by information timing")
-    live_scored = forecast_ladder_frame(snapshots, station_actuals)
-    live_scored = (
-        live_scored[live_scored.lead_bucket.str.startswith("D0 live", na=False)]
-        if not live_scored.empty
-        else live_scored
-    )
-    live_metrics = market_timing_metrics(live_scored)
+    live_metrics = timing_bundle.get("live_metrics", pd.DataFrame())
     all_metrics = pd.concat(
         [historical_metrics, fixed_metrics, live_metrics],
         ignore_index=True,
@@ -575,9 +715,7 @@ elif module == "Forecast stages":
             width="stretch",
         )
 
-    diagnostics = live_factor_diagnostics(snapshots, station_actuals)
-    if selected_airport and not diagnostics.empty:
-        diagnostics = diagnostics[diagnostics.airport == selected_airport]
+    diagnostics = timing_bundle.get("diagnostics", pd.DataFrame())
     st.subheader("Live-factor diagnostics")
     if diagnostics.empty:
         st.caption(
@@ -610,9 +748,39 @@ elif module == "Strategy performance":
         "Real tracked asks and explicitly labelled historical price samples are "
         "kept together here, with one entry per strategy and airport-day."
     )
+    earliest_target = (
+        datetime.now(timezone.utc).date()
+        - timedelta(days=window_days + 120)
+    )
+    with st.spinner(
+        f"Loading strategy data for "
+        f"{selected_airport or f'{len(airport_codes)} airports'}…"
+    ):
+        strategy_data = load_strategy_research_data(
+            airport_codes,
+            earliest_target,
+        )
+    markets = strategy_data["markets"]
+    signals = strategy_data["signals"]
+    strategies = strategy_data["strategies"]
+    local_timezones = {
+        code: timezone_by_airport[code]
+        for code in airport_codes
+        if code in timezone_by_airport
+    }
+    station_actuals = preferred_station_actuals(
+        strategy_data["observations"],
+        strategy_data["actuals"],
+        local_timezones,
+    )
+    historical_scored = filter_target_window(
+        historical_d1_ladder(
+            strategy_data["forecasts"],
+            station_actuals,
+        ),
+        window_days,
+    )
     edge_results = settled_signal_performance(signals, markets)
-    probability_results = settled_probability_comparison(signals, markets)
-    trade_scores = trading_airport_scorecards(edge_results, probability_results)
     canonical_strategies = canonical_strategy_checkpoints(strategies)
     consensus_results = settled_strategy_performance(canonical_strategies, markets)
     price_history_results = historical_price_strategy_simulation(
@@ -628,7 +796,6 @@ elif module == "Strategy performance":
         price_history_results = price_history_results[
             price_history_results.airport == selected_airport
         ]
-        trade_scores = trade_scores[trade_scores.airport == selected_airport]
 
     if consensus_results.empty:
         st.info(
@@ -727,6 +894,38 @@ elif module == "Strategy performance":
         )
 
 elif module == "Universe & coverage":
+    earliest_target = (
+        datetime.now(timezone.utc).date()
+        - timedelta(days=window_days - 1)
+    )
+    with st.spinner(
+        f"Loading coverage for "
+        f"{selected_airport or f'{len(airport_codes)} airports'}…"
+    ):
+        coverage_data = load_universe_research_data(
+            airport_codes,
+            earliest_target,
+        )
+    forecasts = coverage_data["forecasts"]
+    actuals = coverage_data["actuals"]
+    observations = coverage_data["observations"]
+    snapshots = coverage_data["snapshots"]
+    markets = coverage_data["markets"]
+    universe = coverage_data["universe"]
+    local_timezones = {
+        code: timezone_by_airport[code]
+        for code in airport_codes
+        if code in timezone_by_airport
+    }
+    station_actuals = preferred_station_actuals(
+        observations,
+        actuals,
+        local_timezones,
+    )
+    fixed_snapshots = fixed_decision_snapshots(
+        snapshots,
+        local_timezones,
+    )
     st.subheader("Polymarket temperature-market universe")
     if universe.empty:
         st.info(
@@ -735,6 +934,8 @@ elif module == "Universe & coverage":
         )
     else:
         active = universe[universe.active.fillna(False).astype(bool)].copy()
+        if selected_airport:
+            active = active[active.airport == selected_airport]
         u1, u2, u3 = st.columns(3)
         u1.metric("Active temperature cities", active.market_city.nunique())
         u2.metric("Mapped to a station", active.airport.notna().sum())
@@ -779,6 +980,7 @@ elif module == "Universe & coverage":
                 "mapping": details.get("station_match", "candidate station"),
             }
             for code, details in catalog.items()
+            if code in airport_codes
         ]
     )
     for frame, column, output in (
