@@ -37,5 +37,10 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -f data/weatherman.db
           git diff --cached --quiet || git commit -m "data: backfill Istanbul and Munich"
+          # `pip install .` can refresh tracked setuptools metadata. Rebase refuses
+          # any such unstaged build changes, so reset the worktree to the database
+          # snapshot we just committed before integrating a newer remote commit.
+          git status --short
+          git restore --worktree -- .
           git pull --rebase
           git push
