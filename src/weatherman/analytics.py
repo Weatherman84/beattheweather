@@ -77,9 +77,10 @@ def consensus(
         if cumulative >= weight_total / 2:
             median = value
             break
-    variance = sum(
-        weight * (value - mean) ** 2 for value, weight in zip(corrected, usable_weights)
-    ) / weight_total
+    variance = (
+        sum(weight * (value - mean) ** 2 for value, weight in zip(corrected, usable_weights))
+        / weight_total
+    )
     spread = max(math.sqrt(variance), sigma_floor)
     lo, hi = math.floor(mean - 4 * spread), math.ceil(mean + 4 * spread)
     probabilities = {}
@@ -221,9 +222,7 @@ def assess_day_status(
             explanation="The target day has not started in the airport's local time.",
         )
 
-    fresh_observation = (
-        observation_age_hours is not None and 0 <= observation_age_hours <= 2.0
-    )
+    fresh_observation = observation_age_hours is not None and 0 <= observation_age_hours <= 2.0
     late_enough = local_now.hour >= 16
     not_heating = heating_rate is not None and heating_rate <= 0.2
     sunlight_gone = future_radiation_max is not None and future_radiation_max <= 50
@@ -274,9 +273,7 @@ def assess_day_status(
         if not heating_window_closed:
             blockers.append("meaningful solar heating may remain")
         explanation = (
-            "Further warming is still possible. Lock blockers: "
-            + "; ".join(blockers)
-            + "."
+            "Further warming is still possible. Lock blockers: " + "; ".join(blockers) + "."
             if blockers
             else "Further warming is still possible."
         )
@@ -420,9 +417,7 @@ def preferred_station_actuals(
         metar["source_rank"] = 1
         frames.append(metar)
     if not frames:
-        return pd.DataFrame(
-            columns=["airport", "target_date", "max_temp_c", "actual_source"]
-        )
+        return pd.DataFrame(columns=["airport", "target_date", "max_temp_c", "actual_source"])
     combined = pd.concat(frames, ignore_index=True)
     combined = combined.sort_values("source_rank").drop_duplicates(
         ["airport", "target_date"], keep="last"
@@ -492,13 +487,9 @@ def fixed_decision_snapshots(
                 )
             ).tz_convert("UTC")
             minimum_at = pd.Timestamp(
-                decision_at.to_pydatetime()
-                - timedelta(hours=float(max_age_hours))
+                decision_at.to_pydatetime() - timedelta(hours=float(max_age_hours))
             )
-            candidates = day[
-                (day.captured_at <= decision_at)
-                & (day.captured_at >= minimum_at)
-            ]
+            candidates = day[(day.captured_at <= decision_at) & (day.captured_at >= minimum_at)]
             if candidates.empty:
                 continue
             selected = candidates.sort_values("captured_at").iloc[-1].copy()
@@ -563,9 +554,7 @@ def forecast_ladder_metrics(scored: pd.DataFrame) -> pd.DataFrame:
     if scored.empty:
         return pd.DataFrame()
     rows = []
-    for keys, frame in scored.groupby(
-        ["airport", "timing", "lead_bucket", "stage"], dropna=False
-    ):
+    for keys, frame in scored.groupby(["airport", "timing", "lead_bucket", "stage"], dropna=False):
         airport, timing, lead_bucket, stage = keys
         rows.append(
             {
@@ -596,9 +585,9 @@ def forecast_ladder_metrics(scored: pd.DataFrame) -> pd.DataFrame:
         "Final incl. TAF": 5,
     }
     result["stage_order"] = result.stage.map(order)
-    return result.sort_values(
-        ["airport", "timing", "lead_bucket", "stage_order"]
-    ).drop(columns="stage_order")
+    return result.sort_values(["airport", "timing", "lead_bucket", "stage_order"]).drop(
+        columns="stage_order"
+    )
 
 
 def _rolling_biases_and_weights(
@@ -615,9 +604,7 @@ def _rolling_biases_and_weights(
     for _, model, error in history:
         errors_by_model.setdefault(model, []).append(float(error))
     biases = {
-        model: sum(errors) / len(errors)
-        for model, errors in errors_by_model.items()
-        if errors
+        model: sum(errors) / len(errors) for model, errors in errors_by_model.items() if errors
     }
 
     latest_history_date = max(item[0] for item in history)
@@ -648,10 +635,7 @@ def _rolling_biases_and_weights(
             min(2.5, 1.0 + reliability * (relative_precision - 1.0)),
         )
     total = sum(raw_weights.values())
-    weights = {
-        model: value / total
-        for model, value in raw_weights.items()
-    }
+    weights = {model: value / total for model, value in raw_weights.items()}
     return biases, weights
 
 
@@ -675,9 +659,7 @@ def historical_d1_ladder(
     if d1.empty:
         return pd.DataFrame()
     d1["target_date"] = pd.to_datetime(d1.target_date).dt.date
-    d1 = d1.sort_values("run_at").drop_duplicates(
-        ["airport", "model", "target_date"], keep="last"
-    )
+    d1 = d1.sort_values("run_at").drop_duplicates(["airport", "model", "target_date"], keep="last")
     actual = actuals[["airport", "target_date", "max_temp_c"]].copy()
     actual["target_date"] = pd.to_datetime(actual.target_date).dt.date
     paired = d1.merge(
@@ -708,14 +690,8 @@ def historical_d1_ladder(
             fallback = float(statistics.median(weights.values())) if weights else 1.0
             values = [float(row.max_temp_c) for row in today]
             biases = [float(bias_map.get(str(row.model), 0.0)) for row in today]
-            model_weights = [
-                float(weights.get(str(row.model), fallback))
-                for row in today
-            ]
-            corrected = [
-                value - bias
-                for value, bias in zip(values, biases)
-            ]
+            model_weights = [float(weights.get(str(row.model), fallback)) for row in today]
+            corrected = [value - bias for value, bias in zip(values, biases)]
             predictions = (
                 sum(values) / len(values),
                 _weighted_average(values, model_weights),
@@ -737,10 +713,7 @@ def historical_d1_ladder(
                         "abs_error": abs(float(prediction) - actual_value),
                     }
                 )
-            history.extend(
-                (target, str(row.model), float(row.error))
-                for row in today
-            )
+            history.extend((target, str(row.model), float(row.error)) for row in today)
     return pd.DataFrame(rows)
 
 
@@ -754,12 +727,14 @@ def live_factor_diagnostics(
     required = [
         "temp_anchor_adjustment_c",
         "dryness_adjustment_c",
+        "dewpoint_trend_adjustment_c",
         "cloud_adjustment_c",
         "heating_rate_adjustment_c",
         "recent_error_adjustment_c",
         "radiation_adjustment_c",
         "wind_adjustment_c",
         "run_trend_adjustment_c",
+        "failed_convection_adjustment_c",
     ]
     if any(column not in snapshots for column in required):
         return pd.DataFrame()
@@ -778,17 +753,17 @@ def live_factor_diagnostics(
     labels = {
         "temp_anchor_adjustment_c": "Temperature anchor",
         "dryness_adjustment_c": "Dryness surprise",
+        "dewpoint_trend_adjustment_c": "Observed dewpoint trend",
         "cloud_adjustment_c": "Cloud surprise",
         "heating_rate_adjustment_c": "Heating-rate surprise",
         "recent_error_adjustment_c": "Recent station error",
         "radiation_adjustment_c": "Radiation proxy",
         "wind_adjustment_c": "Observed wind sector",
         "run_trend_adjustment_c": "Model-run trend",
+        "failed_convection_adjustment_c": "Failed convection",
     }
     rows = []
-    for (airport, information_set), airport_frame in merged.groupby(
-        ["airport", "information_set"]
-    ):
+    for (airport, information_set), airport_frame in merged.groupby(["airport", "information_set"]):
         running = airport_frame.bias_corrected_c.astype(float).copy()
         previous_mae = float((running - airport_frame.max_temp_c).abs().mean())
         rows.append(
@@ -804,9 +779,7 @@ def live_factor_diagnostics(
             }
         )
         for column in required:
-            contribution = pd.to_numeric(
-                airport_frame[column], errors="coerce"
-            ).fillna(0.0)
+            contribution = pd.to_numeric(airport_frame[column], errors="coerce").fillna(0.0)
             running = running + contribution
             mae = float((running - airport_frame.max_temp_c).abs().mean())
             rows.append(
@@ -836,9 +809,7 @@ def settled_strategy_performance(
     candidates = strategies.copy()
     candidates["captured_at"] = pd.to_datetime(candidates.captured_at, utc=True)
     candidates["buy_price"] = pd.to_numeric(candidates.buy_price, errors="coerce")
-    candidates = candidates[
-        (candidates.buy_price > 0) & (candidates.buy_price < 1)
-    ]
+    candidates = candidates[(candidates.buy_price > 0) & (candidates.buy_price < 1)]
     if candidates.empty:
         return pd.DataFrame()
     entries = candidates.sort_values("captured_at").drop_duplicates(
@@ -854,9 +825,7 @@ def settled_strategy_performance(
         axis=1,
     )
     settled = settled.sort_values(["target_date", "captured_at"])
-    settled["cumulative_pnl"] = settled.groupby(
-        ["strategy", "timing"]
-    ).pnl.cumsum()
+    settled["cumulative_pnl"] = settled.groupby(["strategy", "timing"]).pnl.cumsum()
     return settled
 
 
@@ -872,9 +841,7 @@ def historical_price_strategy_simulation(
     history["captured_at"] = pd.to_datetime(history.captured_at, utc=True)
     history["target_date"] = pd.to_datetime(history.target_date).dt.date
     if "price_kind" in history:
-        history = history[
-            history.price_kind == "historical trade-price sample"
-        ].copy()
+        history = history[history.price_kind == "historical trade-price sample"].copy()
     else:
         history = history[history.best_ask.isna()].copy()
     history = history[history.yes_won.notna()].copy()
@@ -883,8 +850,7 @@ def historical_price_strategy_simulation(
     rows = []
     for forecast in reconstructed.itertuples():
         target_markets = history[
-            (history.airport == forecast.airport)
-            & (history.target_date == forecast.target_date)
+            (history.airport == forecast.airport) & (history.target_date == forecast.target_date)
         ]
         if target_markets.empty:
             continue
@@ -895,14 +861,8 @@ def historical_price_strategy_simulation(
         match = sample[
             sample.apply(
                 lambda row, selected_bucket=bucket: (
-                    (
-                        pd.isna(row.bucket_low_c)
-                        or selected_bucket >= float(row.bucket_low_c)
-                    )
-                    and (
-                        pd.isna(row.bucket_high_c)
-                        or selected_bucket <= float(row.bucket_high_c)
-                    )
+                    (pd.isna(row.bucket_low_c) or selected_bucket >= float(row.bucket_low_c))
+                    and (pd.isna(row.bucket_high_c) or selected_bucket <= float(row.bucket_high_c))
                 ),
                 axis=1,
             )
@@ -1027,9 +987,7 @@ def settled_probability_comparison(
     result["outcome"] = result.yes_won.astype(bool).astype(float)
     result["model_brier"] = (result.model_probability - result.outcome) ** 2
     result["market_brier"] = (result.market_probability - result.outcome) ** 2
-    result["model_market_gap"] = (
-        result.model_probability - result.market_probability
-    ).abs()
+    result["model_market_gap"] = (result.model_probability - result.market_probability).abs()
     return result
 
 
@@ -1045,8 +1003,10 @@ def _expected_calibration_error(frame: pd.DataFrame, bins: int = 5) -> float | N
     total = len(working)
     error = 0.0
     for _, group in working.groupby("probability_bin", observed=True):
-        error += len(group) / total * abs(
-            float(group.model_probability.mean()) - float(group.outcome.mean())
+        error += (
+            len(group)
+            / total
+            * abs(float(group.model_probability.mean()) - float(group.outcome.mean()))
         )
     return error
 
@@ -1064,9 +1024,7 @@ def trading_airport_scorecards(
     rows = []
     for airport in sorted(airports):
         trades = performance[performance.airport == airport].copy()
-        probabilities = probability_records[
-            probability_records.airport == airport
-        ].copy()
+        probabilities = probability_records[probability_records.airport == airport].copy()
         if not trades.empty:
             trades["target_date"] = pd.to_datetime(trades.target_date).dt.date
             daily = trades.groupby("target_date", as_index=False).agg(
@@ -1099,12 +1057,8 @@ def trading_airport_scorecards(
             sharpe = None
 
         probability_samples = len(probabilities)
-        model_brier = (
-            float(probabilities.model_brier.mean()) if probability_samples else None
-        )
-        market_brier = (
-            float(probabilities.market_brier.mean()) if probability_samples else None
-        )
+        model_brier = float(probabilities.model_brier.mean()) if probability_samples else None
+        market_brier = float(probabilities.market_brier.mean()) if probability_samples else None
         brier_advantage = (
             market_brier - model_brier
             if model_brier is not None and market_brier is not None
@@ -1479,20 +1433,16 @@ def walk_forward_ensemble(
         seen_dates: set[date] = set()
         for target, today in daily.items():
             history_cutoff = target - timedelta(days=90)
-            recent_history = [
-                item for item in recent_history if item[0] >= history_cutoff
-            ]
+            recent_history = [item for item in recent_history if item[0] >= history_cutoff]
             if len(seen_dates) >= min_history_days:
                 biases, weights = _rolling_biases_and_weights(recent_history)
                 fallback_weight = min(weights.values()) * 0.5 if weights else 1.0
                 corrected_values = [
-                    float(row.max_temp_c_forecast)
-                    - float(biases.get(str(row.model), 0.0))
+                    float(row.max_temp_c_forecast) - float(biases.get(str(row.model), 0.0))
                     for row in today
                 ]
                 current_weights = [
-                    float(weights.get(str(row.model), fallback_weight))
-                    for row in today
+                    float(weights.get(str(row.model), fallback_weight)) for row in today
                 ]
                 if corrected_values:
                     prediction = _weighted_average(
@@ -1511,10 +1461,7 @@ def walk_forward_ensemble(
                             "abs_error": abs(prediction - actual),
                         }
                     )
-            recent_history.extend(
-                (target, str(row.model), float(row.error))
-                for row in today
-            )
+            recent_history.extend((target, str(row.model), float(row.error)) for row in today)
             seen_dates.add(target)
     return pd.DataFrame(rows)
 
@@ -1548,8 +1495,9 @@ def forecast_scorecards(
         return pd.DataFrame()
     scored["target_date"] = pd.to_datetime(scored.target_date).dt.date
     scored["bucket_hit"] = scored.apply(
-        lambda row: math.floor(row.max_temp_c_forecast + 0.5)
-        == math.floor(row.max_temp_c_actual + 0.5),
+        lambda row: (
+            math.floor(row.max_temp_c_forecast + 0.5) == math.floor(row.max_temp_c_actual + 0.5)
+        ),
         axis=1,
     )
     scored["within_1c"] = scored.abs_error <= 1.0
@@ -1586,9 +1534,7 @@ def forecast_scorecards(
                     "exact_hit": exact_hit,
                     "within_1c": within_1c,
                     "forecast_score": max(0.0, min(100.0, forecast_score)),
-                    "data_quality": (
-                        "Strong" if n >= 90 else "Moderate" if n >= 30 else "Limited"
-                    ),
+                    "data_quality": ("Strong" if n >= 90 else "Moderate" if n >= 30 else "Limited"),
                 }
             )
     return pd.DataFrame(rows)

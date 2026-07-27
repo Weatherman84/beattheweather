@@ -313,3 +313,182 @@ def test_live_conditioning_records_all_observed_weather_contributions():
         "METAR conditioned",
         "Final incl. TAF",
     }
+
+
+def test_v10_persistent_warm_metars_reanchor_more_strongly_than_v954():
+    as_of = datetime(2026, 7, 26, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
+    now_utc = as_of.astimezone(timezone.utc)
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "target_date": as_of.date(),
+                "max_temp_c": maximum,
+                "source": "open-meteo",
+                "horizon": "Live",
+            }
+            for model, maximum in [("ECMWF", 23.0), ("GFS", 23.4), ("UKMO", 20.9)]
+        ]
+    )
+    valid_points = [
+        (now_utc - timedelta(hours=2), 17.0),
+        (now_utc - timedelta(hours=1), 18.0),
+        (now_utc, 19.0),
+        (now_utc + timedelta(hours=4), 23.0),
+    ]
+    hourly = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "valid_at": valid_at,
+                "temp_c": temp,
+                "dewpoint_c": 10.0,
+                "cloud_cover": 25.0,
+                "wind_kph": 10.0,
+                "wind_direction": 320.0,
+                "radiation_wm2": 600.0,
+                "temp_850hpa_c": 12.0,
+            }
+            for model in ["ECMWF", "GFS", "UKMO"]
+            for valid_at, temp in valid_points
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "observed_at": valid_at,
+                "temp_c": expected + 0.8,
+                "dewpoint_c": dewpoint,
+                "cloud_cover": 10.0,
+                "wind_kph": 8.0,
+                "wind_direction": 320.0,
+                "raw": "LTAC CAVOK",
+            }
+            for (valid_at, expected), dewpoint in zip(valid_points[:3], [10.0, 8.0, 6.0])
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=observations,
+        hourly=hourly,
+        markets=pd.DataFrame(),
+        timezone_name="Europe/Istanbul",
+        target=as_of.date(),
+        as_of=as_of,
+        wind_profile={"warm_sectors": [[140, 260]], "cool_sectors": [[300, 60]]},
+    )
+    assert result is not None
+    assert result.live_features["temperature_anchor_streak"] == 3
+    assert result.adjustment_contributions["temperature_anchor"] >= 0.50
+    assert result.current.loc[result.current.model == "UKMO", "outlier_multiplier"].iloc[0] < 1
+    assert result.adjustment_contributions["total"] > 0
+
+
+def test_v10_detects_failed_convection_after_clear_recent_metars():
+    as_of = datetime(2026, 7, 26, 13, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
+    now_utc = as_of.astimezone(timezone.utc)
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "target_date": as_of.date(),
+                "max_temp_c": 23.0,
+                "source": "open-meteo",
+                "horizon": "Live",
+            }
+            for model in ["ECMWF", "GFS"]
+        ]
+    )
+    hourly = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "valid_at": valid_at,
+                "temp_c": temp,
+                "dewpoint_c": 8.0,
+                "cloud_cover": 65.0,
+                "wind_kph": 10.0,
+                "wind_direction": 320.0,
+                "radiation_wm2": 600.0,
+                "temp_850hpa_c": 12.0,
+            }
+            for model in ["ECMWF", "GFS"]
+            for valid_at, temp in [
+                (now_utc - timedelta(hours=1), 20.0),
+                (now_utc, 21.0),
+                (now_utc + timedelta(hours=2), 23.0),
+            ]
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "observed_at": now_utc - timedelta(hours=1),
+                "temp_c": 20.5,
+                "dewpoint_c": 8.0,
+                "cloud_cover": 20.0,
+                "raw": "LTAC 9999 SCT040",
+            },
+            {
+                "airport": "LTAC",
+                "observed_at": now_utc,
+                "temp_c": 21.5,
+                "dewpoint_c": 7.0,
+                "cloud_cover": 20.0,
+                "raw": "LTAC 9999 SCT040 SCT100",
+            },
+        ]
+    )
+    tafs = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "issue_time": now_utc - timedelta(hours=2),
+                "collected_at": now_utc - timedelta(hours=2),
+                "valid_from": datetime(2026, 7, 25, 21, tzinfo=timezone.utc),
+                "valid_to": datetime(2026, 7, 27, 3, tzinfo=timezone.utc),
+                "raw_taf": "TAF LTAC TX23/2612Z TEMPO TSRA BKN030CB",
+                "is_amended": False,
+                "is_corrected": False,
+                "max_temp_c": 23.0,
+                "max_temp_at": datetime(2026, 7, 26, 12, tzinfo=timezone.utc),
+                "periods_json": json.dumps(
+                    [
+                        {
+                            "time_from": "2026-07-26T09:00:00+00:00",
+                            "time_to": "2026-07-26T14:00:00+00:00",
+                            "change": "TEMPO",
+                            "weather": "TSRA",
+                            "clouds": [{"cover": "BKN", "base": 3000, "type": "CB"}],
+                        }
+                    ]
+                ),
+            }
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=observations,
+        hourly=hourly,
+        markets=pd.DataFrame(),
+        tafs=tafs,
+        timezone_name="Europe/Istanbul",
+        target=as_of.date(),
+        as_of=as_of,
+    )
+    assert result is not None
+    assert result.adjustment_contributions["failed_convection"] == 0.35
+    assert result.live_features["failed_convection_active"] == 1
+    assert any("not materialised" in signal for signal in result.heat.signals)

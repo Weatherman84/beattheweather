@@ -149,12 +149,8 @@ def _build_nowcast_from_session(
     connection = session.connection()
     forecasts = pd.read_sql(select(Forecast).where(Forecast.airport == code), connection)
     actuals = pd.read_sql(select(DailyActual).where(DailyActual.airport == code), connection)
-    observations = pd.read_sql(
-        select(Observation).where(Observation.airport == code), connection
-    )
-    hourly = pd.read_sql(
-        select(HourlyForecast).where(HourlyForecast.airport == code), connection
-    )
+    observations = pd.read_sql(select(Observation).where(Observation.airport == code), connection)
+    hourly = pd.read_sql(select(HourlyForecast).where(HourlyForecast.airport == code), connection)
     tafs = pd.read_sql(select(TafReport).where(TafReport.airport == code), connection)
     return build_live_nowcast(
         forecasts=forecasts,
@@ -223,23 +219,19 @@ def _record_forecast_snapshot(
         "model_count": len(nowcast.current),
         "taf_adjustment_c": nowcast.taf_adjustment_c,
         "taf_conflict": taf_conflict,
-        "temp_anchor_adjustment_c": nowcast.adjustment_contributions.get(
-            "temperature_anchor", 0.0
-        ),
+        "temp_anchor_adjustment_c": nowcast.adjustment_contributions.get("temperature_anchor", 0.0),
         "dryness_adjustment_c": nowcast.adjustment_contributions.get("dryness", 0.0),
+        "dewpoint_trend_adjustment_c": nowcast.adjustment_contributions.get("dewpoint_trend", 0.0),
         "cloud_adjustment_c": nowcast.adjustment_contributions.get("cloud", 0.0),
-        "heating_rate_adjustment_c": nowcast.adjustment_contributions.get(
-            "heating_rate", 0.0
-        ),
+        "heating_rate_adjustment_c": nowcast.adjustment_contributions.get("heating_rate", 0.0),
         "recent_error_adjustment_c": nowcast.adjustment_contributions.get(
             "recent_station_error", 0.0
         ),
-        "radiation_adjustment_c": nowcast.adjustment_contributions.get(
-            "radiation", 0.0
-        ),
+        "radiation_adjustment_c": nowcast.adjustment_contributions.get("radiation", 0.0),
         "wind_adjustment_c": nowcast.adjustment_contributions.get("wind", 0.0),
-        "run_trend_adjustment_c": nowcast.adjustment_contributions.get(
-            "run_trend", 0.0
+        "run_trend_adjustment_c": nowcast.adjustment_contributions.get("run_trend", 0.0),
+        "failed_convection_adjustment_c": nowcast.adjustment_contributions.get(
+            "failed_convection", 0.0
         ),
         "live_adjustment_c": nowcast.adjustment_contributions.get("total", 0.0),
         "features_json": json.dumps(nowcast.live_features, separators=(",", ":")),
@@ -330,9 +322,7 @@ def _record_signal_snapshots(
             "captured_at": item["captured_at"],
         },
         lambda item: {
-            key: value
-            for key, value in item.items()
-            if key not in {"market_id", "captured_at"}
+            key: value for key, value in item.items() if key not in {"market_id", "captured_at"}
         },
         f"{code}/signal journal/{target}",
     )
@@ -354,19 +344,15 @@ def _record_strategy_snapshots(
     local_capture = captured_at.astimezone(ZoneInfo(airport["timezone"]))
     rows = []
     for strategy, probabilities in nowcast.stage_probabilities.items():
-        if (
-            strategy == "METAR conditioned"
-            and (target != local_capture.date() or nowcast.observed_max is None)
+        if strategy == "METAR conditioned" and (
+            target != local_capture.date() or nowcast.observed_max is None
         ):
             continue
         model_bucket = max(probabilities, key=probabilities.get)
         matches = [
             market
             for market in market_rows
-            if (
-                market.get("bucket_low_c") is None
-                or model_bucket >= float(market["bucket_low_c"])
-            )
+            if (market.get("bucket_low_c") is None or model_bucket >= float(market["bucket_low_c"]))
             and (
                 market.get("bucket_high_c") is None
                 or model_bucket <= float(market["bucket_high_c"])
@@ -422,8 +408,7 @@ def _record_strategy_snapshots(
         lambda item: {
             key: value
             for key, value in item.items()
-            if key
-            not in {"airport", "target_date", "captured_at", "timing", "strategy"}
+            if key not in {"airport", "target_date", "captured_at", "timing", "strategy"}
         },
         f"{code}/strategy journal/{target}",
     )
@@ -810,9 +795,7 @@ def collect_live_aviation(
     if airport_code not in catalog:
         raise KeyError(f"Unknown airport: {airport_code}")
     metar_rows = recent_metars(airport_code, attempts=1, timeout=5)
-    taf_rows = (
-        recent_tafs([airport_code], attempts=1, timeout=5) if include_taf else []
-    )
+    taf_rows = recent_tafs([airport_code], attempts=1, timeout=5) if include_taf else []
     counts: dict[str, object] = {
         "observations": 0,
         "taf_reports": 0,
@@ -825,9 +808,7 @@ def collect_live_aviation(
             Observation,
             metar_rows,
             lambda item: {"airport": airport_code, "observed_at": item["observed_at"]},
-            lambda item: {
-                key: value for key, value in item.items() if key != "observed_at"
-            },
+            lambda item: {key: value for key, value in item.items() if key != "observed_at"},
             f"{airport_code}/live METAR",
         )
         if taf_rows:
@@ -852,6 +833,153 @@ def collect_live_aviation(
         counts["latest_metar"] = max(row["observed_at"] for row in metar_rows)
     if taf_rows:
         counts["latest_taf"] = max(row["issue_time"] for row in taf_rows)
+    return counts
+
+
+def in_critical_window(airport: dict, now: datetime) -> bool:
+    """Return whether an airport is inside its configured local decision window."""
+    configured = airport.get("critical_window_local")
+    if not isinstance(configured, (list, tuple)) or len(configured) != 2:
+        return False
+    local = now.astimezone(ZoneInfo(airport["timezone"]))
+
+    def minutes(value: object) -> int:
+        hour, minute = str(value).split(":", maxsplit=1)
+        return int(hour) * 60 + int(minute)
+
+    start, end = (minutes(value) for value in configured)
+    current = local.hour * 60 + local.minute
+    if start <= end:
+        return start <= current <= end
+    return current >= start or current <= end
+
+
+def collect_live_decision_checkpoints(
+    airport_codes: list[str] | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Persist a fresh METAR-conditioned decision view only near airport peaks."""
+    init_db()
+    captured_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    catalog = trading_airports()
+    requested = airport_codes or list(catalog)
+    due_codes = [
+        code
+        for code in requested
+        if code in catalog and in_critical_window(catalog[code], captured_at)
+    ]
+    counts = {
+        "airports_due": len(due_codes),
+        "observations": 0,
+        "taf_reports": 0,
+        "market_prices": 0,
+        "forecast_snapshots": 0,
+        "signals": 0,
+        "strategy_snapshots": 0,
+    }
+    if not due_codes:
+        return counts
+    try:
+        fetched_tafs = recent_tafs(due_codes, attempts=2, timeout=10)
+    except Exception as exc:
+        print(f"WARN live-decision TAF batch: {exc}")
+        fetched_tafs = []
+    with Session() as session:
+        for code in due_codes:
+            airport = catalog[code]
+            try:
+                metar_rows = recent_metars(code, attempts=2, timeout=10)
+            except Exception as exc:
+                print(f"WARN {code}/live-decision METAR: {exc}")
+                metar_rows = []
+            counts["observations"] += _upsert_batch(
+                session,
+                Observation,
+                metar_rows,
+                lambda item: {"airport": code, "observed_at": item["observed_at"]},
+                lambda item: {key: value for key, value in item.items() if key != "observed_at"},
+                f"{code}/live-decision METAR",
+            )
+            airport_tafs = [row for row in fetched_tafs if row["airport"] == code]
+            counts["taf_reports"] += _upsert_batch(
+                session,
+                TafReport,
+                airport_tafs,
+                lambda item: {
+                    "airport": code,
+                    "issue_time": item["issue_time"],
+                    "raw_taf": item["raw_taf"],
+                },
+                lambda item: {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"airport", "issue_time", "raw_taf", "collected_at"}
+                },
+                f"{code}/live-decision TAF",
+            )
+            local_target = captured_at.astimezone(ZoneInfo(airport["timezone"])).date()
+            try:
+                market_rows = polymarket_prices(airport, local_target)
+            except Exception as exc:
+                print(f"WARN {code}/live-decision Polymarket: {exc}")
+                market_rows = []
+            counts["market_prices"] += _upsert_batch(
+                session,
+                MarketSnapshot,
+                market_rows,
+                lambda item: {
+                    "market_id": item["market_id"],
+                    "captured_at": item["captured_at"],
+                },
+                lambda item: {
+                    "airport": code,
+                    **{
+                        key: value
+                        for key, value in item.items()
+                        if key not in {"market_id", "captured_at"}
+                    },
+                },
+                f"{code}/live-decision Polymarket",
+            )
+            snapshot_at = (
+                max(row["captured_at"] for row in market_rows) if market_rows else captured_at
+            )
+            try:
+                nowcast = _build_nowcast_from_session(
+                    session,
+                    code,
+                    airport,
+                    local_target,
+                    snapshot_at,
+                    market_rows,
+                )
+                counts["forecast_snapshots"] += _record_forecast_snapshot(
+                    session,
+                    code,
+                    airport,
+                    local_target,
+                    snapshot_at,
+                    nowcast,
+                )
+                if market_rows:
+                    counts["signals"] += _record_signal_snapshots(
+                        session,
+                        code,
+                        airport,
+                        market_rows,
+                        nowcast=nowcast,
+                    )
+                    counts["strategy_snapshots"] += _record_strategy_snapshots(
+                        session,
+                        code,
+                        airport,
+                        market_rows,
+                        nowcast,
+                    )
+            except Exception as exc:
+                print(f"WARN {code}/live-decision snapshot: {exc}")
+            session.commit()
     return counts
 
 

@@ -38,12 +38,8 @@ class Forecast(Base):
     model_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
-    available_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    fetched_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     provenance_status: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
 
@@ -176,9 +172,7 @@ class ForecastSnapshot(Base):
     """Immutable point forecasts for each step of the forecast ladder."""
 
     __tablename__ = "forecast_snapshots"
-    __table_args__ = (
-        UniqueConstraint("airport", "target_date", "captured_at"),
-    )
+    __table_args__ = (UniqueConstraint("airport", "target_date", "captured_at"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     airport: Mapped[str] = mapped_column(String(4), index=True)
     target_date: Mapped[date] = mapped_column(Date, index=True)
@@ -192,16 +186,12 @@ class ForecastSnapshot(Base):
     final_forecast_c: Mapped[float] = mapped_column(Float)
     raw_spread_c: Mapped[float] = mapped_column(Float)
     weighted_raw_spread_c: Mapped[float | None] = mapped_column(Float, nullable=True)
-    bias_corrected_equal_spread_c: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
+    bias_corrected_equal_spread_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     bias_corrected_spread_c: Mapped[float] = mapped_column(Float)
     metar_conditioned_spread_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_spread_c: Mapped[float] = mapped_column(Float)
     observed_max_c: Mapped[float | None] = mapped_column(Float, nullable=True)
-    latest_metar_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    latest_metar_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expected_peak_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -212,12 +202,14 @@ class ForecastSnapshot(Base):
     taf_conflict: Mapped[bool] = mapped_column(Boolean, default=False)
     temp_anchor_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     dryness_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    dewpoint_trend_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     cloud_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     heating_rate_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     recent_error_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     radiation_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     wind_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     run_trend_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    failed_convection_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     live_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     features_json: Mapped[str] = mapped_column(Text, default="{}")
     peak_lock_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -228,9 +220,7 @@ class StrategySnapshot(Base):
 
     __tablename__ = "strategy_snapshots"
     __table_args__ = (
-        UniqueConstraint(
-            "airport", "target_date", "captured_at", "timing", "strategy"
-        ),
+        UniqueConstraint("airport", "target_date", "captured_at", "timing", "strategy"),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     airport: Mapped[str] = mapped_column(String(4), index=True)
@@ -305,22 +295,15 @@ def init_db() -> None:
                 row[1] for row in connection.execute(text("PRAGMA table_info(observations)"))
             }
             if "wind_direction" not in observation_columns:
-                connection.execute(
-                    text("ALTER TABLE observations ADD COLUMN wind_direction FLOAT")
-                )
+                connection.execute(text("ALTER TABLE observations ADD COLUMN wind_direction FLOAT"))
             if "cloud_cover" not in observation_columns:
-                connection.execute(
-                    text("ALTER TABLE observations ADD COLUMN cloud_cover FLOAT")
-                )
+                connection.execute(text("ALTER TABLE observations ADD COLUMN cloud_cover FLOAT"))
             if "cloud_base_ft" not in observation_columns:
-                connection.execute(
-                    text("ALTER TABLE observations ADD COLUMN cloud_base_ft FLOAT")
-                )
+                connection.execute(text("ALTER TABLE observations ADD COLUMN cloud_base_ft FLOAT"))
 
             def add_columns(table: str, definitions: dict[str, str]) -> None:
                 existing = {
-                    row[1]
-                    for row in connection.execute(text(f"PRAGMA table_info({table})"))
+                    row[1] for row in connection.execute(text(f"PRAGMA table_info({table})"))
                 }
                 for name, definition in definitions.items():
                     if name not in existing:
@@ -352,12 +335,14 @@ def init_db() -> None:
                     "bias_corrected_equal_spread_c": "FLOAT",
                     "temp_anchor_adjustment_c": "FLOAT DEFAULT 0",
                     "dryness_adjustment_c": "FLOAT DEFAULT 0",
+                    "dewpoint_trend_adjustment_c": "FLOAT DEFAULT 0",
                     "cloud_adjustment_c": "FLOAT DEFAULT 0",
                     "heating_rate_adjustment_c": "FLOAT DEFAULT 0",
                     "recent_error_adjustment_c": "FLOAT DEFAULT 0",
                     "radiation_adjustment_c": "FLOAT DEFAULT 0",
                     "wind_adjustment_c": "FLOAT DEFAULT 0",
                     "run_trend_adjustment_c": "FLOAT DEFAULT 0",
+                    "failed_convection_adjustment_c": "FLOAT DEFAULT 0",
                     "live_adjustment_c": "FLOAT DEFAULT 0",
                     "features_json": "TEXT DEFAULT '{}'",
                     "peak_lock_json": "TEXT DEFAULT '{}'",

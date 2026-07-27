@@ -120,9 +120,7 @@ def hourly_context(
     result = _hourly_for_target(frame, timezone_name, target, as_of)
     if result.empty:
         return None, None, None, None, None, None, None, None
-    result = result.sort_values("run_at").drop_duplicates(
-        ["model", "valid_at"], keep="last"
-    )
+    result = result.sort_values("run_at").drop_duplicates(["model", "valid_at"], keep="last")
     local_now = as_of.astimezone(ZoneInfo(timezone_name))
     reference = (
         local_now
@@ -206,9 +204,7 @@ def remaining_heating_context(
             continue
         nearest_index = (model_frame.valid_at - reference_utc).abs().idxmin()
         expected_now = float(model_frame.loc[nearest_index, "temp_c"])
-        future = model_frame[
-            model_frame.valid_at >= reference_utc - timedelta(minutes=30)
-        ]
+        future = model_frame[model_frame.valid_at >= reference_utc - timedelta(minutes=30)]
         if future.empty:
             rises.append(0.0)
             future_radiation.append(0.0)
@@ -259,10 +255,13 @@ def probability_moments(probabilities: dict[int, float]) -> tuple[float, float]:
     if total <= 0:
         raise ValueError("Probability distribution must contain positive mass")
     mean = sum(float(bucket) * probability for bucket, probability in probabilities.items()) / total
-    variance = sum(
-        probability * (float(bucket) - mean) ** 2
-        for bucket, probability in probabilities.items()
-    ) / total
+    variance = (
+        sum(
+            probability * (float(bucket) - mean) ** 2
+            for bucket, probability in probabilities.items()
+        )
+        / total
+    )
     return float(mean), float(math.sqrt(max(0.0, variance)))
 
 
@@ -307,13 +306,204 @@ def recent_station_residual(scored: pd.DataFrame) -> float | None:
     )
     if daily.empty:
         return None
-    weights = pd.Series([0.72 ** index for index in range(len(daily) - 1, -1, -1)])
+    weights = pd.Series([0.72**index for index in range(len(daily) - 1, -1, -1)])
     return float((daily.station_residual.reset_index(drop=True) * weights).sum() / weights.sum())
+
+
+def robust_outlier_multipliers(values: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Downweight isolated model maxima without deleting a plausible minority cluster."""
+    numeric = values.astype(float)
+    median = float(numeric.median())
+    distances = (numeric - median).abs()
+    mad = float(distances.median())
+    robust_scale = max(0.50, 1.4826 * mad)
+    soft_limit = max(1.25, 1.75 * robust_scale)
+    multipliers = pd.Series(1.0, index=numeric.index, dtype=float)
+    beyond = distances > soft_limit
+    multipliers.loc[beyond] = (soft_limit / distances.loc[beyond].clip(lower=soft_limit)).clip(
+        lower=0.25
+    )
+    # With only two models there is no majority from which to identify an outlier.
+    if len(numeric) < 3:
+        multipliers[:] = 1.0
+    return multipliers, distances
+
+
+def observation_path_residuals(
+    hourly: pd.DataFrame,
+    observations: pd.DataFrame,
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+) -> pd.DataFrame:
+    """Compare recent METARs with the same latest model paths used by the nowcast."""
+    if observations.empty:
+        return pd.DataFrame(
+            columns=["observed_at", "observed_temp_c", "expected_temp_c", "residual_c"]
+        )
+    paths = _hourly_for_target(hourly, timezone_name, target, as_of)
+    if paths.empty:
+        return pd.DataFrame(
+            columns=["observed_at", "observed_temp_c", "expected_temp_c", "residual_c"]
+        )
+    paths = paths.sort_values("run_at").drop_duplicates(["model", "valid_at"], keep="last")
+    latest_runs = paths.groupby("model").run_at.transform("max")
+    paths = paths[paths.run_at == latest_runs]
+    rows = []
+    for observation in observations.sort_values("observed_at").tail(6).itertuples():
+        observed_at = pd.Timestamp(observation.observed_at)
+        expected_values: list[float] = []
+        for _, model_frame in paths.groupby("model"):
+            distance = (model_frame.valid_at - observed_at).abs()
+            if distance.empty:
+                continue
+            nearest_index = distance.idxmin()
+            if distance.loc[nearest_index] <= timedelta(minutes=75):
+                expected_values.append(float(model_frame.loc[nearest_index, "temp_c"]))
+        if not expected_values:
+            continue
+        expected = float(pd.Series(expected_values).median())
+        observed = float(observation.temp_c)
+        rows.append(
+            {
+                "observed_at": observed_at,
+                "observed_temp_c": observed,
+                "expected_temp_c": expected,
+                "residual_c": observed - expected,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def temperature_anchor_profile(
+    residuals: pd.DataFrame,
+    fallback_anomaly: float | None,
+    hours_to_peak: float | None,
+) -> tuple[float | None, float, int, float | None]:
+    """Return effective path residual, adaptive gain, streak length and recent median."""
+    if residuals.empty:
+        effective = fallback_anomaly
+        recent_median = fallback_anomaly
+        streak = int(fallback_anomaly is not None and abs(fallback_anomaly) >= 0.30)
+    else:
+        recent = residuals.residual_c.astype(float).tail(3)
+        latest = float(recent.iloc[-1])
+        recent_median = float(recent.median())
+        effective = 0.65 * latest + 0.35 * recent_median
+        signs = recent[recent.abs() >= 0.30].map(lambda value: 1 if value > 0 else -1)
+        streak = 0
+        if not signs.empty:
+            final_sign = int(signs.iloc[-1])
+            for sign in reversed(signs.tolist()):
+                if int(sign) != final_sign:
+                    break
+                streak += 1
+
+    if hours_to_peak is None:
+        gain = 0.45
+    elif hours_to_peak > 4:
+        gain = 0.50
+    elif hours_to_peak > 2:
+        gain = 0.60
+    elif hours_to_peak > 0:
+        gain = 0.72
+    else:
+        gain = 0.82
+    if streak >= 3 and recent_median is not None and abs(recent_median) >= 0.40:
+        gain = min(0.88, gain + 0.15)
+    return effective, gain, streak, recent_median
+
+
+def dewpoint_trend(observations: pd.DataFrame) -> float | None:
+    """Observed dewpoint change per hour over the latest usable two-hour window."""
+    if observations.empty or "dewpoint_c" not in observations:
+        return None
+    frame = observations.dropna(subset=["dewpoint_c"]).sort_values("observed_at")
+    if len(frame) < 2:
+        return None
+    latest_at = pd.Timestamp(frame.observed_at.iloc[-1])
+    recent = frame[frame.observed_at >= latest_at - timedelta(hours=2)]
+    if len(recent) < 2:
+        return None
+    elapsed = (
+        pd.Timestamp(recent.observed_at.iloc[-1]) - pd.Timestamp(recent.observed_at.iloc[0])
+    ).total_seconds() / 3600
+    if elapsed <= 0:
+        return None
+    return float((recent.dewpoint_c.iloc[-1] - recent.dewpoint_c.iloc[0]) / elapsed)
+
+
+def failed_convection_adjustment(
+    observations: pd.DataFrame,
+    taf_guidance: TafGuidance | None,
+    local_now: datetime,
+    hours_to_peak: float | None,
+) -> tuple[float, str | None]:
+    """Recover cautiously when forecast peak-window convection is not materialising."""
+    if taf_guidance is None or observations.empty or local_now.hour < 11:
+        return 0.0, None
+    risk = (
+        taf_guidance.thunderstorm_risk
+        or taf_guidance.precipitation_risk
+        or taf_guidance.cloud_risk == "BKN/OVC near peak"
+    )
+    if not risk or (hours_to_peak is not None and hours_to_peak > 5):
+        return 0.0, None
+    frame = observations.sort_values("observed_at")
+    latest_at = pd.Timestamp(frame.observed_at.iloc[-1])
+    recent = frame[frame.observed_at >= latest_at - timedelta(hours=2)]
+    if len(recent) < 2:
+        return 0.0, None
+    raw = " ".join(recent.raw.fillna("").astype(str)).upper() if "raw" in recent else ""
+    weather_tokens = (" TS", "TS", "RA", "SH", "DZ", "SN", "GR", "CB")
+    if any(token in raw for token in weather_tokens):
+        return 0.0, None
+    cloud_values = (
+        recent.cloud_cover.dropna().astype(float)
+        if "cloud_cover" in recent
+        else pd.Series(dtype=float)
+    )
+    if not cloud_values.empty and float(cloud_values.median()) > 55:
+        return 0.0, None
+    if taf_guidance.thunderstorm_risk:
+        adjustment = 0.35
+        label = "TAF thunderstorm/CB risk has not materialised in recent METARs"
+    elif taf_guidance.precipitation_risk:
+        adjustment = 0.25
+        label = "TAF precipitation risk has not materialised in recent METARs"
+    else:
+        adjustment = 0.15
+        label = "Forecast BKN/OVC has not materialised in recent METARs"
+    return adjustment, label
+
+
+def _protect_persistent_anchor(
+    contributions: dict[str, float],
+    *,
+    anchor_streak: int,
+) -> dict[str, float]:
+    """Prevent weak opposing factors from erasing a confirmed three-METAR anchor."""
+    anchor = float(contributions.get("temperature_anchor", 0.0))
+    if anchor_streak < 3 or abs(anchor) < 0.35:
+        return contributions
+    direction = 1.0 if anchor > 0 else -1.0
+    supporting = sum(abs(value) for value in contributions.values() if value * direction > 0)
+    opposing_names = [name for name, value in contributions.items() if value * direction < 0]
+    opposition = sum(abs(contributions[name]) for name in opposing_names)
+    minimum_net = abs(anchor) * 0.35
+    if supporting - opposition >= minimum_net or opposition <= 0:
+        return contributions
+    allowed_opposition = max(0.0, supporting - minimum_net)
+    scale = allowed_opposition / opposition
+    return {
+        name: value * scale if name in opposing_names else value
+        for name, value in contributions.items()
+    }
 
 
 def _scaled_live_adjustments(contributions: dict[str, float]) -> dict[str, float]:
     raw_total = sum(contributions.values())
-    clipped_total = max(-1.5, min(1.5, raw_total))
+    clipped_total = max(-2.0, min(2.0, raw_total))
     if abs(raw_total) > 1e-9 and clipped_total != raw_total:
         scale = clipped_total / raw_total
         contributions = {name: value * scale for name, value in contributions.items()}
@@ -376,24 +566,24 @@ def build_live_nowcast(
         d1 = d1[pd.to_datetime(d1.target_date).dt.date < target]
     prior_actuals = actuals.copy()
     if not prior_actuals.empty:
-        prior_actuals = prior_actuals[
-            pd.to_datetime(prior_actuals.target_date).dt.date < target
-        ]
+        prior_actuals = prior_actuals[pd.to_datetime(prior_actuals.target_date).dt.date < target]
     d1_scored = score_frame(d1, prior_actuals)
     if not d1_scored.empty:
         d1_scored["target_date"] = pd.to_datetime(d1_scored.target_date).dt.date
-        d1_scored = d1_scored[
-            d1_scored.target_date >= target - timedelta(days=90)
-        ]
+        d1_scored = d1_scored[d1_scored.target_date >= target - timedelta(days=90)]
     d1_metrics = model_metrics(d1_scored)
     bias_map = dict(zip(d1_metrics.model, d1_metrics.bias)) if not d1_metrics.empty else {}
     weight_map = model_weight_map(d1_scored)
-    fallback_weight = (
-        float(pd.Series(weight_map.values()).median()) if weight_map else 1.0
-    )
+    fallback_weight = float(pd.Series(weight_map.values()).median()) if weight_map else 1.0
     current["d1_bias"] = current.model.map(bias_map).fillna(0).astype(float)
     current["corrected_max"] = current.max_temp_c - current.d1_bias
-    current["model_weight"] = current.model.map(weight_map).fillna(fallback_weight).astype(float)
+    current["performance_weight"] = (
+        current.model.map(weight_map).fillna(fallback_weight).astype(float)
+    )
+    outlier_multipliers, robust_distances = robust_outlier_multipliers(current.corrected_max)
+    current["outlier_multiplier"] = outlier_multipliers
+    current["robust_distance_c"] = robust_distances
+    current["model_weight"] = current.performance_weight * current.outlier_multiplier
     current["model_weight"] = current.model_weight / current.model_weight.sum()
     raw_equal = consensus(current.max_temp_c.tolist())
     weighted_raw = consensus(
@@ -422,21 +612,16 @@ def build_live_nowcast(
             recent_obs.observed_at.iloc[-1] - recent_obs.observed_at.iloc[0]
         ).total_seconds() / 3600
         if elapsed > 0:
-            heating_rate = float(
-                (recent_obs.temp_c.iloc[-1] - recent_obs.temp_c.iloc[0]) / elapsed
-            )
+            heating_rate = float((recent_obs.temp_c.iloc[-1] - recent_obs.temp_c.iloc[0]) / elapsed)
     heating_rates = observed_heating_rates(obs_today)
-    comparable_rates = [
-        value for value in heating_rates.values() if value is not None
-    ]
+    comparable_rates = [value for value in heating_rates.values() if value is not None]
     if comparable_rates:
         heating_rate = float(pd.Series(comparable_rates).median())
 
     observed_cooling = False
     if latest_obs is not None and observed_max is not None:
-        observed_cooling = (
-            float(latest_obs.temp_c) <= observed_max - 0.5
-            or (heating_rate is not None and heating_rate <= 0.0)
+        observed_cooling = float(latest_obs.temp_c) <= observed_max - 0.5 or (
+            heating_rate is not None and heating_rate <= 0.0
         )
     taf_guidance = build_taf_guidance(
         tafs if tafs is not None else pd.DataFrame(),
@@ -480,9 +665,7 @@ def build_live_nowcast(
             (as_of_utc - pd.Timestamp(latest_obs.observed_at)).total_seconds() / 3600,
         )
     latest_observation_at = (
-        pd.Timestamp(latest_obs.observed_at).to_pydatetime()
-        if latest_obs is not None
-        else None
+        pd.Timestamp(latest_obs.observed_at).to_pydatetime() if latest_obs is not None else None
     )
     schedule = metar_schedule_status(
         as_of=as_of,
@@ -544,20 +727,12 @@ def build_live_nowcast(
         warm_wind_sectors=wind_profile.get("warm_sectors"),
         cool_wind_sectors=wind_profile.get("cool_sectors"),
         wind_source=wind_source,
-        guidance_score_points=(
-            taf_guidance.heat_score_points if taf_guidance is not None else 0
-        ),
-        guidance_adjustment_c=(
-            0.0
-        ),
+        guidance_score_points=(taf_guidance.heat_score_points if taf_guidance is not None else 0),
+        guidance_adjustment_c=(0.0),
         guidance_signals=(taf_guidance.signals if taf_guidance is not None else None),
     )
-    taf_center_adjustment = (
-        taf_guidance.center_adjustment_c if taf_guidance is not None else 0.0
-    )
-    taf_spread_addition = (
-        taf_guidance.spread_addition_c if taf_guidance is not None else 0.0
-    )
+    taf_center_adjustment = taf_guidance.center_adjustment_c if taf_guidance is not None else 0.0
+    taf_spread_addition = taf_guidance.spread_addition_c if taf_guidance is not None else 0.0
     live_observation_available = (
         target == local_now.date()
         and current_observed_temp is not None
@@ -586,9 +761,7 @@ def build_live_nowcast(
     )
     cloud_surprise = (
         cloud_cover - observed_cloud
-        if live_observation_available
-        and cloud_cover is not None
-        and observed_cloud is not None
+        if live_observation_available and cloud_cover is not None and observed_cloud is not None
         else None
     )
     heating_surprise = (
@@ -599,18 +772,51 @@ def build_live_nowcast(
         else None
     )
     station_residual = recent_station_residual(d1_scored)
+    path_residuals = observation_path_residuals(
+        hourly,
+        obs_today,
+        timezone_name,
+        target,
+        as_of,
+    )
+    (
+        effective_temperature_residual,
+        temperature_anchor_gain,
+        temperature_anchor_streak,
+        recent_temperature_residual,
+    ) = temperature_anchor_profile(
+        path_residuals,
+        temperature_anomaly,
+        hours_to_peak,
+    )
+    observed_dewpoint_trend = dewpoint_trend(obs_today)
+    failed_convection, failed_convection_signal = failed_convection_adjustment(
+        obs_today,
+        taf_guidance,
+        local_now,
+        hours_to_peak,
+    )
 
     def limited(value: float | None, lower: float, upper: float) -> float:
         return max(lower, min(upper, float(value))) if value is not None else 0.0
 
     contributions = {
         "temperature_anchor": limited(
-            0.45 * temperature_anomaly if temperature_anomaly is not None else None,
-            -0.90,
-            0.90,
+            temperature_anchor_gain * effective_temperature_residual
+            if effective_temperature_residual is not None
+            else None,
+            -1.40,
+            1.40,
         ),
         "dryness": limited(
             0.025 * dryness_surprise if dryness_surprise is not None else None,
+            -0.20,
+            0.20,
+        ),
+        "dewpoint_trend": limited(
+            -0.08 * observed_dewpoint_trend
+            if live_observation_available and observed_dewpoint_trend is not None
+            else None,
             -0.20,
             0.20,
         ),
@@ -650,22 +856,30 @@ def build_live_nowcast(
             else 0.0
         ),
         "run_trend": limited(
-            0.15 * trend
-            if live_observation_available and trend is not None
-            else None,
+            0.15 * trend if live_observation_available and trend is not None else None,
             -0.20,
             0.20,
         ),
+        "failed_convection": (failed_convection if live_observation_available else 0.0),
     }
+    contributions = _protect_persistent_anchor(
+        contributions,
+        anchor_streak=temperature_anchor_streak,
+    )
     adjustments = _scaled_live_adjustments(contributions)
     live_adjustment = adjustments["total"]
     heat = HeatSpikeAssessment(
         heat.score,
         heat.status,
         live_adjustment,
-        heat.signals,
+        [
+            *heat.signals,
+            *([failed_convection_signal] if failed_convection_signal else []),
+        ],
     )
-    signed = [value for name, value in adjustments.items() if name != "total" and abs(value) >= 0.05]
+    signed = [
+        value for name, value in adjustments.items() if name != "total" and abs(value) >= 0.05
+    ]
     contradictory = any(value > 0 for value in signed) and any(value < 0 for value in signed)
     live_sigma_floor = 0.80 if contradictory else 0.60 if len(signed) >= 4 else 0.65
     metar_unconditioned = consensus(
@@ -713,9 +927,14 @@ def build_live_nowcast(
     }
     live_features = {
         "temperature_anomaly_c": temperature_anomaly,
+        "effective_temperature_residual_c": effective_temperature_residual,
+        "recent_temperature_residual_c": recent_temperature_residual,
+        "temperature_anchor_gain": temperature_anchor_gain,
+        "temperature_anchor_streak": float(temperature_anchor_streak),
         "observed_dryness_c": observed_dryness,
         "model_dryness_c": model_dryness,
         "dryness_surprise_c": dryness_surprise,
+        "observed_dewpoint_trend_cph": observed_dewpoint_trend,
         "observed_cloud_cover_pct": observed_cloud,
         "model_cloud_cover_pct": cloud_cover,
         "cloud_surprise_pct": cloud_surprise,
@@ -729,12 +948,13 @@ def build_live_nowcast(
         "model_radiation_wm2": radiation,
         "future_radiation_max_wm2": future_radiation,
         "remaining_model_rise_c": remaining_rise,
+        "failed_convection_active": float(failed_convection > 0),
+        "failed_convection_adjustment_c": failed_convection,
     }
     if not d1_scored.empty:
         residual_errors = d1_scored.copy()
         residual_errors["residual_abs_error"] = (
-            residual_errors.error
-            - residual_errors.groupby("model").error.transform("mean")
+            residual_errors.error - residual_errors.groupby("model").error.transform("mean")
         ).abs()
         residual_mae = residual_errors.groupby("model").residual_abs_error.mean()
         mae_map = residual_mae.to_dict()
@@ -753,9 +973,7 @@ def build_live_nowcast(
     historical_mae = sum(available_mae) / covered_weight if covered_weight > 0 else None
     historical_days = int(d1_metrics.n.max()) if not d1_metrics.empty else 0
     history_score = (
-        max(0.0, min(100.0, 100 - 35 * historical_mae))
-        if historical_mae is not None
-        else 50.0
+        max(0.0, min(100.0, 100 - 35 * historical_mae)) if historical_mae is not None else 50.0
     )
     spread_score = max(0.0, min(100.0, 105 - 25 * corrected.spread))
     sample_score = min(100.0, historical_days / 90 * 100)
@@ -774,16 +992,11 @@ def build_live_nowcast(
         "live_data": live_score,
     }
     base_confidence = (
-        0.40 * history_score
-        + 0.30 * spread_score
-        + 0.20 * sample_score
-        + 0.10 * live_score
+        0.40 * history_score + 0.30 * spread_score + 0.20 * sample_score + 0.10 * live_score
     )
     if taf_guidance is not None:
         confidence_factors["taf_guidance"] = float(taf_guidance.confidence_score)
-        forecast_confidence = round(
-            0.80 * base_confidence + 0.20 * taf_guidance.confidence_score
-        )
+        forecast_confidence = round(0.80 * base_confidence + 0.20 * taf_guidance.confidence_score)
     else:
         forecast_confidence = round(base_confidence)
     return LiveNowcast(

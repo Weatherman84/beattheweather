@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("9.5.4")
+discard_stale_weatherman_modules("10.0.0")
 
 import pandas as pd
 import plotly.express as px
@@ -44,6 +44,12 @@ from weatherman.db import (
     init_db,
     refresh_database_connections,
 )
+from weatherman.decision import (
+    balanced_hedge_plan,
+    build_trade_decision,
+    hedge_outcome_table,
+    latest_prior_probabilities,
+)
 from weatherman.nowcast import build_live_nowcast
 from weatherman.navigation import render_app_navigation
 from weatherman.research import filter_target_window, market_timing_metrics
@@ -65,9 +71,7 @@ def last_update(frame: pd.DataFrame, column: str, timezone_name: str) -> str:
 def latest_metar_time(airport_code: str) -> datetime | None:
     with Session() as session:
         return session.scalar(
-            select(func.max(Observation.observed_at)).where(
-                Observation.airport == airport_code
-            )
+            select(func.max(Observation.observed_at)).where(Observation.airport == airport_code)
         )
 
 
@@ -83,6 +87,29 @@ def utc_timestamp(value: datetime | None) -> pd.Timestamp | None:
         return None
     parsed = pd.Timestamp(value)
     return parsed.tz_localize("UTC") if parsed.tzinfo is None else parsed.tz_convert("UTC")
+
+
+def critical_window_labels(airport_details: dict, target_date) -> tuple[str, str] | None:
+    configured = airport_details.get("critical_window_local")
+    if not isinstance(configured, (list, tuple)) or len(configured) != 2:
+        return None
+    airport_zone = ZoneInfo(airport_details["timezone"])
+    vienna_zone = ZoneInfo("Europe/Vienna")
+    local_times = []
+    vienna_times = []
+    for value in configured:
+        hour, minute = (int(part) for part in str(value).split(":", maxsplit=1))
+        local = datetime(
+            target_date.year,
+            target_date.month,
+            target_date.day,
+            hour,
+            minute,
+            tzinfo=airport_zone,
+        )
+        local_times.append(local.strftime("%H:%M"))
+        vienna_times.append(local.astimezone(vienna_zone).strftime("%H:%M"))
+    return "–".join(local_times), "–".join(vienna_times)
 
 
 @st.cache_data(show_spinner=False, ttl=900)
@@ -123,9 +150,7 @@ def cached_airport_timing_metrics(
         window_days,
     )
     if not live_scored.empty:
-        live_scored = live_scored[
-            live_scored.lead_bucket.str.startswith("D0 live", na=False)
-        ]
+        live_scored = live_scored[live_scored.lead_bucket.str.startswith("D0 live", na=False)]
     return pd.concat(
         [
             market_timing_metrics(historical_scored, airport_catalog),
@@ -150,9 +175,12 @@ airport = st.sidebar.selectbox(
     "Airport", list(catalog), format_func=lambda code: f"{code} · {catalog[code]['name']}"
 )
 timezone_name = catalog[airport]["timezone"]
-target = st.sidebar.date_input(
-    "Target date", value=datetime.now(ZoneInfo(timezone_name)).date()
-)
+target = st.sidebar.date_input("Target date", value=datetime.now(ZoneInfo(timezone_name)).date())
+critical_window = critical_window_labels(catalog[airport], target)
+if critical_window is not None:
+    st.sidebar.caption(
+        f"Critical window · {critical_window[0]} airport local · {critical_window[1]} Austria"
+    )
 
 
 @st.fragment(run_every=60)
@@ -168,9 +196,7 @@ def live_aviation_poller() -> None:
         before_metar = utc_timestamp(latest_metar_time(airport))
         before_taf = utc_timestamp(latest_taf_time(airport))
         last_taf_poll = st.session_state.get(taf_key)
-        include_taf = (
-            last_taf_poll is None or now - last_taf_poll >= timedelta(minutes=10)
-        )
+        include_taf = last_taf_poll is None or now - last_taf_poll >= timedelta(minutes=10)
         try:
             collect_live_aviation(airport, include_taf=include_taf)
         except Exception as exc:
@@ -188,9 +214,7 @@ def live_aviation_poller() -> None:
             metar_advanced = after_metar is not None and (
                 before_metar is None or after_metar > before_metar
             )
-            taf_advanced = after_taf is not None and (
-                before_taf is None or after_taf > before_taf
-            )
+            taf_advanced = after_taf is not None and (before_taf is None or after_taf > before_taf)
             if metar_advanced:
                 st.session_state[detection_key] = now
             if metar_advanced or taf_advanced:
@@ -242,9 +266,7 @@ if st.sidebar.button("Refresh forecasts + METAR + TAF", type="primary"):
             f"{result['taf_reports']} TAF report(s) and "
             f"{result['market_prices']} market prices."
         )
-        if after_metar is not None and (
-            before_metar is None or after_metar > before_metar
-        ):
+        if after_metar is not None and (before_metar is None or after_metar > before_metar):
             local_metar = after_metar.tz_convert(timezone_name).strftime("%d.%m.%Y %H:%M")
             feedback = ("success", f"{saved} METAR advanced to {local_metar}.")
         elif after_metar is not None:
@@ -263,9 +285,7 @@ if st.sidebar.button("Refresh forecasts + METAR + TAF", type="primary"):
         st.rerun()
 
 with Session() as session:
-    all_forecasts = pd.read_sql(
-        select(Forecast).where(Forecast.airport == airport), session.bind
-    )
+    all_forecasts = pd.read_sql(select(Forecast).where(Forecast.airport == airport), session.bind)
     all_actuals = pd.read_sql(
         select(DailyActual).where(DailyActual.airport == airport), session.bind
     )
@@ -288,9 +308,7 @@ with Session() as session:
         select(ForecastSnapshot).where(ForecastSnapshot.airport == airport),
         session.bind,
     )
-    all_tafs = pd.read_sql(
-        select(TafReport).where(TafReport.airport == airport), session.bind
-    )
+    all_tafs = pd.read_sql(select(TafReport).where(TafReport.airport == airport), session.bind)
 
 forecasts = (
     all_forecasts[all_forecasts.airport == airport].copy()
@@ -298,9 +316,7 @@ forecasts = (
     else all_forecasts
 )
 actuals = (
-    all_actuals[all_actuals.airport == airport].copy()
-    if not all_actuals.empty
-    else all_actuals
+    all_actuals[all_actuals.airport == airport].copy() if not all_actuals.empty else all_actuals
 )
 observations = (
     all_observations[all_observations.airport == airport].copy()
@@ -371,6 +387,8 @@ tab_performance = tab_airports = tab_simulation = tab_data = None
 
 probabilities: dict[int, float] | None = None
 day_status = None
+trade_decision = None
+prior_probabilities: dict[str, float] = {}
 with tab_live:
     live_nowcast = build_live_nowcast(
         forecasts=forecasts,
@@ -398,6 +416,34 @@ with tab_live:
         temp_850 = live_nowcast.temp_850_c
         radiation = live_nowcast.radiation_wm2
         live_mean = live_nowcast.final_forecast_mean
+        prior_probabilities = latest_prior_probabilities(signal_snapshots, target)
+        current_market_conflict = detect_market_model_conflict(
+            probabilities,
+            latest_markets,
+        )
+        material_adjustments = {
+            name: value
+            for name, value in live_nowcast.adjustment_contributions.items()
+            if name != "total" and abs(value) >= 0.05
+        }
+        strongest_live_signals = [
+            f"{name.replace('_', ' ').title()} {value:+.2f} °C"
+            for name, value in sorted(
+                material_adjustments.items(),
+                key=lambda item: abs(item[1]),
+                reverse=True,
+            )[:3]
+        ]
+        trade_decision = build_trade_decision(
+            probabilities=probabilities,
+            markets=latest_markets,
+            forecast_confidence=live_nowcast.forecast_confidence,
+            day_status=day_status,
+            metar_pending=live_nowcast.metar_pending,
+            market_model_conflict=current_market_conflict.is_conflict,
+            previous_probabilities=prior_probabilities,
+            live_signals=strongest_live_signals,
+        )
 
         if live_nowcast.metar_pending:
             due_local = (
@@ -409,6 +455,54 @@ with tab_live:
             st.error(
                 f"METAR pending{due_text} – do not trade. The new routine report is due but "
                 "has not reached the official feed. Edge signals are temporarily blocked."
+            )
+
+        decision_title = (
+            f"{trade_decision.status} · {trade_decision.bucket_label}"
+            if trade_decision.bucket_label
+            else trade_decision.status
+        )
+        if trade_decision.status == "BET":
+            st.success(f"v10 Decision Engine · {decision_title}")
+        elif trade_decision.status == "WATCH":
+            st.warning(f"v10 Decision Engine · {decision_title}")
+        else:
+            st.info(f"v10 Decision Engine · {decision_title}")
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric(
+            "Fair probability",
+            (
+                f"{trade_decision.fair_probability:.1%}"
+                if trade_decision.fair_probability is not None
+                else "—"
+            ),
+        )
+        d2.metric(
+            "YES ask",
+            (f"{trade_decision.buy_price:.1%}" if trade_decision.buy_price is not None else "—"),
+        )
+        d3.metric(
+            "Probability edge",
+            f"{trade_decision.edge:+.1%}" if trade_decision.edge is not None else "—",
+        )
+        d4.metric(
+            "Change since snapshot",
+            (
+                f"{trade_decision.probability_change:+.1%}"
+                if trade_decision.probability_change is not None
+                else "First snapshot"
+            ),
+        )
+        with st.expander("Why this decision?", expanded=trade_decision.status != "BET"):
+            for reason in trade_decision.reasons:
+                st.write(f"• {reason}")
+            for blocker in trade_decision.blockers:
+                st.write(f"• Blocker: {blocker}")
+            st.caption(
+                "BET requires at least eight percentage points of executable edge, "
+                "confidence of at least 65/100 and a bid-ask spread no wider than 12%. "
+                "WATCH means the weather setup may be interesting but at least one "
+                "required condition is still missing."
             )
 
         c1, c2, c3 = st.columns(3)
@@ -519,9 +613,9 @@ with tab_live:
                     if name != "total"
                 ]
             )
-            contributions["Center contribution"] = contributions[
-                "Center contribution"
-            ].map(lambda value: f"{value:+.2f} °C")
+            contributions["Center contribution"] = contributions["Center contribution"].map(
+                lambda value: f"{value:+.2f} °C"
+            )
             st.dataframe(contributions, hide_index=True, width="stretch")
             st.caption(
                 f"Bias corrected {corrected.mean:.2f} °C → live factors "
@@ -542,13 +636,34 @@ with tab_live:
             st.dataframe(features, hide_index=True, width="stretch")
 
         with st.expander("Dynamic model weights and confidence"):
-            weights = current[["model", "model_weight", "d1_bias"]].copy()
+            weights = current[
+                [
+                    "model",
+                    "model_weight",
+                    "performance_weight",
+                    "outlier_multiplier",
+                    "robust_distance_c",
+                    "d1_bias",
+                ]
+            ].copy()
             weights["model_weight"] = weights.model_weight.map(lambda value: f"{value:.1%}")
+            weights["performance_weight"] = weights.performance_weight.map(
+                lambda value: f"{value:.2f}"
+            )
+            weights["outlier_multiplier"] = weights.outlier_multiplier.map(
+                lambda value: f"{value:.2f}×"
+            )
+            weights["robust_distance_c"] = weights.robust_distance_c.map(
+                lambda value: f"{value:.2f} °C"
+            )
             weights["d1_bias"] = weights.d1_bias.map(lambda value: f"{value:+.2f} °C")
             weights = weights.rename(
                 columns={
                     "model": "Model",
                     "model_weight": "Current weight",
+                    "performance_weight": "Historical weight",
+                    "outlier_multiplier": "Outlier protection",
+                    "robust_distance_c": "Distance from median",
                     "d1_bias": "D-1 bias correction",
                 }
             )
@@ -582,9 +697,7 @@ with tab_live:
                 provenance[column], utc=True, errors="coerce"
             ).dt.tz_convert(timezone_name)
             provenance[column] = provenance[column].map(
-                lambda value: value.strftime("%d.%m. %H:%M")
-                if pd.notna(value)
-                else "Not supplied"
+                lambda value: value.strftime("%d.%m. %H:%M") if pd.notna(value) else "Not supplied"
             )
         provenance = provenance.rename(
             columns={
@@ -647,14 +760,37 @@ with tab_live:
             [{"bucket": bucket, "probability": value} for bucket, value in probabilities.items()]
         )
         probs = probs[probs.probability >= 0.005]
+        if not latest_markets.empty and prior_probabilities:
+
+            def previous_for_bucket(bucket: int) -> float | None:
+                matches = latest_markets[
+                    (latest_markets.bucket_low_c.isna() | (latest_markets.bucket_low_c <= bucket))
+                    & (
+                        latest_markets.bucket_high_c.isna()
+                        | (latest_markets.bucket_high_c >= bucket)
+                    )
+                ]
+                if matches.empty:
+                    return None
+                return prior_probabilities.get(str(matches.iloc[0].bucket_label))
+
+            probs["change"] = probs.apply(
+                lambda row: (
+                    row.probability - previous_for_bucket(int(row.bucket))
+                    if previous_for_bucket(int(row.bucket)) is not None
+                    else None
+                ),
+                axis=1,
+            )
         st.subheader("Final bucket probabilities")
-        st.dataframe(
-            probs.assign(
-                probability=lambda frame: frame.probability.map(lambda value: f"{value:.1%}")
-            ),
-            hide_index=True,
-            width="stretch",
+        shown_probabilities = probs.assign(
+            probability=lambda frame: frame.probability.map(lambda value: f"{value:.1%}")
         )
+        if "change" in shown_probabilities:
+            shown_probabilities["change"] = shown_probabilities.change.map(
+                lambda value: f"{value:+.1%}" if pd.notna(value) else "—"
+            )
+        st.dataframe(shown_probabilities, hide_index=True, width="stretch")
         if day_status.is_locked:
             st.success(
                 f"{day_status.label}: {day_status.explanation} Probabilities outside the final "
@@ -764,10 +900,23 @@ with tab_market:
                         "There is currently no large positive difference of at least 8 points."
                     )
 
+            if prior_probabilities:
+                comparison["probability_change"] = comparison.apply(
+                    lambda row: (
+                        float(row.model_probability) - prior_probabilities[str(row.bucket_label)]
+                        if str(row.bucket_label) in prior_probabilities
+                        else None
+                    ),
+                    axis=1,
+                )
+            else:
+                comparison["probability_change"] = None
+
             shown = comparison[
                 [
                     "bucket_label",
                     "model_probability",
+                    "probability_change",
                     "yes_price",
                     "best_bid",
                     "best_ask",
@@ -791,6 +940,7 @@ with tab_market:
                 columns={
                     "bucket_label": "Range",
                     "model_probability": "Our model",
+                    "probability_change": "Change",
                     "yes_price": "Market",
                     "best_bid": "Best bid",
                     "best_ask": "Buy YES",
@@ -802,6 +952,7 @@ with tab_market:
             )
             percent_columns = [
                 "Our model",
+                "Change",
                 "Market",
                 "Best bid",
                 "Buy YES",
@@ -816,6 +967,89 @@ with tab_market:
                 lambda value: f"${value:,.0f}" if pd.notna(value) else "—"
             )
             st.dataframe(shown, hide_index=True, width="stretch")
+
+            with st.expander("Position & hedge calculator"):
+                st.caption(
+                    "This balances the gross payout between two selected YES buckets. "
+                    "All other outcomes remain uncovered, so it is a scenario hedge, "
+                    "not complete downside protection."
+                )
+                hedge_options = (
+                    actionable[actionable.best_ask.notna()].bucket_label.astype(str).tolist()
+                )
+                if len(hedge_options) < 2:
+                    st.info("At least two executable YES asks are needed for a hedge calculation.")
+                else:
+                    h1, h2, h3 = st.columns(3)
+                    primary_bucket = h1.selectbox(
+                        "Existing position",
+                        hedge_options,
+                        key=f"hedge_primary_{airport}_{target}",
+                    )
+                    primary_row = actionable[
+                        actionable.bucket_label.astype(str) == primary_bucket
+                    ].iloc[0]
+                    primary_stake = h2.number_input(
+                        "Amount already invested ($)",
+                        min_value=0.01,
+                        value=1.00,
+                        step=0.25,
+                        key=f"hedge_stake_{airport}_{target}",
+                    )
+                    primary_price = h3.number_input(
+                        "Average entry price",
+                        min_value=0.001,
+                        max_value=1.0,
+                        value=float(primary_row.buy_price),
+                        step=0.01,
+                        format="%.3f",
+                        key=f"hedge_entry_{airport}_{target}",
+                    )
+                    alternatives = [label for label in hedge_options if label != primary_bucket]
+                    hedge_bucket = st.selectbox(
+                        "Hedge bucket",
+                        alternatives,
+                        key=f"hedge_bucket_{airport}_{target}",
+                    )
+                    hedge_row = actionable[
+                        actionable.bucket_label.astype(str) == hedge_bucket
+                    ].iloc[0]
+                    plan = balanced_hedge_plan(
+                        primary_bucket=primary_bucket,
+                        primary_stake=primary_stake,
+                        primary_price=primary_price,
+                        hedge_bucket=hedge_bucket,
+                        hedge_price=float(hedge_row.buy_price),
+                    )
+                    p1, p2, p3 = st.columns(3)
+                    p1.metric("Balanced hedge cost", f"${plan.balanced_hedge_stake:.2f}")
+                    p2.metric("Total cost", f"${plan.total_cost:.2f}")
+                    p3.metric(
+                        "P/L if either selected bucket wins",
+                        f"${plan.covered_result:+.2f}",
+                    )
+                    hedge_stake = st.number_input(
+                        "Hedge amount to test ($)",
+                        min_value=0.0,
+                        value=float(round(plan.balanced_hedge_stake, 2)),
+                        step=0.25,
+                        key=f"hedge_test_stake_{airport}_{target}",
+                    )
+                    outcomes = hedge_outcome_table(
+                        outcome_buckets=hedge_options,
+                        primary_bucket=primary_bucket,
+                        primary_stake=primary_stake,
+                        primary_price=primary_price,
+                        hedge_bucket=hedge_bucket,
+                        hedge_stake=hedge_stake,
+                        hedge_price=float(hedge_row.buy_price),
+                    )
+                    outcome_frame = pd.DataFrame(outcomes)
+                    for column in ("Payout", "Net P/L"):
+                        outcome_frame[column] = outcome_frame[column].map(
+                            lambda value: f"${value:+.2f}"
+                        )
+                    st.dataframe(outcome_frame, hide_index=True, width="stretch")
             selected_range = st.selectbox(
                 "Price history range",
                 comparison.bucket_label.tolist(),
@@ -899,17 +1133,13 @@ with tab_accuracy:
             "10:00 and Live results grow from collected checkpoints."
         )
     else:
-        timing_options = sorted(
-            timing_metrics.lead_bucket.dropna().unique()
-        )
+        timing_options = sorted(timing_metrics.lead_bucket.dropna().unique())
         timing = st.selectbox(
             "Comparable information set",
             timing_options,
             key=f"trading_accuracy_timing_{airport}",
         )
-        selected_metrics = timing_metrics[
-            timing_metrics.lead_bucket == timing
-        ].copy()
+        selected_metrics = timing_metrics[timing_metrics.lead_bucket == timing].copy()
         table = selected_metrics[
             [
                 "stage",
@@ -924,21 +1154,15 @@ with tab_accuracy:
         ].copy()
         for column in ["bias", "mae_gain_vs_raw"]:
             table[column] = table[column].map(
-                lambda value: f"{float(value):+.2f} °C"
-                if pd.notna(value)
-                else "—"
+                lambda value: f"{float(value):+.2f} °C" if pd.notna(value) else "—"
             )
         for column in ["mae", "rmse"]:
             table[column] = table[column].map(
-                lambda value: f"{float(value):.2f} °C"
-                if pd.notna(value)
-                else "—"
+                lambda value: f"{float(value):.2f} °C" if pd.notna(value) else "—"
             )
         for column in ["market_exact_hit", "within_1c"]:
             table[column] = table[column].map(
-                lambda value: f"{float(value):.1%}"
-                if pd.notna(value)
-                else "—"
+                lambda value: f"{float(value):.1%}" if pd.notna(value) else "—"
             )
         st.dataframe(
             table.rename(
@@ -979,10 +1203,7 @@ with tab_accuracy:
             "**D0 Morning · 10:00:** latest stored forecast known at or before "
             "10:00 local airport time on the target day, maximum age six hours."
         )
-        st.write(
-            "**Live:** snapshots grouped by hours remaining until the median "
-            "modelled peak."
-        )
+        st.write("**Live:** snapshots grouped by hours remaining until the median modelled peak.")
 
 
 # Airport-wide analytics live on their own page and are not evaluated on Trading Desk reruns.
@@ -1140,9 +1361,7 @@ with tab_performance:
             "markets resolve; tracking begins with v9.4."
         )
     else:
-        strategy_summary = strategy_performance.groupby(
-            ["strategy", "timing"], as_index=False
-        ).agg(
+        strategy_summary = strategy_performance.groupby(["strategy", "timing"], as_index=False).agg(
             entries=("market_id", "count"),
             hit_rate=("won", "mean"),
             pnl=("pnl", "sum"),
@@ -1150,12 +1369,8 @@ with tab_performance:
         )
         strategy_summary["roi"] = strategy_summary.pnl / strategy_summary.entries
         for column in ["hit_rate", "roi", "average_buy_price"]:
-            strategy_summary[column] = strategy_summary[column].map(
-                lambda value: f"{value:.1%}"
-            )
-        strategy_summary["pnl"] = strategy_summary.pnl.map(
-            lambda value: f"${value:+.2f}"
-        )
+            strategy_summary[column] = strategy_summary[column].map(lambda value: f"{value:.1%}")
+        strategy_summary["pnl"] = strategy_summary.pnl.map(lambda value: f"${value:+.2f}")
         strategy_summary = strategy_summary.rename(
             columns={
                 "strategy": "Strategy",
@@ -1177,9 +1392,7 @@ with tab_performance:
             "trade price."
         )
     else:
-        historical_summary = historical_price_performance.groupby(
-            "strategy", as_index=False
-        ).agg(
+        historical_summary = historical_price_performance.groupby("strategy", as_index=False).agg(
             days=("target_date", "nunique"),
             hit_rate=("won", "mean"),
             pnl=("pnl", "sum"),
@@ -1190,9 +1403,7 @@ with tab_performance:
             historical_summary[column] = historical_summary[column].map(
                 lambda value: f"{value:.1%}"
             )
-        historical_summary["pnl"] = historical_summary.pnl.map(
-            lambda value: f"${value:+.2f}"
-        )
+        historical_summary["pnl"] = historical_summary.pnl.map(lambda value: f"${value:+.2f}")
         historical_summary = historical_summary.rename(
             columns={
                 "strategy": "D-1 strategy",
@@ -1233,9 +1444,7 @@ with tab_airports:
     if window_scores.empty:
         st.info("Run the historical D-1 backfill once to create airport scorecards.")
     else:
-        ensemble_ranking = window_scores[
-            window_scores.model == "Weighted ensemble"
-        ].copy()
+        ensemble_ranking = window_scores[window_scores.model == "Weighted ensemble"].copy()
         if ensemble_ranking.empty:
             ensemble_ranking = window_scores.sort_values(
                 "forecast_score", ascending=False
@@ -1246,13 +1455,9 @@ with tab_airports:
         combined = ensemble_ranking[
             ["airport", "airport_name", "forecast_score", "n", "mae", "data_quality"]
         ].merge(
-            trade_scorecards[
-                ["airport", "trade_score", "resolved_days", "confidence"]
-            ]
+            trade_scorecards[["airport", "trade_score", "resolved_days", "confidence"]]
             if not trade_scorecards.empty
-            else pd.DataFrame(
-                columns=["airport", "trade_score", "resolved_days", "confidence"]
-            ),
+            else pd.DataFrame(columns=["airport", "trade_score", "resolved_days", "confidence"]),
             on="airport",
             how="left",
         )
@@ -1260,13 +1465,11 @@ with tab_airports:
         combined["trade_score"] = combined.trade_score.map(
             lambda value: f"{value:.0f}/100" if pd.notna(value) else "Waiting for data"
         )
-        combined["resolved_days"] = pd.to_numeric(
-            combined.resolved_days, errors="coerce"
-        ).fillna(0).astype(int)
-        combined["confidence"] = combined.confidence.fillna("Not enough data")
-        combined["forecast_score"] = combined.forecast_score.map(
-            lambda value: f"{value:.0f}/100"
+        combined["resolved_days"] = (
+            pd.to_numeric(combined.resolved_days, errors="coerce").fillna(0).astype(int)
         )
+        combined["confidence"] = combined.confidence.fillna("Not enough data")
+        combined["forecast_score"] = combined.forecast_score.map(lambda value: f"{value:.0f}/100")
         combined["mae"] = combined.mae.map(lambda value: f"{value:.2f} °C")
         combined = combined.rename(
             columns={
@@ -1285,19 +1488,13 @@ with tab_airports:
         st.dataframe(combined, hide_index=True, width="stretch")
 
         selected_models = window_scores[window_scores.airport == airport].copy()
-        expected_models = pd.DataFrame(
-            {"model": catalog[airport]["models"] + ["meteoblue"]}
-        )
-        selected_models = expected_models.merge(
-            selected_models, on="model", how="left"
-        )
+        expected_models = pd.DataFrame({"model": catalog[airport]["models"] + ["meteoblue"]})
+        selected_models = expected_models.merge(selected_models, on="model", how="left")
         selected_models["airport"] = selected_models.airport.fillna(airport)
-        selected_models["n"] = pd.to_numeric(
-            selected_models.n, errors="coerce"
-        ).fillna(0).astype(int)
-        selected_models["data_quality"] = selected_models.data_quality.fillna(
-            "No scored D-1 data"
+        selected_models["n"] = (
+            pd.to_numeric(selected_models.n, errors="coerce").fillna(0).astype(int)
         )
+        selected_models["data_quality"] = selected_models.data_quality.fillna("No scored D-1 data")
         current_weights = live_nowcast.model_weights if live_nowcast is not None else {}
         selected_models["current_weight"] = selected_models.model.map(current_weights)
         selected_models = selected_models.sort_values(
@@ -1328,9 +1525,7 @@ with tab_airports:
         model_table["forecast_score"] = model_table.forecast_score.map(
             lambda value: f"{value:.0f}/100" if pd.notna(value) else "—"
         )
-        model_table["model"] = model_table.model.replace(
-            {"meteoblue": "meteoblue mLM"}
-        )
+        model_table["model"] = model_table.model.replace({"meteoblue": "meteoblue mLM"})
         model_table = model_table.rename(
             columns={
                 "model": "Model",
@@ -1354,18 +1549,15 @@ with tab_airports:
         )
 
     trade_base = pd.DataFrame(
-        [
-            {"airport": code, "airport_name": details["name"]}
-            for code, details in catalog.items()
-        ]
+        [{"airport": code, "airport_name": details["name"]} for code, details in catalog.items()]
     )
     trade_table = trade_base.merge(trade_scorecards, on="airport", how="left")
-    trade_table["resolved_days"] = pd.to_numeric(
-        trade_table.resolved_days, errors="coerce"
-    ).fillna(0).astype(int)
-    trade_table["entries"] = pd.to_numeric(
-        trade_table.entries, errors="coerce"
-    ).fillna(0).astype(int)
+    trade_table["resolved_days"] = (
+        pd.to_numeric(trade_table.resolved_days, errors="coerce").fillna(0).astype(int)
+    )
+    trade_table["entries"] = (
+        pd.to_numeric(trade_table.entries, errors="coerce").fillna(0).astype(int)
+    )
     trade_table["confidence"] = trade_table.confidence.fillna("Not enough data")
     trade_table["trade_score"] = trade_table.trade_score.map(
         lambda value: f"{value:.0f}/100" if pd.notna(value) else "Locked"
@@ -1451,9 +1643,11 @@ with tab_accuracy:
             "with later information."
         )
     else:
-        timing_options = selected_ladder[
-            ["timing", "lead_bucket"]
-        ].drop_duplicates().sort_values(["timing", "lead_bucket"])
+        timing_options = (
+            selected_ladder[["timing", "lead_bucket"]]
+            .drop_duplicates()
+            .sort_values(["timing", "lead_bucket"])
+        )
         timing_options["selection"] = (
             timing_options.timing.astype(str) + " · " + timing_options.lead_bucket.astype(str)
         )
@@ -1480,9 +1674,11 @@ with tab_accuracy:
         ].copy()
         for column in ["bias", "mae", "rmse", "mae_gain_vs_raw"]:
             ladder_table[column] = ladder_table[column].map(
-                lambda value, metric=column: f"{value:+.2f} °C"
-                if metric in {"bias", "mae_gain_vs_raw"}
-                else f"{value:.2f} °C"
+                lambda value, metric=column: (
+                    f"{value:+.2f} °C"
+                    if metric in {"bias", "mae_gain_vs_raw"}
+                    else f"{value:.2f} °C"
+                )
             )
         for column in ["exact_hit", "within_1c"]:
             ladder_table[column] = ladder_table[column].map(lambda value: f"{value:.1%}")
@@ -1501,9 +1697,7 @@ with tab_accuracy:
         st.dataframe(ladder_table, hide_index=True, width="stretch")
 
     historical_selected = (
-        historical_ladder_metrics[
-            historical_ladder_metrics.airport == airport
-        ].copy()
+        historical_ladder_metrics[historical_ladder_metrics.airport == airport].copy()
         if not historical_ladder_metrics.empty
         else historical_ladder_metrics
     )
@@ -1525,14 +1719,14 @@ with tab_accuracy:
         ].copy()
         for column in ["bias", "mae", "rmse", "mae_gain_vs_raw"]:
             history_table[column] = history_table[column].map(
-                lambda value, metric=column: f"{value:+.2f} °C"
-                if metric in {"bias", "mae_gain_vs_raw"}
-                else f"{value:.2f} °C"
+                lambda value, metric=column: (
+                    f"{value:+.2f} °C"
+                    if metric in {"bias", "mae_gain_vs_raw"}
+                    else f"{value:.2f} °C"
+                )
             )
         for column in ["exact_hit", "within_1c"]:
-            history_table[column] = history_table[column].map(
-                lambda value: f"{value:.1%}"
-            )
+            history_table[column] = history_table[column].map(lambda value: f"{value:.1%}")
         history_table = history_table.rename(
             columns={
                 "stage": "Forecast stage",
@@ -1595,9 +1789,9 @@ with tab_accuracy:
             "marginal_mae_gain",
         ]:
             factor_table[column] = factor_table[column].map(
-                lambda value, metric=column: f"{value:+.3f} °C"
-                if metric != "cumulative_mae"
-                else f"{value:.3f} °C"
+                lambda value, metric=column: (
+                    f"{value:+.3f} °C" if metric != "cumulative_mae" else f"{value:.3f} °C"
+                )
             )
         factor_table = factor_table.rename(
             columns={
@@ -1624,20 +1818,14 @@ with tab_accuracy:
     selected = forecasts[forecasts.horizon == horizon] if not forecasts.empty else forecasts
     scored = score_frame(selected, airport_station_actuals)
     metrics = model_metrics(scored)
-    expected_accuracy_models = pd.DataFrame(
-        {"model": catalog[airport]["models"] + ["meteoblue"]}
-    )
+    expected_accuracy_models = pd.DataFrame({"model": catalog[airport]["models"] + ["meteoblue"]})
     complete_metrics = expected_accuracy_models.merge(metrics, on="model", how="left")
-    complete_metrics["n"] = pd.to_numeric(
-        complete_metrics.n, errors="coerce"
-    ).fillna(0).astype(int)
+    complete_metrics["n"] = pd.to_numeric(complete_metrics.n, errors="coerce").fillna(0).astype(int)
     complete_metrics["status"] = complete_metrics.n.map(
         lambda value: "Scored" if value > 0 else f"No scored {horizon} data"
     )
     display_metrics = complete_metrics.copy()
-    display_metrics["model"] = display_metrics.model.replace(
-        {"meteoblue": "meteoblue mLM"}
-    )
+    display_metrics["model"] = display_metrics.model.replace({"meteoblue": "meteoblue mLM"})
     for column in ["bias", "mae", "rmse"]:
         display_metrics[column] = display_metrics[column].map(
             lambda value: f"{value:.2f} °C" if pd.notna(value) else "—"

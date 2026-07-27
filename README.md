@@ -110,8 +110,9 @@ fehlgeschlagenen Workflow und kopiere die rote Fehlermeldung in den Chat.
 
 ## Enthaltene Flughäfen und Modelle
 
-Das **Trading Desk** sammelt die vollständigen Live-Daten weiterhin für Madrid,
-Amsterdam, Warschau und Ankara. **Airport Research** führt zusätzlich einen breiten
+Das **Trading Desk** sammelt die vollständigen Live-Daten für Madrid, Amsterdam,
+Warschau, Ankara, Istanbul Airport (LTFM) und München (EDDM). **Airport Research**
+führt zusätzlich einen breiten
 Katalog internationaler Polymarket-Temperaturstationen und entdeckt neue
 Temperaturmarkt-Städte automatisch. Noch nicht zuordenbare Städte bleiben sichtbar als
 `station mapping required`, statt still ausgelassen zu werden.
@@ -445,6 +446,56 @@ nur die Datenabdeckung, nicht die Navigation.
 
 Für das Update von v9.5.3 auf v9.5.4 ist kein erneuter Backfill und kein manueller
 Collect-Workflow erforderlich. Nach dem Upload genügt ein Reboot der Streamlit-App.
+
+## Neu in Version 10
+
+- **Istanbul Airport (LTFM)** und **München (EDDM)** sind vollständige
+  Trading-Airports. Forecasts, stündliche Modellpfade, Meteoblue, METAR, TAF,
+  Polymarket-Preise und Live-Snapshots laufen durch dieselben Pfade wie bei den
+  bisherigen vier Airports.
+- Der Temperature Anchor verwendet nicht mehr nur die letzte METAR-Abweichung.
+  Er vergleicht bis zu drei aufeinanderfolgende Beobachtungen mit dem stündlichen
+  Modellpfad und verstärkt das Re-Anchoring, wenn ein warmer oder kalter Fehler
+  wiederholt bestätigt wird.
+- Der Anchor wird abhängig vom verbleibenden Heizfenster gewichtet. Drei
+  konsistente METAR-Abweichungen können nicht mehr durch mehrere schwächere
+  Gegensignale nahezu vollständig neutralisiert werden.
+- Ein neues **Failed-Convection-Signal** erkennt vorsichtig, wenn im TAF erwartete
+  Gewitter, Niederschläge oder BKN/OVC im kritischen Fenster in den jüngsten
+  METARs nicht eintreten.
+- Fallende Taupunkte werden als eigenes Dry-Mixing-Signal erfasst.
+- Einzelne Modell-Ausreißer werden robust heruntergewichtet, bleiben aber in der
+  Verteilung sichtbar. Das Dashboard zeigt den historischen Modell-Weight und den
+  zusätzlichen Outlier-Multiplikator getrennt.
+- Die **v10 Decision Engine** gibt pro Update **BET**, **WATCH** oder **NO BET**
+  aus. BET setzt mindestens acht Prozentpunkte ausführbare Edge, Forecast
+  Confidence von 65/100 und einen Spread von höchstens zwölf Prozentpunkten
+  voraus. METAR pending, Peak locked und ein harter Markt-Modell-Konflikt sperren
+  neue BET-Signale.
+- Faire Wahrscheinlichkeit, YES-Ask, Edge und Veränderung seit dem letzten
+  gespeicherten Snapshot werden direkt angezeigt.
+- Der erste **Hedge Calculator** berechnet für eine vorhandene Position und einen
+  zweiten ausgewählten Bucket den Einsatz, der die Bruttoauszahlung dieser beiden
+  Ergebnisse ausgleicht. Andere Buckets bleiben ausdrücklich als ungesichertes
+  Risiko sichtbar.
+- Workflow **5 - Collect live decision checkpoints** sammelt nur während der
+  airportabhängigen kritischen Zeitfenster zusätzliche METAR-, Markt- und
+  Decision-Snapshots.
+
+### Update von v9.5.4 auf v10
+
+1. Falls gerade ein GitHub-Backfill läuft, diesen zuerst fertig werden lassen.
+2. Den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen und vorhandene Dateien
+   ersetzen.
+3. Den grünen Test abwarten.
+4. **2 - Collect current forecasts** einmal manuell starten.
+5. **6 - Backfill Istanbul and Munich** einmal mit `365` Tagen starten. Dieser
+   Workflow lädt nur die zwei neuen Trading-Airports und kann unabhängig von der
+   App-Nutzung im Hintergrund laufen.
+6. Streamlit über **Manage app → Reboot app** neu starten.
+
+Workflow 5 läuft nach dem Upload automatisch. Die vorhandene Datenbank bleibt
+erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
 
 ## Korrektur in Version 9.5.2
 

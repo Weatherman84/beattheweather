@@ -9,6 +9,7 @@ from weatherman.service import (
     _record_signal_snapshots,
     _record_strategy_snapshots,
     _upsert_batch,
+    in_critical_window,
 )
 
 
@@ -148,3 +149,18 @@ def test_consensus_strategy_journal_chooses_model_mode_without_edge_filter():
         assert strategy.strategy == "Raw model mean"
         assert strategy.model_bucket_c == 35
         assert strategy.buy_price == 0.72
+
+
+def test_airport_specific_critical_window_uses_local_time():
+    airport = {
+        "timezone": "Europe/Istanbul",
+        "critical_window_local": ["11:30", "16:30"],
+    }
+    assert in_critical_window(
+        airport,
+        datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc),
+    )
+    assert not in_critical_window(
+        airport,
+        datetime(2026, 7, 26, 6, 0, tzinfo=timezone.utc),
+    )
