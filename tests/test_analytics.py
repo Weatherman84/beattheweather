@@ -16,6 +16,7 @@ from weatherman.analytics import (
     forecast_scorecards,
     heat_spike_assessment,
     historical_d1_ladder,
+    historical_price_strategy_simulation,
     market_edges,
     metar_schedule_status,
     model_metrics,
@@ -24,6 +25,7 @@ from weatherman.analytics import (
     resolved_market_range,
     score_frame,
     settled_signal_performance,
+    settled_strategy_performance,
     trading_airport_scorecards,
 )
 
@@ -507,6 +509,40 @@ def test_signal_performance_waits_for_a_confirmed_winner():
         ]
     )
     assert settled_signal_performance(signals, markets).empty
+
+
+def test_empty_strategy_performance_keeps_filterable_schema():
+    result = settled_strategy_performance(pd.DataFrame(), pd.DataFrame())
+
+    assert result.empty
+    assert {
+        "airport",
+        "target_date",
+        "market_id",
+        "strategy",
+        "timing",
+        "won",
+        "pnl",
+    }.issubset(result.columns)
+    assert result[result.airport == "EDDM"].empty
+
+
+def test_empty_historical_price_simulation_keeps_filterable_schema():
+    result = historical_price_strategy_simulation(
+        pd.DataFrame(),
+        pd.DataFrame(),
+    )
+
+    assert result.empty
+    assert {
+        "airport",
+        "target_date",
+        "strategy",
+        "timing",
+        "won",
+        "pnl",
+    }.issubset(result.columns)
+    assert result[result.airport == "LTFM"].empty
 
 
 def test_airport_model_weights_and_walk_forward_scorecard():

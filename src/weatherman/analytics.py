@@ -734,6 +734,7 @@ def live_factor_diagnostics(
         "radiation_adjustment_c",
         "wind_adjustment_c",
         "run_trend_adjustment_c",
+        "late_dry_mixing_adjustment_c",
         "failed_convection_adjustment_c",
     ]
     if any(column not in snapshots for column in required):
@@ -760,6 +761,7 @@ def live_factor_diagnostics(
         "radiation_adjustment_c": "Radiation proxy",
         "wind_adjustment_c": "Observed wind sector",
         "run_trend_adjustment_c": "Model-run trend",
+        "late_dry_mixing_adjustment_c": "Late dry mixing",
         "failed_convection_adjustment_c": "Failed convection",
     }
     rows = []
@@ -804,21 +806,34 @@ def settled_strategy_performance(
     stake: float = 1.0,
 ) -> pd.DataFrame:
     """Settle one consensus-bucket entry per strategy, timing and airport-day."""
+    columns = [
+        "airport",
+        "target_date",
+        "market_id",
+        "bucket_label",
+        "captured_at",
+        "timing",
+        "strategy",
+        "buy_price",
+        "won",
+        "pnl",
+        "cumulative_pnl",
+    ]
     if strategies.empty or markets.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=columns)
     candidates = strategies.copy()
     candidates["captured_at"] = pd.to_datetime(candidates.captured_at, utc=True)
     candidates["buy_price"] = pd.to_numeric(candidates.buy_price, errors="coerce")
     candidates = candidates[(candidates.buy_price > 0) & (candidates.buy_price < 1)]
     if candidates.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=columns)
     entries = candidates.sort_values("captured_at").drop_duplicates(
         ["airport", "target_date", "timing", "strategy"], keep="first"
     )
     outcomes = resolved_market_outcomes(markets)
     settled = entries.merge(outcomes, on="market_id", how="inner")
     if settled.empty:
-        return settled
+        return pd.DataFrame(columns=columns)
     settled["won"] = settled.yes_won.astype(bool)
     settled["pnl"] = settled.apply(
         lambda row: stake / row.buy_price - stake if row.won else -stake,
@@ -835,8 +850,21 @@ def historical_price_strategy_simulation(
     stake: float = 1.0,
 ) -> pd.DataFrame:
     """Combine reconstructed D-1 forecasts with sampled historical trade prices."""
+    columns = [
+        "airport",
+        "target_date",
+        "timing",
+        "strategy",
+        "bucket_label",
+        "model_bucket_c",
+        "buy_price",
+        "won",
+        "pnl",
+        "price_basis",
+        "cumulative_pnl",
+    ]
     if reconstructed.empty or markets.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=columns)
     history = markets.copy()
     history["captured_at"] = pd.to_datetime(history.captured_at, utc=True)
     history["target_date"] = pd.to_datetime(history.target_date).dt.date
@@ -846,7 +874,7 @@ def historical_price_strategy_simulation(
         history = history[history.best_ask.isna()].copy()
     history = history[history.yes_won.notna()].copy()
     if history.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=columns)
     rows = []
     for forecast in reconstructed.itertuples():
         target_markets = history[
@@ -888,7 +916,7 @@ def historical_price_strategy_simulation(
                 "price_basis": "historical trade-price sample",
             }
         )
-    result = pd.DataFrame(rows)
+    result = pd.DataFrame(rows, columns=columns[:-1])
     if not result.empty:
         result = result.sort_values("target_date")
         result["cumulative_pnl"] = result.groupby("strategy").pnl.cumsum()

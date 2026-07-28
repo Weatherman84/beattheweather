@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: weatherman-trading
-Version: 9.4.1
+Version: 10.1.0
 Summary: Model consensus, nowcast and backtesting for daily maximum-temperature markets
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
@@ -55,6 +55,14 @@ Nach dem Upload sollten auf der Startseite unter anderem diese Einträge sichtba
 - `app.py`
 - `README.md`
 - `pyproject.toml`
+
+Ab Version 9.5.2 liegt das technische Startmodul innerhalb von `src`. Dadurch kann
+GitHub den Test auch dann vollständig ausführen, wenn bei einem Update keine neue
+Python-Datei im Repository-Hauptverzeichnis angelegt wurde.
+
+Ab Version 9.5.3 wechseln **Trading Desk** und **Airport Research** über
+Streamlits interne Seitennavigation. Beide Bereiche bleiben im selben Browser-Tab;
+der frühere absolute Markdown-Link wird nicht mehr verwendet.
 
 ## Schritt 3: Meteoblue-Key hinterlegen
 
@@ -118,9 +126,16 @@ fehlgeschlagenen Workflow und kopiere die rote Fehlermeldung in den Chat.
 
 ## Enthaltene Flughäfen und Modelle
 
-Das Projekt sammelt Daten für Madrid, Amsterdam, Warschau und Ankara. Verglichen werden
-ECMWF, GFS, ICON, UKMO, ARPEGE, verfügbare AROME/HARMONIE-Modelle sowie optional
-Meteoblue.
+Das **Trading Desk** sammelt die vollständigen Live-Daten für Madrid, Amsterdam,
+Warschau, Ankara, Istanbul Airport (LTFM) und München (EDDM). **Airport Research**
+führt zusätzlich einen breiten
+Katalog internationaler Polymarket-Temperaturstationen und entdeckt neue
+Temperaturmarkt-Städte automatisch. Noch nicht zuordenbare Städte bleiben sichtbar als
+`station mapping required`, statt still ausgelassen zu werden.
+
+Für das breite Research werden ECMWF, GFS und ICON sowie feste Entscheidungs-Snapshots
+verwendet. Die regionalen Modelle, Meteoblue, METAR, TAF und die engmaschige
+Polymarket-Preissammlung bleiben auf die aktivierten Trading-Airports begrenzt.
 
 ## Neu in Version 6
 
@@ -322,10 +337,11 @@ werden nicht mit später bekannten Daten rekonstruiert. Ein Backfill ist nicht e
 
 ## Neu in Version 9.4.1
 
-Version 9.4.1 enthält zusätzlich einen CI-Hotfix: Der Ruff-Linter verwendet eine
-fest getestete Version und prüft gezielt die Anwendungsdateien in `app.py`, `src/`
-und `tests/`. Dadurch können alte, nicht mehr zum Projekt gehörende Python-Dateien
-im GitHub-Repository den Upload-Test nicht mehr fälschlich blockieren.
+Version 9.4.1 enthält zusätzlich einen CI-Hotfix: Ruff 0.16 aktivierte beim
+bisherigen offenen Versionsbereich deutlich strengere Prüfregeln und ließ den
+GitHub-Test dadurch trotz funktionierender Anwendung fehlschlagen. Die geprüften
+Regeln sind nun explizit konfiguriert, die Ruff-Version ist festgeschrieben und
+der Test prüft gezielt die Anwendungsdateien in `app.py`, `src/` und `tests/`.
 
 - Die Forecast-Ladder trennt jetzt sechs Stufen: **Raw model mean**, **Weighted raw
   ensemble**, **Bias corrected · equal weight**, **Bias corrected · performance weighted**,
@@ -370,6 +386,180 @@ Beim Update auf Version 9.4.1 reicht zunächst **2 - Collect current forecasts**
 **Rerun**. Die Datenbank erweitert sich automatisch. Workflow 1 muss nicht erneut laufen,
 wenn der bestehende D-1-Backfill vorhanden ist. Workflow 3 ist optional und nur für die
 historische Marktpreissimulation erforderlich.
+
+## Neu in Version 9.5
+
+- Die Anwendung ist in zwei Arbeitsbereiche getrennt: **Trading Desk** für den
+  ausgewählten Live-Airport und **Airport Research** für alle flughafenübergreifenden
+  Auswertungen.
+- Das Trading Desk lädt nur noch Daten des ausgewählten Airports. Airport Research
+  verwendet einen eigenen 15-Minuten-Cache und berechnet ausschließlich das ausgewählte
+  Analysemodul.
+- Der Begriff D-1 ist nicht mehr doppeldeutig:
+  - **D-1 · 24h lead** ist die standardisierte meteorologische Rekonstruktion mit
+    exakt 24 Stunden Vorlauf pro gültiger Modellstunde.
+  - **D-1 Evening · 20:00** verwendet den letzten Snapshot, der spätestens um
+    20:00 lokaler Airportzeit am Vortag bekannt war.
+  - **D0 Morning · 10:00** verwendet den letzten Snapshot, der spätestens um
+    10:00 lokaler Airportzeit am Zieltag bekannt war.
+  - Ein Snapshot nach dem Cut-off darf niemals rückwirkend verwendet werden. Der
+    Abstand des verwendeten Snapshots zum Cut-off bleibt messbar.
+- Der neue Workflow **4 - Collect airport research checkpoints** läuft alle 30 Minuten,
+  ruft aber nur Airports ab, deren lokaler 20:00- oder 10:00-Cut-off unmittelbar
+  bevorsteht.
+- Polymarket-Temperaturmarkt-Städte werden automatisch entdeckt und in einem eigenen
+  Universe-Verzeichnis gespeichert. Bekannte Städte werden einer Research-Station
+  zugeordnet; unbekannte Städte erscheinen als Mapping-Aufgabe.
+- **Airport Analysis** enthält das Airport-Leaderboard und vergleicht Sample Size,
+  MAE, RMSE, Treffer innerhalb ±1 °C und die exakte Markt-Bucket-Hit-Rate.
+  Celsius- und Fahrenheit-Märkte werden
+  anhand ihrer jeweiligen Bucket-Breite getrennt behandelt.
+- Airport Analysis und Accuracy by Timing sind die Kernmodule der neuen Research-Seite.
+  Forecast Stages, Live-Factor Diagnostics, Strategy Performance und Universe/Data
+  Coverage sind dort als separat ladbare Module integriert.
+- Die eigenständige synthetische **D-1 $1 simulation** wurde entfernt. Standardisierte
+  $1-Kennzahlen bleiben in Strategy Performance erhalten: P/L, ROI, Trefferquote,
+  Entry-Anzahl und maximaler Drawdown. Tatsächlich vorwärts gespeicherte Asks bleiben
+  von historischen Trade-Price-Samples methodisch getrennt.
+- Kandidaten-Stationen müssen vor einer Hochstufung zum Trading-Airport gegen die
+  offizielle Polymarket-Resolution-Source geprüft werden. Das Dashboard zeigt diesen
+  Mapping-Status ausdrücklich an.
+
+### Update von v9.4.1 auf v9.5
+
+1. Den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen und vorhandene Dateien ersetzen.
+2. **2 - Collect current forecasts** einmal starten.
+3. **4 - Collect airport research checkpoints** einmal manuell starten; danach läuft
+   dieser Workflow automatisch.
+4. **1 - Initial history backfill** mit `365` Tagen erneut starten, damit auch die neu
+   aufgenommenen Research-Airports sofort eine historische D-1-24h-Basis erhalten.
+5. Streamlit einmal **Rerun** ausführen.
+
+Die bestehende Datenbank und alle v9.4.1-Snapshots bleiben erhalten. Die neue
+Universe-Tabelle und alle benötigten Indizes werden automatisch ergänzt.
+
+## Korrektur in Version 9.5.3
+
+Version 9.5.3 ersetzt die bisherigen absoluten Markdown-Links durch interne
+Streamlit-Seitenlinks. **Airport Research** öffnet dadurch zuverlässig die
+Research-Seite im selben Browser-Tab und fällt auf Streamlit Cloud nicht mehr
+auf das Trading Desk zurück. Der laufende Initial History Backfill beeinflusst
+nur die Datenabdeckung, nicht die Navigation.
+
+## Performance-Update in Version 9.5.4
+
+- Airport Research lädt nur noch das ausgewählte Analysemodul, den gewählten
+  Zeitraum und – bei gesetztem Filter – den relevanten Airport.
+- Nicht benötigte Markt-, Strategie-, TAF- und Universe-Tabellen werden beim
+  Öffnen von Airport Analysis nicht mehr geladen oder berechnet.
+- Der historische Walk-forward-Vergleich verwendet dieselben Regeln wie zuvor,
+  vermeidet aber die langsamen vollständigen DataFrame-Scans für jeden einzelnen
+  Airport-Tag. Airport Analysis berechnet das Ensemble außerdem nur noch einmal.
+- **Accuracy by timing** steht zusätzlich im Trading Desk und wird dort
+  ausschließlich für den im Dropdown ausgewählten Airport angezeigt.
+- Die in v9.5.3 zusätzlich eingebauten symbolbasierten Seitenlinks wurden entfernt.
+  Der Seitenwechsel bleibt über Streamlits native Navigation im selben Browser-Tab.
+
+Für das Update von v9.5.3 auf v9.5.4 ist kein erneuter Backfill und kein manueller
+Collect-Workflow erforderlich. Nach dem Upload genügt ein Reboot der Streamlit-App.
+
+## Neu in Version 10
+
+- **Istanbul Airport (LTFM)** und **München (EDDM)** sind vollständige
+  Trading-Airports. Forecasts, stündliche Modellpfade, Meteoblue, METAR, TAF,
+  Polymarket-Preise und Live-Snapshots laufen durch dieselben Pfade wie bei den
+  bisherigen vier Airports.
+- Der Temperature Anchor verwendet nicht mehr nur die letzte METAR-Abweichung.
+  Er vergleicht bis zu drei aufeinanderfolgende Beobachtungen mit dem stündlichen
+  Modellpfad und verstärkt das Re-Anchoring, wenn ein warmer oder kalter Fehler
+  wiederholt bestätigt wird.
+- Der Anchor wird abhängig vom verbleibenden Heizfenster gewichtet. Drei
+  konsistente METAR-Abweichungen können nicht mehr durch mehrere schwächere
+  Gegensignale nahezu vollständig neutralisiert werden.
+- Ein neues **Failed-Convection-Signal** erkennt vorsichtig, wenn im TAF erwartete
+  Gewitter, Niederschläge oder BKN/OVC im kritischen Fenster in den jüngsten
+  METARs nicht eintreten.
+- Fallende Taupunkte werden als eigenes Dry-Mixing-Signal erfasst.
+- Einzelne Modell-Ausreißer werden robust heruntergewichtet, bleiben aber in der
+  Verteilung sichtbar. Das Dashboard zeigt den historischen Modell-Weight und den
+  zusätzlichen Outlier-Multiplikator getrennt.
+- Die **v10 Decision Engine** gibt pro Update **BET**, **WATCH** oder **NO BET**
+  aus. BET setzt mindestens acht Prozentpunkte ausführbare Edge, Forecast
+  Confidence von 65/100 und einen Spread von höchstens zwölf Prozentpunkten
+  voraus. METAR pending, Peak locked und ein harter Markt-Modell-Konflikt sperren
+  neue BET-Signale.
+- Faire Wahrscheinlichkeit, YES-Ask, Edge und Veränderung seit dem letzten
+  gespeicherten Snapshot werden direkt angezeigt.
+- Der erste **Hedge Calculator** berechnet für eine vorhandene Position und einen
+  zweiten ausgewählten Bucket den Einsatz, der die Bruttoauszahlung dieser beiden
+  Ergebnisse ausgleicht. Andere Buckets bleiben ausdrücklich als ungesichertes
+  Risiko sichtbar.
+- Workflow **5 - Collect live decision checkpoints** sammelt nur während der
+  airportabhängigen kritischen Zeitfenster zusätzliche METAR-, Markt- und
+  Decision-Snapshots.
+
+### Update von v9.5.4 auf v10
+
+1. Falls gerade ein GitHub-Backfill läuft, diesen zuerst fertig werden lassen.
+2. Den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen und vorhandene Dateien
+   ersetzen.
+3. Den grünen Test abwarten.
+4. **2 - Collect current forecasts** einmal manuell starten.
+5. **6 - Backfill Istanbul and Munich** einmal mit `365` Tagen starten. Dieser
+   Workflow lädt nur die zwei neuen Trading-Airports und kann unabhängig von der
+   App-Nutzung im Hintergrund laufen.
+6. Streamlit über **Manage app → Reboot app** neu starten.
+
+Workflow 5 läuft nach dem Upload automatisch. Die vorhandene Datenbank bleibt
+erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
+
+## Neu in Version 10.1
+
+- Airport Research zeigt bei München, Istanbul und anderen Airports ohne bereits
+  abgerechnete Strategy-Performance-Daten nun eine verständliche Leermeldung,
+  statt beim Airport-Filter mit einem `AttributeError` abzubrechen.
+- Ein aufklappbarer Erklärbereich grenzt den Fixed-checkpoint
+  Top-bucket-Benchmark, den Possible-edge Tracker und die historische
+  Preissimulation samt unterschiedlicher Einstiegslogik voneinander ab.
+- Für LTAC aktiviert ein beobachtetes Gewitterregime in den letzten 48 Stunden
+  nun **Post-Convective Uncertainty**. Es verschiebt die Temperaturprognose
+  ausdrücklich nicht, sondern verbreitert die Bucket-Verteilung bis maximal
+  1,5-fach und senkt die Forecast Confidence.
+- **Late Dry Mixing** ist ein eigenes positives Live-Signal, wenn das
+  Modellmaximum früh erreicht wird, der Taupunkt deutlich fällt, CAVOK bzw.
+  geringe Bewölkung anhält, der Wind schwach bleibt und noch Heizzeit vorhanden
+  ist.
+- Der Trading Desk warnt zusätzlich, wenn das beobachtete Maximum die
+  Modellobergrenze mit mindestens zwei verbleibenden Stunden im konfigurierten
+  Heizfenster erreicht.
+- Das kritische Livefenster von Ankara endet nicht mehr um 16:30, sondern um
+  **18:30 Uhr lokal beziehungsweise 17:30 Uhr österreichischer Sommerzeit**.
+- Die METAR-Sammlung lädt für die sechs Trading-Airports jeweils 48 Stunden,
+  damit vorangegangene Gewitter für die Regimeerkennung verfügbar bleiben.
+
+Für dieses Update ist kein Backfill nötig. Nach dem Upload genügt ein Reboot der
+Streamlit-App. Falls Workflow 6 nach dem v10.0.1-Fix noch nicht erfolgreich
+durchgelaufen ist, kann er anschließend unverändert erneut gestartet werden.
+
+## Korrektur in Version 9.5.2
+
+Version 9.5.2 verschiebt das Streamlit-Startmodul `runtime_bootstrap` in den
+installierten `src`-Projektbaum. Damit verwenden Streamlit und GitHub Actions
+denselben Importpfad. Der Testlauf hängt nicht mehr von einer zusätzlichen neuen
+Datei im Repository-Hauptverzeichnis ab.
+
+## Korrektur in Version 9.5.1
+
+Streamlit kann bei einem Update einzelne Python-Module der vorherigen Version bis
+zum nächsten Prozessneustart im Arbeitsspeicher behalten. Dadurch konnte die neue
+v9.5-App bereits geladen sein, während `weatherman.settings` noch aus v9.4.1
+stammte. Der Start brach dann beim Import von `trading_airports` ab.
+
+Version 9.5.1 erkennt und verwirft solche veralteten Weatherman-Module vor dem
+Start. Die neuen Trading-, Research- und City-Mapping-Kataloge sind außerdem in
+einem abwärtskompatiblen Modul gekapselt, das nur die bereits in v9.4.1 vorhandene
+`airports()`-Funktion voraussetzt. Datenbank und gespeicherte Forecasts bleiben
+unverändert.
 
 ## Wichtig zum Dashboard
 

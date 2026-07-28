@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.0.1")
+discard_stale_weatherman_modules("10.1.0")
 
 import pandas as pd
 import plotly.express as px
@@ -402,6 +402,10 @@ with tab_live:
         as_of=datetime.now(ZoneInfo("UTC")),
         wind_profile=catalog[airport].get("heat_wind_profile"),
         routine_metar_minutes=catalog[airport].get("metar_minutes"),
+        critical_window_local=catalog[airport].get("critical_window_local"),
+        post_convective_profile=catalog[airport].get(
+            "post_convective_uncertainty"
+        ),
     )
     if live_nowcast is None:
         st.info("No current forecast stored for this date. Click Refresh forecasts + METAR + TAF.")
@@ -679,7 +683,8 @@ with tab_live:
                 "Weights use only earlier D-1 errors from the latest 90 days and are shrunk "
                 "toward equal weighting when the sample is small. Confidence combines historical "
                 "accuracy, current model agreement, sample size, live-data freshness and, when "
-                "available, a limited TAF agreement factor."
+                "available, a limited TAF agreement factor. At LTAC, a confirmed post-convective "
+                "regime applies a separate conservative confidence reduction."
             )
 
         st.subheader("Model maximum forecasts")

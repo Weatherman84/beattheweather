@@ -49,7 +49,7 @@ def _get(
     with httpx.Client(
         timeout=settings.timeout if timeout is None else timeout,
         follow_redirects=True,
-        headers={"User-Agent": "Weatherman/10.0.0 temperature-market research"},
+        headers={"User-Agent": "Weatherman/10.1.0 temperature-market research"},
     ) as client:
         for attempt in range(attempts):
             try:

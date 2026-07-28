@@ -433,6 +433,152 @@ def dewpoint_trend(observations: pd.DataFrame) -> float | None:
     return float((recent.dewpoint_c.iloc[-1] - recent.dewpoint_c.iloc[0]) / elapsed)
 
 
+def hours_until_critical_window_end(
+    local_now: datetime,
+    critical_window_local: list[str] | tuple[str, ...] | None,
+) -> float | None:
+    """Return time until the configured end of useful airport heating."""
+    if not critical_window_local or len(critical_window_local) != 2:
+        return None
+    try:
+        end_hour, end_minute = (
+            int(value)
+            for value in str(critical_window_local[1]).split(":", maxsplit=1)
+        )
+    except (TypeError, ValueError):
+        return None
+    end = local_now.replace(
+        hour=end_hour,
+        minute=end_minute,
+        second=0,
+        microsecond=0,
+    )
+    return (end - local_now).total_seconds() / 3600
+
+
+def post_convective_uncertainty(
+    observations: pd.DataFrame,
+    as_of: datetime,
+    profile: dict | None,
+) -> dict[str, float | bool | None]:
+    """Detect recent observed convection without imposing a directional bias."""
+    defaults: dict[str, float | bool | None] = {
+        "active": False,
+        "reports": 0.0,
+        "hours_since_latest": None,
+        "spread_multiplier": 1.0,
+        "confidence_multiplier": 1.0,
+    }
+    if not profile or not profile.get("enabled") or observations.empty:
+        return defaults
+    if "raw" not in observations or "observed_at" not in observations:
+        return defaults
+    frame = observations.dropna(subset=["observed_at"]).copy()
+    frame["observed_at"] = pd.to_datetime(frame.observed_at, utc=True)
+    as_of_utc = pd.Timestamp(as_of).tz_convert("UTC")
+    window_hours = max(1.0, float(profile.get("window_hours", 48)))
+    frame = frame[
+        (frame.observed_at <= as_of_utc)
+        & (frame.observed_at >= as_of_utc - timedelta(hours=window_hours))
+    ]
+    if frame.empty:
+        return defaults
+    raw = frame.raw.fillna("").astype(str).str.upper()
+    convective = raw.str.contains(
+        r"(?<![A-Z])(?:VCTS|TS[A-Z]*|CB)(?![A-Z])",
+        regex=True,
+    )
+    reports = int(convective.sum())
+    minimum_reports = max(1, int(profile.get("minimum_reports", 2)))
+    if reports < minimum_reports:
+        return {**defaults, "reports": float(reports)}
+    latest = pd.Timestamp(frame.loc[convective, "observed_at"].max())
+    hours_since_latest = max(0.0, (as_of_utc - latest).total_seconds() / 3600)
+    return {
+        "active": True,
+        "reports": float(reports),
+        "hours_since_latest": hours_since_latest,
+        "spread_multiplier": max(
+            1.0,
+            min(1.5, float(profile.get("spread_multiplier", 1.5))),
+        ),
+        "confidence_multiplier": max(
+            0.5,
+            min(1.0, float(profile.get("confidence_multiplier", 0.85))),
+        ),
+    }
+
+
+def late_dry_mixing_adjustment(
+    observations: pd.DataFrame,
+    *,
+    corrected_model_mean: float,
+    local_now: datetime,
+    hours_to_window_end: float | None,
+    wind_speed_kph: float | None,
+) -> tuple[float, str | None, bool]:
+    """Detect a clear, weak-wind late heating tail with rapid drying."""
+    if (
+        observations.empty
+        or hours_to_window_end is None
+        or hours_to_window_end < 1.5
+        or local_now.hour < 12
+    ):
+        return 0.0, None, False
+    frame = observations.sort_values("observed_at")
+    latest_at = pd.Timestamp(frame.observed_at.iloc[-1])
+    observation_age_hours = (
+        pd.Timestamp(local_now).tz_convert("UTC") - latest_at
+    ).total_seconds() / 3600
+    if observation_age_hours < 0 or observation_age_hours > 1.5:
+        return 0.0, None, False
+    recent = frame[frame.observed_at >= latest_at - timedelta(hours=2)]
+    if len(recent) < 2:
+        return 0.0, None, False
+    elapsed = (
+        pd.Timestamp(recent.observed_at.iloc[-1])
+        - pd.Timestamp(recent.observed_at.iloc[0])
+    ).total_seconds() / 3600
+    if elapsed <= 0:
+        return 0.0, None, False
+    temperature_trend = (
+        float(recent.temp_c.iloc[-1]) - float(recent.temp_c.iloc[0])
+    ) / elapsed
+    drying_rate = dewpoint_trend(recent)
+    observed_max = float(frame.temp_c.max())
+    model_ceiling_reached_early = (
+        hours_to_window_end >= 2.0
+        and observed_max >= float(corrected_model_mean) - 0.5
+    )
+    raw = recent.raw.fillna("").astype(str).str.upper() if "raw" in recent else None
+    cavok = bool(raw.str.contains(r"\bCAVOK\b", regex=True).all()) if raw is not None else False
+    cloud_values = (
+        recent.cloud_cover.dropna().astype(float)
+        if "cloud_cover" in recent
+        else pd.Series(dtype=float)
+    )
+    clear = cavok or (
+        not cloud_values.empty and float(cloud_values.median()) <= 25.0
+    )
+    weak_wind = wind_speed_kph is not None and wind_speed_kph <= 18.0
+    active = (
+        model_ceiling_reached_early
+        and drying_rate is not None
+        and drying_rate <= -0.5
+        and temperature_trend >= -0.1
+        and clear
+        and weak_wind
+    )
+    if not active:
+        return 0.0, None, model_ceiling_reached_early
+    return (
+        0.30,
+        "Late dry mixing: the model ceiling is already reached while clear, "
+        "weak-wind observations keep drying without cooling",
+        model_ceiling_reached_early,
+    )
+
+
 def failed_convection_adjustment(
     observations: pd.DataFrame,
     taf_guidance: TafGuidance | None,
@@ -546,6 +692,8 @@ def build_live_nowcast(
     as_of: datetime,
     wind_profile: dict | None = None,
     routine_metar_minutes: list[int] | tuple[int, ...] | None = None,
+    critical_window_local: list[str] | tuple[str, ...] | None = None,
+    post_convective_profile: dict | None = None,
 ) -> LiveNowcast | None:
     if forecasts.empty:
         return None
@@ -679,6 +827,10 @@ def build_live_nowcast(
         recent_baseline = float(past.max_temp_c.tail(14).median())
 
     local_now = as_of.astimezone(ZoneInfo(timezone_name))
+    hours_to_window_end = hours_until_critical_window_end(
+        local_now,
+        critical_window_local,
+    )
     observed_wind_speed = None
     observed_wind_direction = None
     if latest_obs is not None:
@@ -790,6 +942,25 @@ def build_live_nowcast(
         hours_to_peak,
     )
     observed_dewpoint_trend = dewpoint_trend(obs_today)
+    post_convective = post_convective_uncertainty(
+        observations,
+        as_of,
+        post_convective_profile,
+    )
+    post_convective_active = bool(
+        post_convective["active"] and target == local_now.date()
+    )
+    (
+        late_dry_mixing,
+        late_dry_mixing_signal,
+        model_ceiling_reached_early,
+    ) = late_dry_mixing_adjustment(
+        obs_today,
+        corrected_model_mean=corrected.mean,
+        local_now=local_now,
+        hours_to_window_end=hours_to_window_end,
+        wind_speed_kph=wind_speed,
+    )
     failed_convection, failed_convection_signal = failed_convection_adjustment(
         obs_today,
         taf_guidance,
@@ -799,6 +970,22 @@ def build_live_nowcast(
 
     def limited(value: float | None, lower: float, upper: float) -> float:
         return max(lower, min(upper, float(value))) if value is not None else 0.0
+
+    observed_wind_adjustment = (
+        wind_heat_adjustment(
+            speed_kph=wind_speed,
+            direction_deg=wind_direction,
+            warm_sectors=wind_profile.get("warm_sectors"),
+            cool_sectors=wind_profile.get("cool_sectors"),
+            source=wind_source or "model",
+        )
+        if live_observation_available and wind_source == "METAR"
+        else 0.0
+    )
+    if late_dry_mixing > 0 and observed_wind_adjustment < 0:
+        # A nominal cooling-sector wind must not erase observed warm, dry
+        # entrainment once the station itself confirms that regime.
+        observed_wind_adjustment = 0.0
 
     contributions = {
         "temperature_anchor": limited(
@@ -844,21 +1031,14 @@ def build_live_nowcast(
             -0.15,
             0.15,
         ),
-        "wind": (
-            wind_heat_adjustment(
-                speed_kph=wind_speed,
-                direction_deg=wind_direction,
-                warm_sectors=wind_profile.get("warm_sectors"),
-                cool_sectors=wind_profile.get("cool_sectors"),
-                source=wind_source or "model",
-            )
-            if live_observation_available and wind_source == "METAR"
-            else 0.0
-        ),
+        "wind": observed_wind_adjustment,
         "run_trend": limited(
             0.15 * trend if live_observation_available and trend is not None else None,
             -0.20,
             0.20,
+        ),
+        "late_dry_mixing": (
+            late_dry_mixing if live_observation_available else 0.0
         ),
         "failed_convection": (failed_convection if live_observation_available else 0.0),
     }
@@ -874,7 +1054,24 @@ def build_live_nowcast(
         live_adjustment,
         [
             *heat.signals,
+            *(
+                [
+                    "Observed maximum has reached the model ceiling with at least "
+                    "two configured heating hours left"
+                ]
+                if model_ceiling_reached_early
+                else []
+            ),
+            *([late_dry_mixing_signal] if late_dry_mixing_signal else []),
             *([failed_convection_signal] if failed_convection_signal else []),
+            *(
+                [
+                    "Post-convective regime: bucket uncertainty is broadened "
+                    "without shifting the forecast centre"
+                ]
+                if post_convective_active
+                else []
+            ),
         ],
     )
     signed = [
@@ -882,6 +1079,11 @@ def build_live_nowcast(
     ]
     contradictory = any(value > 0 for value in signed) and any(value < 0 for value in signed)
     live_sigma_floor = 0.80 if contradictory else 0.60 if len(signed) >= 4 else 0.65
+    if post_convective_active:
+        live_sigma_floor = max(
+            live_sigma_floor,
+            corrected.spread * float(post_convective["spread_multiplier"]),
+        )
     metar_unconditioned = consensus(
         (current.corrected_max + live_adjustment).tolist(),
         weights=current.model_weight.tolist(),
@@ -948,8 +1150,18 @@ def build_live_nowcast(
         "model_radiation_wm2": radiation,
         "future_radiation_max_wm2": future_radiation,
         "remaining_model_rise_c": remaining_rise,
+        "hours_to_critical_window_end": hours_to_window_end,
+        "model_ceiling_reached_early": float(model_ceiling_reached_early),
+        "late_dry_mixing_active": float(late_dry_mixing > 0),
+        "late_dry_mixing_adjustment_c": late_dry_mixing,
         "failed_convection_active": float(failed_convection > 0),
         "failed_convection_adjustment_c": failed_convection,
+        "post_convective_uncertainty_active": float(post_convective_active),
+        "post_convective_reports_48h": float(post_convective["reports"]),
+        "hours_since_latest_convection": post_convective["hours_since_latest"],
+        "post_convective_spread_multiplier": float(
+            post_convective["spread_multiplier"]
+        ),
     }
     if not d1_scored.empty:
         residual_errors = d1_scored.copy()
@@ -999,6 +1211,11 @@ def build_live_nowcast(
         forecast_confidence = round(0.80 * base_confidence + 0.20 * taf_guidance.confidence_score)
     else:
         forecast_confidence = round(base_confidence)
+    if post_convective_active and not day_status.is_locked:
+        confidence_factors["post_convective_regime"] = 35.0
+        forecast_confidence = round(
+            forecast_confidence * float(post_convective["confidence_multiplier"])
+        )
     return LiveNowcast(
         current=current,
         corrected=corrected,

@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.0.0")
+discard_stale_weatherman_modules("10.1.0")
 
 import pandas as pd
 import plotly.express as px
@@ -748,6 +748,23 @@ elif module == "Strategy performance":
         "Real tracked asks and explicitly labelled historical price samples are "
         "kept together here, with one entry per strategy and airport-day."
     )
+    with st.expander("What the three tables mean"):
+        st.markdown(
+            """
+| Table | What is hypothetically bought? | Entry timing and price |
+|---|---|---|
+| **Fixed-checkpoint top-bucket benchmark** | The highest-probability bucket from each forecast stage, whether or not it has positive edge | D-1 Evening at 20:00 and D0 Morning at 10:00 local airport time; first journaled entry at the checkpoint's recorded YES ask |
+| **Possible-edge tracker** | Every market bucket whose Weatherman probability first exceeds its current YES ask by at least 8 percentage points | The first recorded Possible-edge signal for that bucket; D-1, D0 and Live signals may all occur |
+| **Historical price simulation** | The rounded bucket from the reconstructed D-1 forecast | D-1 at 20:00 local airport time; nearest stored historical trade-price sample, not an executable old ask |
+"""
+        )
+        st.caption(
+            "The tables can therefore disagree without a calculation error. The "
+            "top-bucket benchmark and Possible-edge tracker may buy different "
+            "buckets, and one low-priced winner can produce positive P/L despite "
+            "a low hit rate. Historical price results have lower evidence quality "
+            "because an old trade-price sample is not a reconstructed order book."
+        )
     earliest_target = (
         datetime.now(timezone.utc).date()
         - timedelta(days=window_days + 120)
@@ -789,13 +806,23 @@ elif module == "Strategy performance":
     )
 
     if selected_airport:
-        edge_results = edge_results[edge_results.airport == selected_airport]
-        consensus_results = consensus_results[
-            consensus_results.airport == selected_airport
-        ]
-        price_history_results = price_history_results[
-            price_history_results.airport == selected_airport
-        ]
+        edge_results = (
+            edge_results[edge_results.airport == selected_airport]
+            if "airport" in edge_results.columns
+            else edge_results.iloc[0:0]
+        )
+        consensus_results = (
+            consensus_results[consensus_results.airport == selected_airport]
+            if "airport" in consensus_results.columns
+            else consensus_results.iloc[0:0]
+        )
+        price_history_results = (
+            price_history_results[
+                price_history_results.airport == selected_airport
+            ]
+            if "airport" in price_history_results.columns
+            else price_history_results.iloc[0:0]
+        )
 
     if consensus_results.empty:
         st.info(

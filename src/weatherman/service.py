@@ -164,6 +164,8 @@ def _build_nowcast_from_session(
         as_of=captured_at,
         wind_profile=airport.get("heat_wind_profile"),
         routine_metar_minutes=airport.get("metar_minutes"),
+        critical_window_local=airport.get("critical_window_local"),
+        post_convective_profile=airport.get("post_convective_uncertainty"),
     )
 
 
@@ -230,8 +232,24 @@ def _record_forecast_snapshot(
         "radiation_adjustment_c": nowcast.adjustment_contributions.get("radiation", 0.0),
         "wind_adjustment_c": nowcast.adjustment_contributions.get("wind", 0.0),
         "run_trend_adjustment_c": nowcast.adjustment_contributions.get("run_trend", 0.0),
+        "late_dry_mixing_adjustment_c": nowcast.adjustment_contributions.get(
+            "late_dry_mixing", 0.0
+        ),
         "failed_convection_adjustment_c": nowcast.adjustment_contributions.get(
             "failed_convection", 0.0
+        ),
+        "post_convective_active": bool(
+            nowcast.live_features.get("post_convective_uncertainty_active", 0)
+        ),
+        "post_convective_reports": int(
+            nowcast.live_features.get("post_convective_reports_48h", 0) or 0
+        ),
+        "post_convective_spread_multiplier": float(
+            nowcast.live_features.get("post_convective_spread_multiplier", 1.0)
+            or 1.0
+        ),
+        "model_ceiling_reached_early": bool(
+            nowcast.live_features.get("model_ceiling_reached_early", 0)
         ),
         "live_adjustment_c": nowcast.adjustment_contributions.get("total", 0.0),
         "features_json": json.dumps(nowcast.live_features, separators=(",", ":")),
@@ -497,7 +515,7 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                 f"{code} daily forecasts",
             )
             try:
-                metar_rows = recent_metars(code)
+                metar_rows = recent_metars(code, hours=48)
             except Exception as exc:
                 print(f"WARN {code}/METAR: {exc}")
             else:
@@ -794,7 +812,12 @@ def collect_live_aviation(
     catalog = airports()
     if airport_code not in catalog:
         raise KeyError(f"Unknown airport: {airport_code}")
-    metar_rows = recent_metars(airport_code, attempts=1, timeout=5)
+    metar_rows = recent_metars(
+        airport_code,
+        hours=48,
+        attempts=1,
+        timeout=5,
+    )
     taf_rows = recent_tafs([airport_code], attempts=1, timeout=5) if include_taf else []
     counts: dict[str, object] = {
         "observations": 0,
@@ -889,7 +912,12 @@ def collect_live_decision_checkpoints(
         for code in due_codes:
             airport = catalog[code]
             try:
-                metar_rows = recent_metars(code, attempts=2, timeout=10)
+                metar_rows = recent_metars(
+                    code,
+                    hours=48,
+                    attempts=2,
+                    timeout=10,
+                )
             except Exception as exc:
                 print(f"WARN {code}/live-decision METAR: {exc}")
                 metar_rows = []

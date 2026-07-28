@@ -492,3 +492,176 @@ def test_v10_detects_failed_convection_after_clear_recent_metars():
     assert result.adjustment_contributions["failed_convection"] == 0.35
     assert result.live_features["failed_convection_active"] == 1
     assert any("not materialised" in signal for signal in result.heat.signals)
+
+
+def test_post_convective_regime_broadens_but_does_not_shift_forecast_centre():
+    as_of = datetime(2026, 7, 27, 13, tzinfo=ZoneInfo("Europe/Istanbul"))
+    now_utc = as_of.astimezone(timezone.utc)
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "target_date": as_of.date(),
+                "max_temp_c": maximum,
+                "source": "open-meteo",
+                "horizon": "Live",
+            }
+            for model, maximum in [("ECMWF", 26.0), ("GFS", 26.2)]
+        ]
+    )
+    hourly = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "valid_at": valid_at,
+                "temp_c": temp,
+                "dewpoint_c": 8.0,
+                "cloud_cover": 10.0,
+                "wind_kph": 10.0,
+                "wind_direction": 250.0,
+                "radiation_wm2": 700.0,
+                "temp_850hpa_c": 14.0,
+            }
+            for model in ["ECMWF", "GFS"]
+            for valid_at, temp in [
+                (now_utc, 24.0),
+                (now_utc + timedelta(hours=3), 26.0),
+            ]
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "observed_at": now_utc - timedelta(hours=45),
+                "temp_c": 20.0,
+                "dewpoint_c": 12.0,
+                "raw": "LTAC TSRA BKN030CB",
+            },
+            {
+                "airport": "LTAC",
+                "observed_at": now_utc - timedelta(hours=44, minutes=30),
+                "temp_c": 19.0,
+                "dewpoint_c": 13.0,
+                "raw": "LTAC VCTS SCT030CB",
+            },
+        ]
+    )
+    common = {
+        "forecasts": forecasts,
+        "actuals": pd.DataFrame(),
+        "observations": observations,
+        "hourly": hourly,
+        "markets": pd.DataFrame(),
+        "timezone_name": "Europe/Istanbul",
+        "target": as_of.date(),
+        "as_of": as_of,
+        "critical_window_local": ["11:30", "18:30"],
+    }
+    baseline = build_live_nowcast(**common)
+    broadened = build_live_nowcast(
+        **common,
+        post_convective_profile={
+            "enabled": True,
+            "window_hours": 48,
+            "minimum_reports": 2,
+            "spread_multiplier": 1.5,
+            "confidence_multiplier": 0.85,
+        },
+    )
+
+    assert baseline is not None
+    assert broadened is not None
+    assert broadened.live_features["post_convective_uncertainty_active"] == 1
+    assert broadened.live_features["post_convective_reports_48h"] == 2
+    assert broadened.final_forecast_spread > baseline.final_forecast_spread
+    assert abs(broadened.final_forecast_mean - baseline.final_forecast_mean) < 0.05
+    assert broadened.forecast_confidence < baseline.forecast_confidence
+
+
+def test_late_dry_mixing_flags_early_model_ceiling_and_adds_warm_tail_signal():
+    as_of = datetime(2026, 7, 27, 15, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
+    now_utc = as_of.astimezone(timezone.utc)
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "target_date": as_of.date(),
+                "max_temp_c": maximum,
+                "source": "open-meteo",
+                "horizon": "Live",
+            }
+            for model, maximum in [("ECMWF", 26.0), ("GFS", 26.2)]
+        ]
+    )
+    hourly = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "valid_at": valid_at,
+                "temp_c": temp,
+                "dewpoint_c": 8.0,
+                "cloud_cover": 5.0,
+                "wind_kph": 10.0,
+                "wind_direction": 320.0,
+                "radiation_wm2": 650.0,
+                "temp_850hpa_c": 14.0,
+            }
+            for model in ["ECMWF", "GFS"]
+            for valid_at, temp in [
+                (now_utc - timedelta(hours=1), 25.0),
+                (now_utc, 25.5),
+                (now_utc + timedelta(hours=1), 26.0),
+            ]
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "airport": "LTAC",
+                "observed_at": now_utc - timedelta(hours=1),
+                "temp_c": 25.5,
+                "dewpoint_c": 8.0,
+                "cloud_cover": 0.0,
+                "wind_kph": 10.0,
+                "wind_direction": 320.0,
+                "raw": "LTAC CAVOK",
+            },
+            {
+                "airport": "LTAC",
+                "observed_at": now_utc,
+                "temp_c": 26.0,
+                "dewpoint_c": 6.0,
+                "cloud_cover": 0.0,
+                "wind_kph": 9.0,
+                "wind_direction": 320.0,
+                "raw": "LTAC CAVOK",
+            },
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=observations,
+        hourly=hourly,
+        markets=pd.DataFrame(),
+        timezone_name="Europe/Istanbul",
+        target=as_of.date(),
+        as_of=as_of,
+        critical_window_local=["11:30", "18:30"],
+    )
+
+    assert result is not None
+    assert result.live_features["model_ceiling_reached_early"] == 1
+    assert result.live_features["late_dry_mixing_active"] == 1
+    assert result.adjustment_contributions["late_dry_mixing"] == 0.30
+    assert result.adjustment_contributions["wind"] == 0
+    assert any("Late dry mixing" in signal for signal in result.heat.signals)

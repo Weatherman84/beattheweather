@@ -209,7 +209,18 @@ class ForecastSnapshot(Base):
     radiation_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     wind_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     run_trend_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    late_dry_mixing_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     failed_convection_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    post_convective_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    post_convective_reports: Mapped[int] = mapped_column(Integer, default=0)
+    post_convective_spread_multiplier: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+    )
+    model_ceiling_reached_early: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
     live_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     features_json: Mapped[str] = mapped_column(Text, default="{}")
     peak_lock_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -342,7 +353,12 @@ def init_db() -> None:
                     "radiation_adjustment_c": "FLOAT DEFAULT 0",
                     "wind_adjustment_c": "FLOAT DEFAULT 0",
                     "run_trend_adjustment_c": "FLOAT DEFAULT 0",
+                    "late_dry_mixing_adjustment_c": "FLOAT DEFAULT 0",
                     "failed_convection_adjustment_c": "FLOAT DEFAULT 0",
+                    "post_convective_active": "BOOLEAN DEFAULT 0",
+                    "post_convective_reports": "INTEGER DEFAULT 0",
+                    "post_convective_spread_multiplier": "FLOAT DEFAULT 1",
+                    "model_ceiling_reached_early": "BOOLEAN DEFAULT 0",
                     "live_adjustment_c": "FLOAT DEFAULT 0",
                     "features_json": "TEXT DEFAULT '{}'",
                     "peak_lock_json": "TEXT DEFAULT '{}'",

@@ -497,6 +497,34 @@ Collect-Workflow erforderlich. Nach dem Upload genügt ein Reboot der Streamlit-
 Workflow 5 läuft nach dem Upload automatisch. Die vorhandene Datenbank bleibt
 erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
 
+## Neu in Version 10.1
+
+- Airport Research zeigt bei München, Istanbul und anderen Airports ohne bereits
+  abgerechnete Strategy-Performance-Daten nun eine verständliche Leermeldung,
+  statt beim Airport-Filter mit einem `AttributeError` abzubrechen.
+- Ein aufklappbarer Erklärbereich grenzt den Fixed-checkpoint
+  Top-bucket-Benchmark, den Possible-edge Tracker und die historische
+  Preissimulation samt unterschiedlicher Einstiegslogik voneinander ab.
+- Für LTAC aktiviert ein beobachtetes Gewitterregime in den letzten 48 Stunden
+  nun **Post-Convective Uncertainty**. Es verschiebt die Temperaturprognose
+  ausdrücklich nicht, sondern verbreitert die Bucket-Verteilung bis maximal
+  1,5-fach und senkt die Forecast Confidence.
+- **Late Dry Mixing** ist ein eigenes positives Live-Signal, wenn das
+  Modellmaximum früh erreicht wird, der Taupunkt deutlich fällt, CAVOK bzw.
+  geringe Bewölkung anhält, der Wind schwach bleibt und noch Heizzeit vorhanden
+  ist.
+- Der Trading Desk warnt zusätzlich, wenn das beobachtete Maximum die
+  Modellobergrenze mit mindestens zwei verbleibenden Stunden im konfigurierten
+  Heizfenster erreicht.
+- Das kritische Livefenster von Ankara endet nicht mehr um 16:30, sondern um
+  **18:30 Uhr lokal beziehungsweise 17:30 Uhr österreichischer Sommerzeit**.
+- Die METAR-Sammlung lädt für die sechs Trading-Airports jeweils 48 Stunden,
+  damit vorangegangene Gewitter für die Regimeerkennung verfügbar bleiben.
+
+Für dieses Update ist kein Backfill nötig. Nach dem Upload genügt ein Reboot der
+Streamlit-App. Falls Workflow 6 nach dem v10.0.1-Fix noch nicht erfolgreich
+durchgelaufen ist, kann er anschließend unverändert erneut gestartet werden.
+
 ## Korrektur in Version 9.5.2
 
 Version 9.5.2 verschiebt das Streamlit-Startmodul `runtime_bootstrap` in den
