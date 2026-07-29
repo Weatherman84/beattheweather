@@ -478,9 +478,9 @@ Collect-Workflow erforderlich. Nach dem Upload genügt ein Reboot der Streamlit-
   zweiten ausgewählten Bucket den Einsatz, der die Bruttoauszahlung dieser beiden
   Ergebnisse ausgleicht. Andere Buckets bleiben ausdrücklich als ungesichertes
   Risiko sichtbar.
-- Workflow **5 - Collect live decision checkpoints** sammelt nur während der
-  airportabhängigen kritischen Zeitfenster zusätzliche METAR-, Markt- und
-  Decision-Snapshots.
+- Workflow **5 - Parallel shadow watcher and live decisions** sammelt nur während
+  der airportabhängigen kritischen Zeitfenster zusätzliche METAR-, Markt-,
+  Decision- und ausführbare Orderbuch-Snapshots.
 
 ### Update von v9.5.4 auf v10
 
@@ -496,6 +496,57 @@ Collect-Workflow erforderlich. Nach dem Upload genügt ein Reboot der Streamlit-
 
 Workflow 5 läuft nach dem Upload automatisch. Die vorhandene Datenbank bleibt
 erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
+
+## Neu in Version 10.2
+
+- Der **Parallel Shadow Watcher** läuft im selben Workflow wie die bisherige
+  Decision Engine automatisch alle zehn Minuten, aber nur innerhalb des
+  jeweiligen kritischen Airport-Fensters.
+- Er lädt die öffentliche CLOB-Orderbuchtiefe jedes YES-Buckets und simuliert
+  einen sofort ausführbaren **$10-All-in-Paper-Kauf**. Der effektive Preis
+  berücksichtigt mehrere Ask-Level, Slippage und die dynamische
+  Weather-Taker-Gebühr
+  `shares × 0.05 × price × (1 − price)`.
+- Eine **SHADOW BET** benötigt nach Gebühren und Slippage noch mindestens fünf
+  Prozentpunkte Edge, nachdem zusätzlich zwei Prozentpunkte Sicherheitsabschlag
+  abgezogen wurden. Forecast Confidence unter 65, Spread über zwölf Punkte,
+  METAR pending, unzureichende Tiefe, veraltetes Orderbuch, Peak Lock oder ein
+  harter Markt-Modell-Konflikt verhindern ein Shadow-Bet-Signal.
+- Es werden auch WATCH- und NO-BET-Prüfungen gespeichert. So kann später gemessen
+  werden, ob eine Netto-Edge wirklich ausführbar war und wie lange sie bestand.
+  Der Watcher besitzt keine Wallet-, Login- oder Orderfunktion und kann daher
+  keine echte Wette platzieren.
+- Der Trading Desk hat einen eigenen Reiter **Shadow watcher**. Strategy
+  Performance wertet nach Marktauflösung den ersten gebühren- und
+  tiefenbereinigten Shadow-Einstieg je Bucket separat aus.
+- Vollständige METAR-Tage werden bereits am Folgetag als
+  `metar-provisional`-Actual gelernt. Sobald das verzögerte Archiv verfügbar ist,
+  ersetzt es diesen vorläufigen Wert automatisch.
+- Das neue **Rapid Heat-Ramp Regime** erkennt schnelle Erwärmung gegenüber den
+  letzten ein bis zwei Tagen. Es addiert keinen pauschalen Temperaturwert,
+  sondern schwächt nur historisch positive Warmbias-Korrekturen ab, verbreitert
+  die Bucket-Verteilung und senkt die Confidence.
+- Bei Madrid und München wird ein kohärenter warmer Regionalmodell-Cluster
+  während eines Heat Ramps getrennt von einem kälteren Globalmodell-Cluster
+  behandelt. Bestätigt ein klarer TAF das Regime, erhalten AROME/AROME-HD,
+  ARPEGE beziehungsweise ICON-EU konservativ mehr Gewicht.
+- Der neue **Clear-sky override** greift live erst nach mindestens zwei klaren
+  METARs. Er korrigiert vorsichtig eine modellierte Wolkenbremse; ein ebenfalls
+  klarer TAF verstärkt das Signal.
+- Rapid Heat Ramp, Regional Cluster und Clear-sky Override werden mit jedem
+  Forecast-Snapshot gespeichert und können später getrennt gegen das tatsächliche
+  Maximum geprüft werden.
+
+### Update von v10.1 auf v10.2
+
+1. Den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen und vorhandene Dateien
+   ersetzen.
+2. Den grünen GitHub-Test abwarten.
+3. **2 - Collect current forecasts** einmal manuell starten.
+4. Streamlit über **Manage app → Reboot app** neu starten.
+
+Workflow 5 startet den Shadow Watcher anschließend automatisch. Es ist kein
+neuer Forecast-, Marktpreis- oder Airport-Backfill erforderlich.
 
 ## Neu in Version 10.1
 

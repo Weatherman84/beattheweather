@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.1.0")
+discard_stale_weatherman_modules("10.2.0")
 
 import pandas as pd
 import plotly.express as px
@@ -38,6 +38,7 @@ from weatherman.db import (
     MarketSnapshot,
     Observation,
     Session,
+    ShadowEvaluation,
     SignalSnapshot,
     StrategySnapshot,
     TafReport,
@@ -304,6 +305,10 @@ with Session() as session:
     all_strategy_snapshots = pd.read_sql(
         select(StrategySnapshot).where(StrategySnapshot.airport == airport), session.bind
     )
+    all_shadow_evaluations = pd.read_sql(
+        select(ShadowEvaluation).where(ShadowEvaluation.airport == airport),
+        session.bind,
+    )
     all_forecast_snapshots = pd.read_sql(
         select(ForecastSnapshot).where(ForecastSnapshot.airport == airport),
         session.bind,
@@ -337,6 +342,11 @@ strategy_snapshots = (
     all_strategy_snapshots[all_strategy_snapshots.airport == airport].copy()
     if not all_strategy_snapshots.empty
     else all_strategy_snapshots
+)
+shadow_evaluations = (
+    all_shadow_evaluations[all_shadow_evaluations.airport == airport].copy()
+    if not all_shadow_evaluations.empty
+    else all_shadow_evaluations
 )
 tafs = all_tafs[all_tafs.airport == airport].copy() if not all_tafs.empty else all_tafs
 
@@ -375,13 +385,13 @@ st.caption(
     f"Last data update · Forecast: {last_update(forecasts, 'run_at', timezone_name)} · "
     f"METAR: {last_update(observations, 'observed_at', timezone_name)} · "
     f"TAF: {last_update(tafs, 'issue_time', timezone_name)} · "
-    f"Polymarket: {last_update(market_snapshots, 'captured_at', timezone_name)} · "
-    f"Signals: {last_update(signal_snapshots, 'captured_at', timezone_name)} "
-    f"({timezone_name} local time)"
-)
+        f"Polymarket: {last_update(market_snapshots, 'captured_at', timezone_name)} · "
+        f"Shadow: {last_update(shadow_evaluations, 'captured_at', timezone_name)} "
+        f"({timezone_name} local time)"
+    )
 
-tab_live, tab_market, tab_accuracy = st.tabs(
-    ["Live forecast", "Market comparison", "Accuracy by timing"]
+tab_live, tab_market, tab_shadow, tab_accuracy = st.tabs(
+    ["Live forecast", "Market comparison", "Shadow watcher", "Accuracy by timing"]
 )
 tab_performance = tab_airports = tab_simulation = tab_data = None
 
@@ -406,6 +416,7 @@ with tab_live:
         post_convective_profile=catalog[airport].get(
             "post_convective_uncertainty"
         ),
+        heat_regime_profile=catalog[airport].get("heat_regime"),
     )
     if live_nowcast is None:
         st.info("No current forecast stored for this date. Click Refresh forecasts + METAR + TAF.")
@@ -646,7 +657,9 @@ with tab_live:
                     "model_weight",
                     "performance_weight",
                     "outlier_multiplier",
+                    "regime_weight_multiplier",
                     "robust_distance_c",
+                    "historical_d1_bias",
                     "d1_bias",
                 ]
             ].copy()
@@ -657,18 +670,26 @@ with tab_live:
             weights["outlier_multiplier"] = weights.outlier_multiplier.map(
                 lambda value: f"{value:.2f}×"
             )
+            weights["regime_weight_multiplier"] = weights.regime_weight_multiplier.map(
+                lambda value: f"{value:.2f}×"
+            )
             weights["robust_distance_c"] = weights.robust_distance_c.map(
                 lambda value: f"{value:.2f} °C"
             )
             weights["d1_bias"] = weights.d1_bias.map(lambda value: f"{value:+.2f} °C")
+            weights["historical_d1_bias"] = weights.historical_d1_bias.map(
+                lambda value: f"{value:+.2f} °C"
+            )
             weights = weights.rename(
                 columns={
                     "model": "Model",
                     "model_weight": "Current weight",
                     "performance_weight": "Historical weight",
                     "outlier_multiplier": "Outlier protection",
+                    "regime_weight_multiplier": "Heat-regime weight",
                     "robust_distance_c": "Distance from median",
-                    "d1_bias": "D-1 bias correction",
+                    "historical_d1_bias": "Historical D-1 bias",
+                    "d1_bias": "Effective D-1 bias",
                 }
             )
             st.dataframe(weights, hide_index=True, width="stretch")
@@ -683,8 +704,8 @@ with tab_live:
                 "Weights use only earlier D-1 errors from the latest 90 days and are shrunk "
                 "toward equal weighting when the sample is small. Confidence combines historical "
                 "accuracy, current model agreement, sample size, live-data freshness and, when "
-                "available, a limited TAF agreement factor. At LTAC, a confirmed post-convective "
-                "regime applies a separate conservative confidence reduction."
+                "available, a limited TAF agreement factor. Confirmed post-convective and rapid "
+                "heat-ramp regimes apply separate conservative confidence reductions."
             )
 
         st.subheader("Model maximum forecasts")
@@ -1106,6 +1127,121 @@ with tab_market:
                 "price; it becomes the winning range only after official resolution. Market "
                 "probability is that displayed YES price. Buying YES normally requires the ask, "
                 "which can be higher. Missing asks use the displayed value only as an approximation."
+            )
+            
+
+with tab_shadow:
+    st.subheader(f"{airport} · parallel shadow watcher")
+    st.caption(
+        "Workflow 5 evaluates the public CLOB order book during the critical "
+        "window. It walks the available ask depth for a $10 all-in paper stake "
+        "and subtracts estimated weather-market taker fees, slippage and a "
+        "two-percentage-point safety margin. No wallet is connected and no order "
+        "can be placed."
+    )
+    target_shadow = (
+        shadow_evaluations[
+            pd.to_datetime(shadow_evaluations.target_date).dt.date == target
+        ].copy()
+        if not shadow_evaluations.empty
+        else shadow_evaluations
+    )
+    if target_shadow.empty:
+        st.info(
+            "No shadow evaluation is stored for this airport and date yet. "
+            "Collection starts automatically when the airport enters its critical "
+            "trading window."
+        )
+    else:
+        target_shadow["captured_at"] = pd.to_datetime(
+            target_shadow.captured_at,
+            utc=True,
+        )
+        latest_capture = target_shadow.captured_at.max()
+        latest_shadow = target_shadow[
+            target_shadow.captured_at == latest_capture
+        ].copy()
+        executable = latest_shadow[
+            latest_shadow.status == "SHADOW BET"
+        ]
+        best_net_edge = pd.to_numeric(
+            latest_shadow.net_edge,
+            errors="coerce",
+        ).max()
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Stored checks", target_shadow.captured_at.nunique())
+        s2.metric("Buckets checked now", len(latest_shadow))
+        s3.metric("Shadow bets now", len(executable))
+        s4.metric(
+            "Best net edge",
+            f"{best_net_edge:+.1%}" if pd.notna(best_net_edge) else "—",
+        )
+        st.caption(
+            f"Latest CLOB evaluation: "
+            f"{latest_capture.tz_convert(timezone_name):%d.%m.%Y %H:%M:%S} "
+            f"{timezone_name}"
+        )
+        shown = latest_shadow[
+            [
+                "bucket_label",
+                "fair_probability",
+                "best_ask",
+                "average_fill_price",
+                "fee_per_share",
+                "slippage",
+                "all_in_price",
+                "net_edge",
+                "depth_at_best_usdc",
+                "available_depth_usdc",
+                "forecast_confidence",
+                "status",
+            ]
+        ].copy()
+        for column in [
+            "fair_probability",
+            "best_ask",
+            "average_fill_price",
+            "fee_per_share",
+            "slippage",
+            "all_in_price",
+            "net_edge",
+        ]:
+            shown[column] = shown[column].map(
+                lambda value: f"{float(value):+.1%}"
+                if column in {"slippage", "net_edge"} and pd.notna(value)
+                else f"{float(value):.1%}"
+                if pd.notna(value)
+                else "—"
+            )
+        for column in ["depth_at_best_usdc", "available_depth_usdc"]:
+            shown[column] = shown[column].map(
+                lambda value: f"${float(value):,.2f}" if pd.notna(value) else "—"
+            )
+        shown = shown.rename(
+            columns={
+                "bucket_label": "Range",
+                "fair_probability": "Fair probability",
+                "best_ask": "Best ask",
+                "average_fill_price": "Average fill",
+                "fee_per_share": "Fee/share",
+                "slippage": "Slippage",
+                "all_in_price": "All-in/share",
+                "net_edge": "Net edge",
+                "depth_at_best_usdc": "Depth at best",
+                "available_depth_usdc": "Total ask depth",
+                "forecast_confidence": "Confidence",
+                "status": "Paper decision",
+            }
+        )
+        st.dataframe(shown, hide_index=True, width="stretch")
+        paper_entries = target_shadow[
+            target_shadow.status == "SHADOW BET"
+        ].sort_values("captured_at")
+        if not paper_entries.empty:
+            st.caption(
+                "A market bucket is counted as a future paper entry only at its "
+                "first SHADOW BET. Repeated checks are retained to measure how "
+                "long the executable edge remained available."
             )
 
 

@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.1.0")
+discard_stale_weatherman_modules("10.2.0")
 
 import pandas as pd
 import plotly.express as px
@@ -28,6 +28,7 @@ from weatherman.analytics import (
     live_factor_diagnostics,
     preferred_station_actuals,
     settled_signal_performance,
+    settled_shadow_performance,
     settled_strategy_performance,
 )
 from weatherman.db import (
@@ -38,6 +39,7 @@ from weatherman.db import (
     MarketSnapshot,
     Observation,
     Session,
+    ShadowEvaluation,
     SignalSnapshot,
     StrategySnapshot,
     init_db,
@@ -155,6 +157,14 @@ def load_strategy_research_data(
                 "strategies": pd.read_sql(
                     scoped_statement(
                         StrategySnapshot,
+                        airport_codes,
+                        earliest_target=earliest_target,
+                    ),
+                    session.bind,
+                ),
+                "shadows": pd.read_sql(
+                    scoped_statement(
+                        ShadowEvaluation,
                         airport_codes,
                         earliest_target=earliest_target,
                     ),
@@ -742,26 +752,27 @@ elif module == "Forecast stages":
         )
 
 elif module == "Strategy performance":
-    st.subheader("Strategy Performance · standardized $1 stakes")
+    st.subheader("Strategy Performance · forward and historical paper tests")
     st.caption(
         "The former standalone synthetic D-1 $1 simulation has been removed. "
         "Real tracked asks and explicitly labelled historical price samples are "
         "kept together here, with one entry per strategy and airport-day."
     )
-    with st.expander("What the three tables mean"):
+    with st.expander("What the four tables mean"):
         st.markdown(
             """
 | Table | What is hypothetically bought? | Entry timing and price |
 |---|---|---|
 | **Fixed-checkpoint top-bucket benchmark** | The highest-probability bucket from each forecast stage, whether or not it has positive edge | D-1 Evening at 20:00 and D0 Morning at 10:00 local airport time; first journaled entry at the checkpoint's recorded YES ask |
+| **Net-edge shadow watcher** | Every first SHADOW BET after checking the full YES ask book for a $10 paper stake | During the live critical window; includes actual depth, slippage, the weather-market taker fee and a 2-point safety margin |
 | **Possible-edge tracker** | Every market bucket whose Weatherman probability first exceeds its current YES ask by at least 8 percentage points | The first recorded Possible-edge signal for that bucket; D-1, D0 and Live signals may all occur |
 | **Historical price simulation** | The rounded bucket from the reconstructed D-1 forecast | D-1 at 20:00 local airport time; nearest stored historical trade-price sample, not an executable old ask |
 """
         )
         st.caption(
             "The tables can therefore disagree without a calculation error. The "
-            "top-bucket benchmark and Possible-edge tracker may buy different "
-            "buckets, and one low-priced winner can produce positive P/L despite "
+            "top-bucket benchmark, shadow watcher and Possible-edge tracker may "
+            "buy different buckets, and one low-priced winner can produce positive P/L despite "
             "a low hit rate. Historical price results have lower evidence quality "
             "because an old trade-price sample is not a reconstructed order book."
         )
@@ -780,6 +791,7 @@ elif module == "Strategy performance":
     markets = strategy_data["markets"]
     signals = strategy_data["signals"]
     strategies = strategy_data["strategies"]
+    shadows = strategy_data["shadows"]
     local_timezones = {
         code: timezone_by_airport[code]
         for code in airport_codes
@@ -798,6 +810,7 @@ elif module == "Strategy performance":
         window_days,
     )
     edge_results = settled_signal_performance(signals, markets)
+    shadow_results = settled_shadow_performance(shadows, markets)
     canonical_strategies = canonical_strategy_checkpoints(strategies)
     consensus_results = settled_strategy_performance(canonical_strategies, markets)
     price_history_results = historical_price_strategy_simulation(
@@ -810,6 +823,11 @@ elif module == "Strategy performance":
             edge_results[edge_results.airport == selected_airport]
             if "airport" in edge_results.columns
             else edge_results.iloc[0:0]
+        )
+        shadow_results = (
+            shadow_results[shadow_results.airport == selected_airport]
+            if "airport" in shadow_results.columns
+            else shadow_results.iloc[0:0]
         )
         consensus_results = (
             consensus_results[consensus_results.airport == selected_airport]
@@ -874,6 +892,48 @@ elif module == "Strategy performance":
                 else f"${float(value):.2f}"
             )
         st.dataframe(summary, hide_index=True, width="stretch")
+
+    st.subheader("Net-edge shadow watcher · $10 all-in paper stakes")
+    if shadow_results.empty:
+        recorded_shadow_bets = (
+            int((shadows.status == "SHADOW BET").sum())
+            if not shadows.empty and "status" in shadows
+            else 0
+        )
+        st.caption(
+            f"No shadow entry has settled in this scope yet. "
+            f"{recorded_shadow_bets} SHADOW BET checkpoint(s) are currently journaled."
+        )
+    else:
+        shadow_summary = shadow_results.groupby("airport", as_index=False).agg(
+            entries=("market_id", "count"),
+            hit_rate=("won", "mean"),
+            pnl=("pnl", "sum"),
+            average_net_edge=("net_edge", "mean"),
+            average_all_in_price=("all_in_price", "mean"),
+            average_slippage=("slippage", "mean"),
+        )
+        shadow_summary["roi"] = (
+            shadow_results.groupby("airport").pnl.sum().to_numpy()
+            / shadow_results.groupby("airport").total_cost_usdc.sum().to_numpy()
+        )
+        for column in [
+            "hit_rate",
+            "average_net_edge",
+            "average_all_in_price",
+            "average_slippage",
+            "roi",
+        ]:
+            shadow_summary[column] = shadow_summary[column].map(format_percent)
+        shadow_summary["pnl"] = shadow_summary.pnl.map(
+            lambda value: f"${float(value):+.2f}"
+        )
+        st.dataframe(shadow_summary, hide_index=True, width="stretch")
+        st.caption(
+            "Only the first SHADOW BET per market bucket is settled. The stored "
+            "share count already reflects the full order-book walk and estimated "
+            "taker fee; no real order was placed."
+        )
 
     st.subheader("Possible-edge tracker")
     if edge_results.empty:

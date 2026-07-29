@@ -25,6 +25,7 @@ from weatherman.analytics import (
     resolved_market_range,
     score_frame,
     settled_signal_performance,
+    settled_shadow_performance,
     settled_strategy_performance,
     trading_airport_scorecards,
 )
@@ -509,6 +510,55 @@ def test_signal_performance_waits_for_a_confirmed_winner():
         ]
     )
     assert settled_signal_performance(signals, markets).empty
+
+
+def test_shadow_performance_uses_stored_fee_adjusted_shares():
+    evaluations = pd.DataFrame(
+        [
+            {
+                "airport": "EDDM",
+                "target_date": date(2026, 7, 29),
+                "market_id": "winner",
+                "bucket_label": "34°C",
+                "captured_at": "2026-07-29T12:00:00Z",
+                "timing": "D0 live",
+                "fair_probability": 0.40,
+                "average_fill_price": 0.20,
+                "fee_per_share": 0.008,
+                "all_in_price": 0.208,
+                "slippage": 0.0,
+                "net_edge": 0.172,
+                "stake_usdc": 10.0,
+                "shares": 48.076923,
+                "total_cost_usdc": 10.0,
+                "fully_fillable": True,
+                "status": "SHADOW BET",
+            }
+        ]
+    )
+    markets = pd.DataFrame(
+        [
+            {
+                "event_slug": "munich-2026-07-29",
+                "market_id": "winner",
+                "captured_at": "2026-07-30T00:00:00Z",
+                "closed": True,
+                "yes_won": True,
+            },
+            {
+                "event_slug": "munich-2026-07-29",
+                "market_id": "loser",
+                "captured_at": "2026-07-30T00:00:00Z",
+                "closed": True,
+                "yes_won": False,
+            },
+        ]
+    )
+    settled = settled_shadow_performance(evaluations, markets)
+    assert len(settled) == 1
+    assert settled.iloc[0].won
+    assert round(settled.iloc[0].pnl, 2) == 38.08
+    assert round(settled.iloc[0].roi, 3) == 3.808
 
 
 def test_empty_strategy_performance_keeps_filterable_schema():

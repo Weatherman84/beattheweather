@@ -310,6 +310,134 @@ def recent_station_residual(scored: pd.DataFrame) -> float | None:
     return float((daily.station_residual.reset_index(drop=True) * weights).sum() / weights.sum())
 
 
+def rapid_heat_ramp_regime(
+    actuals: pd.DataFrame,
+    *,
+    target: date,
+    forecast_mean: float,
+    profile: dict | None = None,
+) -> dict[str, float | bool | None]:
+    """Identify a fast warm-regime transition without adding a fixed temperature."""
+    configured = profile or {}
+    defaults: dict[str, float | bool | None] = {
+        "active": False,
+        "forecast_vs_latest_c": None,
+        "latest_actual_change_c": None,
+        "forecast_vs_two_back_c": None,
+        "bias_multiplier": 1.0,
+        "spread_multiplier": 1.0,
+        "confidence_multiplier": 1.0,
+    }
+    if actuals.empty:
+        return defaults
+    frame = actuals.copy()
+    frame["target_date"] = pd.to_datetime(frame.target_date).dt.date
+    frame = (
+        frame[frame.target_date < target]
+        .sort_values("target_date")
+        .drop_duplicates("target_date", keep="last")
+        .tail(3)
+    )
+    if frame.empty:
+        return defaults
+    latest = frame.iloc[-1]
+    if (target - latest.target_date).days > 2:
+        return defaults
+    forecast_vs_latest = float(forecast_mean) - float(latest.max_temp_c)
+    previous_change = None
+    forecast_vs_two_back = None
+    if len(frame) >= 2:
+        previous = frame.iloc[-2]
+        previous_change = float(latest.max_temp_c) - float(previous.max_temp_c)
+        forecast_vs_two_back = float(forecast_mean) - float(previous.max_temp_c)
+    active = bool(
+        forecast_vs_latest >= float(configured.get("one_day_threshold_c", 3.0))
+        or (
+            previous_change is not None
+            and previous_change >= float(configured.get("prior_jump_threshold_c", 3.0))
+            and forecast_vs_latest >= float(configured.get("continuation_threshold_c", 1.5))
+        )
+        or (
+            forecast_vs_two_back is not None
+            and forecast_vs_two_back >= float(configured.get("two_day_threshold_c", 5.0))
+        )
+    )
+    if not active:
+        return {
+            **defaults,
+            "forecast_vs_latest_c": forecast_vs_latest,
+            "latest_actual_change_c": previous_change,
+            "forecast_vs_two_back_c": forecast_vs_two_back,
+        }
+    return {
+        "active": True,
+        "forecast_vs_latest_c": forecast_vs_latest,
+        "latest_actual_change_c": previous_change,
+        "forecast_vs_two_back_c": forecast_vs_two_back,
+        "bias_multiplier": max(
+            0.0,
+            min(1.0, float(configured.get("positive_bias_multiplier", 0.45))),
+        ),
+        "spread_multiplier": max(
+            1.0,
+            min(1.5, float(configured.get("spread_multiplier", 1.25))),
+        ),
+        "confidence_multiplier": max(
+            0.5,
+            min(1.0, float(configured.get("confidence_multiplier", 0.90))),
+        ),
+    }
+
+
+def regional_heat_cluster(
+    current: pd.DataFrame,
+    *,
+    profile: dict | None,
+    rapid_heat_active: bool,
+    taf_clear: bool,
+) -> dict[str, float | bool | None | pd.Series]:
+    """Protect a coherent warm regional-model cluster during a rapid heat ramp."""
+    defaults: dict[str, float | bool | None | pd.Series] = {
+        "active": False,
+        "regional_mean_c": None,
+        "other_mean_c": None,
+        "mean_gap_c": None,
+        "multiplier": 1.0,
+        "members": pd.Series(False, index=current.index),
+    }
+    if not profile or not profile.get("enabled", True) or current.empty or not rapid_heat_active:
+        return defaults
+    configured_models = {str(value) for value in profile.get("regional_models", [])}
+    if not configured_models:
+        return defaults
+    members = current.model.astype(str).isin(configured_models)
+    if not members.any() or (~members).sum() == 0:
+        return {**defaults, "members": members}
+    regional_mean = float(current.loc[members, "corrected_max"].mean())
+    other_mean = float(current.loc[~members, "corrected_max"].mean())
+    gap = regional_mean - other_mean
+    required_gap = float(profile.get("minimum_warm_gap_c", 0.6))
+    if gap < required_gap:
+        return {
+            **defaults,
+            "regional_mean_c": regional_mean,
+            "other_mean_c": other_mean,
+            "mean_gap_c": gap,
+            "members": members,
+        }
+    multiplier = float(profile.get("regional_weight_multiplier", 1.35))
+    if not taf_clear:
+        multiplier = min(multiplier, float(profile.get("unconfirmed_multiplier", 1.20)))
+    return {
+        "active": True,
+        "regional_mean_c": regional_mean,
+        "other_mean_c": other_mean,
+        "mean_gap_c": gap,
+        "multiplier": max(1.0, min(1.75, multiplier)),
+        "members": members,
+    }
+
+
 def robust_outlier_multipliers(values: pd.Series) -> tuple[pd.Series, pd.Series]:
     """Downweight isolated model maxima without deleting a plausible minority cluster."""
     numeric = values.astype(float)
@@ -623,6 +751,54 @@ def failed_convection_adjustment(
     return adjustment, label
 
 
+def clear_sky_override_adjustment(
+    observations: pd.DataFrame,
+    *,
+    model_cloud_cover: float | None,
+    taf_guidance: TafGuidance | None,
+) -> tuple[float, str | None]:
+    """Counter a model cloud brake only after repeated clear station reports."""
+    if observations.empty or model_cloud_cover is None or model_cloud_cover < 35:
+        return 0.0, None
+    frame = observations.sort_values("observed_at")
+    latest_at = pd.Timestamp(frame.observed_at.iloc[-1])
+    recent = frame[frame.observed_at >= latest_at - timedelta(hours=1.5)].tail(4)
+    if len(recent) < 2:
+        return 0.0, None
+    raw = recent.raw.fillna("").astype(str).str.upper() if "raw" in recent else None
+    cavok_fraction = (
+        float(raw.str.contains(r"\bCAVOK\b", regex=True).mean())
+        if raw is not None
+        else 0.0
+    )
+    observed_cloud = (
+        recent.cloud_cover.dropna().astype(float)
+        if "cloud_cover" in recent
+        else pd.Series(dtype=float)
+    )
+    station_clear = cavok_fraction >= 0.5 or (
+        not observed_cloud.empty and float(observed_cloud.median()) <= 20
+    )
+    if not station_clear:
+        return 0.0, None
+    observed_median = float(observed_cloud.median()) if not observed_cloud.empty else 0.0
+    cloud_gap = max(0.0, float(model_cloud_cover) - observed_median)
+    adjustment = min(0.30, 0.006 * cloud_gap)
+    taf_clear = bool(
+        taf_guidance is not None
+        and taf_guidance.cloud_risk == "No significant cloud near peak"
+        and not taf_guidance.precipitation_risk
+        and not taf_guidance.thunderstorm_risk
+    )
+    if taf_clear:
+        adjustment = min(0.40, adjustment + 0.10)
+    return (
+        adjustment,
+        "Clear-sky override: repeated clear METARs contradict the model cloud brake"
+        + (" and the TAF confirms a clear peak window" if taf_clear else ""),
+    )
+
+
 def _protect_persistent_anchor(
     contributions: dict[str, float],
     *,
@@ -694,6 +870,7 @@ def build_live_nowcast(
     routine_metar_minutes: list[int] | tuple[int, ...] | None = None,
     critical_window_local: list[str] | tuple[str, ...] | None = None,
     post_convective_profile: dict | None = None,
+    heat_regime_profile: dict | None = None,
 ) -> LiveNowcast | None:
     if forecasts.empty:
         return None
@@ -723,7 +900,31 @@ def build_live_nowcast(
     bias_map = dict(zip(d1_metrics.model, d1_metrics.bias)) if not d1_metrics.empty else {}
     weight_map = model_weight_map(d1_scored)
     fallback_weight = float(pd.Series(weight_map.values()).median()) if weight_map else 1.0
-    current["d1_bias"] = current.model.map(bias_map).fillna(0).astype(float)
+    raw_equal = consensus(current.max_temp_c.tolist())
+    wind_profile = wind_profile or {}
+    preliminary_taf = build_taf_guidance(
+        tafs if tafs is not None else pd.DataFrame(),
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        model_mean=raw_equal.mean,
+        wind_profile=wind_profile,
+        observed_cooling=False,
+    )
+    rapid_heat = rapid_heat_ramp_regime(
+        prior_actuals,
+        target=target,
+        forecast_mean=raw_equal.mean,
+        profile=heat_regime_profile,
+    )
+    current["historical_d1_bias"] = current.model.map(bias_map).fillna(0).astype(float)
+    current["d1_bias"] = current.historical_d1_bias
+    if rapid_heat["active"]:
+        positive_bias = current.d1_bias > 0
+        current.loc[positive_bias, "d1_bias"] = (
+            current.loc[positive_bias, "d1_bias"]
+            * float(rapid_heat["bias_multiplier"])
+        )
     current["corrected_max"] = current.max_temp_c - current.d1_bias
     current["performance_weight"] = (
         current.model.map(weight_map).fillna(fallback_weight).astype(float)
@@ -731,9 +932,47 @@ def build_live_nowcast(
     outlier_multipliers, robust_distances = robust_outlier_multipliers(current.corrected_max)
     current["outlier_multiplier"] = outlier_multipliers
     current["robust_distance_c"] = robust_distances
-    current["model_weight"] = current.performance_weight * current.outlier_multiplier
+    taf_clear = bool(
+        preliminary_taf is not None
+        and preliminary_taf.cloud_risk == "No significant cloud near peak"
+        and not preliminary_taf.precipitation_risk
+        and not preliminary_taf.thunderstorm_risk
+    )
+    cluster = regional_heat_cluster(
+        current,
+        profile=heat_regime_profile,
+        rapid_heat_active=bool(rapid_heat["active"]),
+        taf_clear=taf_clear,
+    )
+    if cluster["active"]:
+        members = cluster["members"]
+        assert isinstance(members, pd.Series)
+        current.loc[members, "outlier_multiplier"] = current.loc[
+            members, "outlier_multiplier"
+        ].clip(lower=0.75)
+    current["base_model_weight"] = current.performance_weight * current.outlier_multiplier
+    current["base_model_weight"] = (
+        current.base_model_weight / current.base_model_weight.sum()
+    )
+    full_bias_baseline = consensus(
+        current.max_temp_c.tolist(),
+        current.historical_d1_bias.tolist(),
+        weights=current.base_model_weight.tolist(),
+    )
+    bias_relaxed_baseline = consensus(
+        current.max_temp_c.tolist(),
+        current.d1_bias.tolist(),
+        weights=current.base_model_weight.tolist(),
+    )
+    current["regime_weight_multiplier"] = 1.0
+    if cluster["active"]:
+        members = cluster["members"]
+        assert isinstance(members, pd.Series)
+        current.loc[members, "regime_weight_multiplier"] = float(cluster["multiplier"])
+    current["model_weight"] = (
+        current.base_model_weight * current.regime_weight_multiplier
+    )
     current["model_weight"] = current.model_weight / current.model_weight.sum()
-    raw_equal = consensus(current.max_temp_c.tolist())
     weighted_raw = consensus(
         current.max_temp_c.tolist(),
         weights=current.model_weight.tolist(),
@@ -742,12 +981,26 @@ def build_live_nowcast(
         current.max_temp_c.tolist(),
         current.d1_bias.tolist(),
     )
-    corrected = consensus(
+    corrected_unbroadened = consensus(
         current.max_temp_c.tolist(),
         current.d1_bias.tolist(),
         weights=current.model_weight.tolist(),
     )
-    wind_profile = wind_profile or {}
+    corrected = (
+        consensus(
+            current.max_temp_c.tolist(),
+            current.d1_bias.tolist(),
+            weights=current.model_weight.tolist(),
+            sigma_floor=(
+                corrected_unbroadened.spread
+                * float(rapid_heat["spread_multiplier"])
+            ),
+        )
+        if rapid_heat["active"]
+        else corrected_unbroadened
+    )
+    rapid_heat_adjustment = bias_relaxed_baseline.mean - full_bias_baseline.mean
+    regional_cluster_adjustment = corrected.mean - bias_relaxed_baseline.mean
 
     obs_today = local_observations(observations, timezone_name, target, as_of)
     latest_obs = obs_today.iloc[-1] if not obs_today.empty else None
@@ -967,6 +1220,11 @@ def build_live_nowcast(
         local_now,
         hours_to_peak,
     )
+    clear_sky_override, clear_sky_signal = clear_sky_override_adjustment(
+        obs_today,
+        model_cloud_cover=cloud_cover,
+        taf_guidance=taf_guidance,
+    )
 
     def limited(value: float | None, lower: float, upper: float) -> float:
         return max(lower, min(upper, float(value))) if value is not None else 0.0
@@ -1041,6 +1299,9 @@ def build_live_nowcast(
             late_dry_mixing if live_observation_available else 0.0
         ),
         "failed_convection": (failed_convection if live_observation_available else 0.0),
+        "clear_sky_override": (
+            clear_sky_override if live_observation_available else 0.0
+        ),
     }
     contributions = _protect_persistent_anchor(
         contributions,
@@ -1064,6 +1325,23 @@ def build_live_nowcast(
             ),
             *([late_dry_mixing_signal] if late_dry_mixing_signal else []),
             *([failed_convection_signal] if failed_convection_signal else []),
+            *([clear_sky_signal] if clear_sky_signal else []),
+            *(
+                [
+                    "Rapid heat-ramp regime: positive historical warm-bias "
+                    "corrections are reduced and bucket uncertainty is broadened"
+                ]
+                if rapid_heat["active"]
+                else []
+            ),
+            *(
+                [
+                    "Warm regional-model cluster is kept separate from the "
+                    "cooler global-model cluster"
+                ]
+                if cluster["active"]
+                else []
+            ),
             *(
                 [
                     "Post-convective regime: bucket uncertainty is broadened "
@@ -1079,6 +1357,8 @@ def build_live_nowcast(
     ]
     contradictory = any(value > 0 for value in signed) and any(value < 0 for value in signed)
     live_sigma_floor = 0.80 if contradictory else 0.60 if len(signed) >= 4 else 0.65
+    if rapid_heat["active"]:
+        live_sigma_floor = max(live_sigma_floor, corrected.spread)
     if post_convective_active:
         live_sigma_floor = max(
             live_sigma_floor,
@@ -1156,6 +1436,27 @@ def build_live_nowcast(
         "late_dry_mixing_adjustment_c": late_dry_mixing,
         "failed_convection_active": float(failed_convection > 0),
         "failed_convection_adjustment_c": failed_convection,
+        "clear_sky_override_active": float(clear_sky_override > 0),
+        "clear_sky_override_adjustment_c": clear_sky_override,
+        "rapid_heat_ramp_active": float(bool(rapid_heat["active"])),
+        "rapid_heat_ramp_forecast_vs_latest_c": rapid_heat[
+            "forecast_vs_latest_c"
+        ],
+        "rapid_heat_ramp_latest_actual_change_c": rapid_heat[
+            "latest_actual_change_c"
+        ],
+        "rapid_heat_ramp_forecast_vs_two_back_c": rapid_heat[
+            "forecast_vs_two_back_c"
+        ],
+        "rapid_heat_ramp_bias_multiplier": float(rapid_heat["bias_multiplier"]),
+        "rapid_heat_ramp_spread_multiplier": float(
+            rapid_heat["spread_multiplier"]
+        ),
+        "rapid_heat_ramp_adjustment_c": rapid_heat_adjustment,
+        "regional_cluster_active": float(bool(cluster["active"])),
+        "regional_cluster_mean_gap_c": cluster["mean_gap_c"],
+        "regional_cluster_weight_multiplier": float(cluster["multiplier"]),
+        "regional_cluster_adjustment_c": regional_cluster_adjustment,
         "post_convective_uncertainty_active": float(post_convective_active),
         "post_convective_reports_48h": float(post_convective["reports"]),
         "hours_since_latest_convection": post_convective["hours_since_latest"],
@@ -1215,6 +1516,11 @@ def build_live_nowcast(
         confidence_factors["post_convective_regime"] = 35.0
         forecast_confidence = round(
             forecast_confidence * float(post_convective["confidence_multiplier"])
+        )
+    if rapid_heat["active"] and not day_status.is_locked:
+        confidence_factors["rapid_heat_ramp_regime"] = 45.0
+        forecast_confidence = round(
+            forecast_confidence * float(rapid_heat["confidence_multiplier"])
         )
     return LiveNowcast(
         current=current,

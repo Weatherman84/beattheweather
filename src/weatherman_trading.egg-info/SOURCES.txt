@@ -13,6 +13,7 @@ src/weatherman/providers.py
 src/weatherman/research.py
 src/weatherman/service.py
 src/weatherman/settings.py
+src/weatherman/shadow.py
 src/weatherman/taf.py
 src/weatherman/data/airports.json
 src/weatherman_trading.egg-info/PKG-INFO
@@ -30,5 +31,6 @@ tests/test_research.py
 tests/test_runtime_bootstrap.py
 tests/test_service.py
 tests/test_settings.py
+tests/test_shadow.py
 tests/test_taf.py
 tests/test_workflows.py

@@ -216,3 +216,27 @@ def test_temperature_market_discovery_keeps_unknown_cities(monkeypatch):
             "active": True,
         }
     ]
+
+
+def test_polymarket_order_books_preserve_depth_and_exchange_timestamp(monkeypatch):
+    def fake_post(url, payload, **_kwargs):
+        assert url.endswith("/books")
+        assert payload == [{"token_id": "yes-34"}]
+        return [
+            {
+                "asset_id": "yes-34",
+                "timestamp": "1782753357257",
+                "hash": "book-hash",
+                "bids": [{"price": "0.19", "size": "8"}],
+                "asks": [{"price": "0.21", "size": "7"}],
+                "min_order_size": "5",
+                "tick_size": "0.01",
+            }
+        ]
+
+    monkeypatch.setattr(providers, "_post", fake_post)
+    books = providers.polymarket_order_books(["yes-34", "yes-34"])
+    assert set(books) == {"yes-34"}
+    assert books["yes-34"]["hash"] == "book-hash"
+    assert books["yes-34"]["asks"][0]["size"] == "7"
+    assert books["yes-34"]["observed_at"].year == 2026

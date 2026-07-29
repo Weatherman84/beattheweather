@@ -10,6 +10,7 @@ from weatherman.service import (
     _record_strategy_snapshots,
     _upsert_batch,
     in_critical_window,
+    provisional_metar_actuals,
 )
 
 
@@ -61,6 +62,37 @@ def test_failed_batch_does_not_poison_following_database_work():
         session.commit()
         assert stored == 1
         assert session.scalar(select(func.count()).select_from(Forecast)) == 1
+
+
+def test_completed_metar_day_becomes_next_day_provisional_actual():
+    as_of = datetime(2026, 7, 30, 8, tzinfo=timezone.utc)
+    rows = [
+        {
+            "observed_at": datetime(2026, 7, 29, hour, tzinfo=timezone.utc),
+            "temp_c": temperature,
+        }
+        for hour, temperature in [
+            (7, 19),
+            (9, 23),
+            (11, 28),
+            (13, 32),
+            (14, 34),
+            (15, 33),
+            (17, 30),
+            (20, 25),
+        ]
+    ]
+    provisional = provisional_metar_actuals(
+        rows,
+        {
+            "timezone": "Europe/Berlin",
+            "critical_window_local": ["12:00", "17:30"],
+        },
+        as_of=as_of,
+    )
+    assert provisional == [
+        {"target_date": date(2026, 7, 29), "max_temp_c": 34.0}
+    ]
 
 
 def test_collection_journals_model_probability_and_real_ask():

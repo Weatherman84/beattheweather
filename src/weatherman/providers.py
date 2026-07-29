@@ -49,7 +49,7 @@ def _get(
     with httpx.Client(
         timeout=settings.timeout if timeout is None else timeout,
         follow_redirects=True,
-        headers={"User-Agent": "Weatherman/10.1.0 temperature-market research"},
+        headers={"User-Agent": "Weatherman/10.2.0 temperature-market research"},
     ) as client:
         for attempt in range(attempts):
             try:
@@ -76,6 +76,43 @@ def _get(
     if last_error:
         raise last_error
     raise RuntimeError("API request failed without a response")
+
+
+def _post(
+    url: str,
+    payload: list[dict] | dict,
+    *,
+    attempts: int = 3,
+    timeout: float | None = None,
+) -> dict | list:
+    last_error: Exception | None = None
+    with httpx.Client(
+        timeout=settings.timeout if timeout is None else timeout,
+        follow_redirects=True,
+        headers={"User-Agent": "Weatherman/10.2.0 temperature-market research"},
+    ) as client:
+        for attempt in range(attempts):
+            try:
+                response = client.post(url, json=payload)
+                if response.status_code == 204:
+                    return []
+                if response.status_code == 429 or response.status_code >= 500:
+                    response.raise_for_status()
+                response.raise_for_status()
+                return response.json()
+            except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+                last_error = exc
+                retryable = not isinstance(exc, httpx.HTTPStatusError) or (
+                    exc.response.status_code == 429 or exc.response.status_code >= 500
+                )
+                if not retryable or attempt == attempts - 1:
+                    raise
+                delay = 2**attempt
+                print(f"WARN temporary CLOB API error; retrying in {delay:.0f}s")
+                time.sleep(delay)
+    if last_error:
+        raise last_error
+    raise RuntimeError("CLOB API request failed without a response")
 
 
 def open_meteo_forecast(airport: dict, model: str, days: int = 3) -> list[dict]:
@@ -733,6 +770,52 @@ def polymarket_prices(airport: dict, target: date) -> list[dict]:
             }
         )
     return rows
+
+
+def _book_timestamp(value: Any, fallback: datetime) -> datetime:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if number > 10_000_000_000:
+        number /= 1000
+    try:
+        return datetime.fromtimestamp(number, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return fallback
+
+
+def polymarket_order_books(token_ids: list[str]) -> dict[str, dict]:
+    """Fetch public YES order-book depth for several outcome tokens."""
+    requested = list(dict.fromkeys(str(token) for token in token_ids if token))
+    if not requested:
+        return {}
+    payload = [{"token_id": token} for token in requested[:500]]
+    fetched_at = datetime.now(timezone.utc)
+    response = _post(f"{POLYMARKET_CLOB_URL}/books", payload, timeout=10)
+    if not isinstance(response, list):
+        return {}
+    books: dict[str, dict] = {}
+    for book in response:
+        if not isinstance(book, dict):
+            continue
+        token_id = str(book.get("asset_id") or book.get("token_id") or "")
+        if not token_id:
+            continue
+        asks = book.get("asks") if isinstance(book.get("asks"), list) else []
+        bids = book.get("bids") if isinstance(book.get("bids"), list) else []
+        books[token_id] = {
+            "token_id": token_id,
+            "observed_at": _book_timestamp(book.get("timestamp"), fetched_at),
+            "fetched_at": fetched_at,
+            "hash": book.get("hash"),
+            "asks": asks,
+            "bids": bids,
+            "min_order_size": book.get("min_order_size") or book.get("minOrderSize"),
+            "tick_size": book.get("tick_size") or book.get("tickSize"),
+            "neg_risk": book.get("neg_risk") or book.get("negRisk"),
+        }
+    return books
 
 
 def polymarket_historical_prices(

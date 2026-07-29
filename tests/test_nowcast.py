@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from weatherman.nowcast import build_live_nowcast
+from weatherman.nowcast import build_live_nowcast, rapid_heat_ramp_regime
 
 
 def test_shared_nowcast_locks_completed_evening_peak():
@@ -304,6 +304,7 @@ def test_live_conditioning_records_all_observed_weather_contributions():
     assert result.adjustment_contributions["heating_rate"] > 0
     assert result.adjustment_contributions["radiation"] > 0
     assert result.adjustment_contributions["wind"] > 0
+    assert result.adjustment_contributions["clear_sky_override"] > 0
     assert result.adjustment_contributions["total"] > 0
     assert set(result.stage_probabilities) == {
         "Raw model mean",
@@ -665,3 +666,86 @@ def test_late_dry_mixing_flags_early_model_ceiling_and_adds_warm_tail_signal():
     assert result.adjustment_contributions["late_dry_mixing"] == 0.30
     assert result.adjustment_contributions["wind"] == 0
     assert any("Late dry mixing" in signal for signal in result.heat.signals)
+
+
+def test_rapid_heat_ramp_uses_yesterday_without_adding_a_fixed_degree():
+    actuals = pd.DataFrame(
+        [
+            {"target_date": datetime(2026, 7, 27).date(), "max_temp_c": 25.0},
+            {"target_date": datetime(2026, 7, 28).date(), "max_temp_c": 29.0},
+        ]
+    )
+    regime = rapid_heat_ramp_regime(
+        actuals,
+        target=datetime(2026, 7, 29).date(),
+        forecast_mean=32.0,
+        profile={
+            "positive_bias_multiplier": 0.4,
+            "spread_multiplier": 1.3,
+        },
+    )
+    assert regime["active"]
+    assert regime["forecast_vs_latest_c"] == 3
+    assert regime["latest_actual_change_c"] == 4
+    assert regime["bias_multiplier"] == 0.4
+    assert regime["spread_multiplier"] == 1.3
+
+
+def test_rapid_heat_ramp_protects_a_coherent_warm_regional_cluster():
+    as_of = datetime(2026, 7, 29, 9, tzinfo=ZoneInfo("Europe/Berlin"))
+    now_utc = as_of.astimezone(timezone.utc)
+    target = as_of.date()
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "EDDM",
+                "model": model,
+                "run_at": now_utc - timedelta(minutes=20),
+                "target_date": target,
+                "max_temp_c": maximum,
+                "source": "open-meteo",
+                "horizon": "Live",
+            }
+            for model, maximum in [
+                ("ecmwf_ifs025", 30.0),
+                ("gfs_global", 30.5),
+                ("icon_eu", 33.0),
+                ("meteofrance_arpege_europe", 33.2),
+            ]
+        ]
+    )
+    actuals = pd.DataFrame(
+        [
+            {"airport": "EDDM", "target_date": target - timedelta(days=2), "max_temp_c": 25.0},
+            {"airport": "EDDM", "target_date": target - timedelta(days=1), "max_temp_c": 29.0},
+        ]
+    )
+    common = {
+        "forecasts": forecasts,
+        "actuals": actuals,
+        "observations": pd.DataFrame(),
+        "hourly": pd.DataFrame(),
+        "markets": pd.DataFrame(),
+        "timezone_name": "Europe/Berlin",
+        "target": target,
+        "as_of": as_of,
+    }
+    unclustered = build_live_nowcast(**common)
+    clustered = build_live_nowcast(
+        **common,
+        heat_regime_profile={
+            "enabled": True,
+            "positive_bias_multiplier": 0.4,
+            "spread_multiplier": 1.3,
+            "regional_models": ["icon_eu", "meteofrance_arpege_europe"],
+            "regional_weight_multiplier": 1.4,
+            "unconfirmed_multiplier": 1.2,
+            "minimum_warm_gap_c": 0.6,
+        },
+    )
+    assert unclustered is not None and clustered is not None
+    assert clustered.live_features["rapid_heat_ramp_active"] == 1
+    assert clustered.live_features["regional_cluster_active"] == 1
+    assert clustered.corrected.mean > unclustered.corrected.mean
+    regional_weights = clustered.current.set_index("model").model_weight
+    assert regional_weights["icon_eu"] > regional_weights["ecmwf_ifs025"]

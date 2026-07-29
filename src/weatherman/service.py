@@ -20,6 +20,7 @@ from .db import (
     MarketSnapshot,
     Observation,
     Session,
+    ShadowEvaluation,
     SignalSnapshot,
     StrategySnapshot,
     TafReport,
@@ -33,12 +34,14 @@ from .providers import (
     open_meteo_forecast,
     open_meteo_hourly,
     polymarket_prices,
+    polymarket_order_books,
     polymarket_historical_prices,
     previous_run_d1,
     recent_metars,
     recent_tafs,
 )
 from .settings import airports
+from .shadow import evaluate_shadow_markets
 
 
 def _upsert(session, model, keys: dict, values: dict) -> None:
@@ -80,6 +83,54 @@ def _signal_timing(captured_at: datetime, target: date, timezone_name: str) -> s
     if local.date() > target:
         return "After target day"
     return "D0 morning" if local.hour < 12 else "D0 live"
+
+
+def provisional_metar_actuals(
+    rows: list[dict],
+    airport: dict,
+    *,
+    as_of: datetime | None = None,
+) -> list[dict]:
+    """Create a next-day learning value from a sufficiently complete METAR day."""
+    if not rows:
+        return []
+    now = (as_of or datetime.now(timezone.utc)).astimezone(
+        ZoneInfo(airport["timezone"])
+    )
+    frame = pd.DataFrame(rows)
+    if frame.empty or "observed_at" not in frame or "temp_c" not in frame:
+        return []
+    frame["observed_at"] = pd.to_datetime(frame.observed_at, utc=True)
+    frame["local_at"] = frame.observed_at.dt.tz_convert(airport["timezone"])
+    frame = frame[frame.local_at.dt.date < now.date()].copy()
+    if frame.empty:
+        return []
+    configured_end = str(airport.get("critical_window_local", ["", "18:00"])[-1])
+    try:
+        end_hour, end_minute = (int(value) for value in configured_end.split(":", 1))
+        required_end_minutes = end_hour * 60 + end_minute
+    except (TypeError, ValueError):
+        required_end_minutes = 18 * 60
+    actuals = []
+    for target, day in frame.groupby(frame.local_at.dt.date):
+        day = day.dropna(subset=["temp_c"]).sort_values("local_at")
+        if len(day) < 8:
+            continue
+        span_hours = (
+            day.local_at.iloc[-1] - day.local_at.iloc[0]
+        ).total_seconds() / 3600
+        latest_minutes = int(day.local_at.iloc[-1].hour) * 60 + int(
+            day.local_at.iloc[-1].minute
+        )
+        if span_hours < 6 or latest_minutes < required_end_minutes:
+            continue
+        actuals.append(
+            {
+                "target_date": target,
+                "max_temp_c": float(day.temp_c.max()),
+            }
+        )
+    return actuals
 
 
 def sync_airport_universe(*, include_closed: bool = False) -> dict[str, int]:
@@ -166,6 +217,7 @@ def _build_nowcast_from_session(
         routine_metar_minutes=airport.get("metar_minutes"),
         critical_window_local=airport.get("critical_window_local"),
         post_convective_profile=airport.get("post_convective_uncertainty"),
+        heat_regime_profile=airport.get("heat_regime"),
     )
 
 
@@ -237,6 +289,21 @@ def _record_forecast_snapshot(
         ),
         "failed_convection_adjustment_c": nowcast.adjustment_contributions.get(
             "failed_convection", 0.0
+        ),
+        "clear_sky_override_adjustment_c": nowcast.adjustment_contributions.get(
+            "clear_sky_override", 0.0
+        ),
+        "rapid_heat_ramp_adjustment_c": float(
+            nowcast.live_features.get("rapid_heat_ramp_adjustment_c", 0.0) or 0.0
+        ),
+        "regional_cluster_adjustment_c": float(
+            nowcast.live_features.get("regional_cluster_adjustment_c", 0.0) or 0.0
+        ),
+        "rapid_heat_ramp_active": bool(
+            nowcast.live_features.get("rapid_heat_ramp_active", 0)
+        ),
+        "regional_cluster_active": bool(
+            nowcast.live_features.get("regional_cluster_active", 0)
         ),
         "post_convective_active": bool(
             nowcast.live_features.get("post_convective_uncertainty_active", 0)
@@ -432,6 +499,53 @@ def _record_strategy_snapshots(
     )
 
 
+def _record_shadow_evaluations(
+    session,
+    code: str,
+    airport: dict,
+    market_rows: list[dict],
+    books: dict[str, dict],
+    nowcast,
+) -> int:
+    """Persist fee-, slippage- and depth-aware paper decisions."""
+    if nowcast is None or not market_rows:
+        return 0
+    captured_at = max(row["captured_at"] for row in market_rows)
+    target = market_rows[0]["target_date"]
+    conflict = detect_market_model_conflict(
+        nowcast.probabilities,
+        pd.DataFrame(market_rows),
+    )
+    rows = evaluate_shadow_markets(
+        airport=code,
+        target=target,
+        captured_at=captured_at,
+        timing=_signal_timing(captured_at, target, airport["timezone"]),
+        probabilities=nowcast.probabilities,
+        markets=pd.DataFrame(market_rows),
+        books=books,
+        forecast_confidence=nowcast.forecast_confidence,
+        day_status=nowcast.day_status,
+        metar_pending=nowcast.metar_pending,
+        market_model_conflict=conflict.is_conflict,
+    )
+    return _upsert_batch(
+        session,
+        ShadowEvaluation,
+        rows,
+        lambda item: {
+            "market_id": item["market_id"],
+            "captured_at": item["captured_at"],
+        },
+        lambda item: {
+            key: value
+            for key, value in item.items()
+            if key not in {"market_id", "captured_at"}
+        },
+        f"{code}/shadow watcher/{target}",
+    )
+
+
 def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, int]:
     init_db()
     counts = {
@@ -444,6 +558,7 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
         "strategy_snapshots": 0,
         "forecast_snapshots": 0,
         "actuals": 0,
+        "provisional_actuals": 0,
     }
     catalog = airports()
     selected_codes = airport_codes or list(catalog)
@@ -529,6 +644,23 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                     },
                     f"{code}/METAR",
                 )
+                provisional_rows = provisional_metar_actuals(metar_rows, airport)
+                stored_provisional = _upsert_batch(
+                    session,
+                    DailyActual,
+                    provisional_rows,
+                    lambda item: {
+                        "airport": code,
+                        "target_date": item["target_date"],
+                    },
+                    lambda item: {
+                        "max_temp_c": item["max_temp_c"],
+                        "source": "metar-provisional",
+                    },
+                    f"{code}/provisional METAR actuals",
+                )
+                counts["actuals"] += stored_provisional
+                counts["provisional_actuals"] += stored_provisional
             airport_tafs = [row for row in fetched_tafs if row["airport"] == code]
             counts["taf_reports"] += _upsert_batch(
                 session,
@@ -900,6 +1032,8 @@ def collect_live_decision_checkpoints(
         "forecast_snapshots": 0,
         "signals": 0,
         "strategy_snapshots": 0,
+        "shadow_evaluations": 0,
+        "provisional_actuals": 0,
     }
     if not due_codes:
         return counts
@@ -928,6 +1062,25 @@ def collect_live_decision_checkpoints(
                 lambda item: {"airport": code, "observed_at": item["observed_at"]},
                 lambda item: {key: value for key, value in item.items() if key != "observed_at"},
                 f"{code}/live-decision METAR",
+            )
+            provisional_rows = provisional_metar_actuals(
+                metar_rows,
+                airport,
+                as_of=captured_at,
+            )
+            counts["provisional_actuals"] += _upsert_batch(
+                session,
+                DailyActual,
+                provisional_rows,
+                lambda item: {
+                    "airport": code,
+                    "target_date": item["target_date"],
+                },
+                lambda item: {
+                    "max_temp_c": item["max_temp_c"],
+                    "source": "metar-provisional",
+                },
+                f"{code}/live provisional METAR actuals",
             )
             airport_tafs = [row for row in fetched_tafs if row["airport"] == code]
             counts["taf_reports"] += _upsert_batch(
@@ -970,6 +1123,16 @@ def collect_live_decision_checkpoints(
                 },
                 f"{code}/live-decision Polymarket",
             )
+            token_ids = [
+                str(row["token_id"])
+                for row in market_rows
+                if row.get("token_id") and not row.get("closed")
+            ]
+            try:
+                books = polymarket_order_books(token_ids)
+            except Exception as exc:
+                print(f"WARN {code}/live-decision CLOB books: {exc}")
+                books = {}
             snapshot_at = (
                 max(row["captured_at"] for row in market_rows) if market_rows else captured_at
             )
@@ -1003,6 +1166,14 @@ def collect_live_decision_checkpoints(
                         code,
                         airport,
                         market_rows,
+                        nowcast,
+                    )
+                    counts["shadow_evaluations"] += _record_shadow_evaluations(
+                        session,
+                        code,
+                        airport,
+                        market_rows,
+                        books,
                         nowcast,
                     )
             except Exception as exc:

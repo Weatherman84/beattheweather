@@ -211,6 +211,11 @@ class ForecastSnapshot(Base):
     run_trend_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     late_dry_mixing_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     failed_convection_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    clear_sky_override_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    rapid_heat_ramp_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    regional_cluster_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    rapid_heat_ramp_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    regional_cluster_active: Mapped[bool] = mapped_column(Boolean, default=False)
     post_convective_active: Mapped[bool] = mapped_column(Boolean, default=False)
     post_convective_reports: Mapped[int] = mapped_column(Integer, default=0)
     post_convective_spread_multiplier: Mapped[float] = mapped_column(
@@ -247,6 +252,48 @@ class StrategySnapshot(Base):
     buy_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_basis: Mapped[str] = mapped_column(String(40), default="live best ask")
     day_phase: Mapped[str] = mapped_column(String(20))
+
+
+class ShadowEvaluation(Base):
+    """Fee- and depth-aware paper evaluation; never an executable order."""
+
+    __tablename__ = "shadow_evaluations"
+    __table_args__ = (UniqueConstraint("market_id", "captured_at"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    event_slug: Mapped[str] = mapped_column(String(250), index=True)
+    market_id: Mapped[str] = mapped_column(String(100), index=True)
+    token_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    bucket_label: Mapped[str] = mapped_column(String(80))
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    timing: Mapped[str] = mapped_column(String(30), index=True)
+    fair_probability: Mapped[float] = mapped_column(Float)
+    displayed_probability: Mapped[float] = mapped_column(Float)
+    best_bid: Mapped[float | None] = mapped_column(Float, nullable=True)
+    best_ask: Mapped[float | None] = mapped_column(Float, nullable=True)
+    average_fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fee_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    all_in_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    slippage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fee_rate: Mapped[float] = mapped_column(Float, default=0.05)
+    estimated_fee_usdc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stake_usdc: Mapped[float] = mapped_column(Float, default=10.0)
+    shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_cost_usdc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    available_depth_usdc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    depth_at_best_usdc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fully_fillable: Mapped[bool] = mapped_column(Boolean, default=False)
+    gross_edge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_edge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    safety_margin: Mapped[float] = mapped_column(Float, default=0.02)
+    forecast_confidence: Mapped[int] = mapped_column(Integer)
+    day_phase: Mapped[str] = mapped_column(String(20))
+    book_hash: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    book_age_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    blockers_json: Mapped[str] = mapped_column(Text, default="[]")
+    reasons_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 class AirportMarketUniverse(Base):
@@ -355,6 +402,11 @@ def init_db() -> None:
                     "run_trend_adjustment_c": "FLOAT DEFAULT 0",
                     "late_dry_mixing_adjustment_c": "FLOAT DEFAULT 0",
                     "failed_convection_adjustment_c": "FLOAT DEFAULT 0",
+                    "clear_sky_override_adjustment_c": "FLOAT DEFAULT 0",
+                    "rapid_heat_ramp_adjustment_c": "FLOAT DEFAULT 0",
+                    "regional_cluster_adjustment_c": "FLOAT DEFAULT 0",
+                    "rapid_heat_ramp_active": "BOOLEAN DEFAULT 0",
+                    "regional_cluster_active": "BOOLEAN DEFAULT 0",
                     "post_convective_active": "BOOLEAN DEFAULT 0",
                     "post_convective_reports": "INTEGER DEFAULT 0",
                     "post_convective_spread_multiplier": "FLOAT DEFAULT 1",

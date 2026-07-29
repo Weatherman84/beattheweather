@@ -736,6 +736,7 @@ def live_factor_diagnostics(
         "run_trend_adjustment_c",
         "late_dry_mixing_adjustment_c",
         "failed_convection_adjustment_c",
+        "clear_sky_override_adjustment_c",
     ]
     if any(column not in snapshots for column in required):
         return pd.DataFrame()
@@ -763,6 +764,7 @@ def live_factor_diagnostics(
         "run_trend_adjustment_c": "Model-run trend",
         "late_dry_mixing_adjustment_c": "Late dry mixing",
         "failed_convection_adjustment_c": "Failed convection",
+        "clear_sky_override_adjustment_c": "Clear-sky override",
     }
     rows = []
     for (airport, information_set), airport_frame in merged.groupby(["airport", "information_set"]):
@@ -989,6 +991,70 @@ def settled_signal_performance(
         lambda row: stake / row.buy_price - stake if row.won else -stake,
         axis=1,
     )
+    settled = settled.sort_values("captured_at")
+    settled["cumulative_pnl"] = settled.pnl.cumsum()
+    return settled[columns].reset_index(drop=True)
+
+
+def settled_shadow_performance(
+    evaluations: pd.DataFrame,
+    markets: pd.DataFrame,
+) -> pd.DataFrame:
+    """Settle the first depth- and fee-aware SHADOW BET for each market bucket."""
+    columns = [
+        "airport",
+        "target_date",
+        "market_id",
+        "bucket_label",
+        "captured_at",
+        "timing",
+        "fair_probability",
+        "average_fill_price",
+        "fee_per_share",
+        "all_in_price",
+        "slippage",
+        "net_edge",
+        "stake_usdc",
+        "shares",
+        "total_cost_usdc",
+        "won",
+        "pnl",
+        "roi",
+        "cumulative_pnl",
+    ]
+    if evaluations.empty or markets.empty:
+        return pd.DataFrame(columns=columns)
+    candidates = evaluations[evaluations.status == "SHADOW BET"].copy()
+    for column in ("shares", "total_cost_usdc", "stake_usdc"):
+        candidates[column] = pd.to_numeric(candidates[column], errors="coerce")
+    candidates = candidates[
+        (candidates.shares > 0)
+        & (candidates.total_cost_usdc > 0)
+        & candidates.fully_fillable.fillna(False).astype(bool)
+    ]
+    if candidates.empty:
+        return pd.DataFrame(columns=columns)
+    candidates["captured_at"] = pd.to_datetime(candidates.captured_at, utc=True)
+    entries = candidates.sort_values("captured_at").drop_duplicates(
+        "market_id",
+        keep="first",
+    )
+    outcomes = resolved_market_outcomes(markets)
+    if outcomes.empty:
+        return pd.DataFrame(columns=columns)
+    settled = entries.merge(outcomes, on="market_id", how="inner")
+    if settled.empty:
+        return pd.DataFrame(columns=columns)
+    settled["won"] = settled.yes_won.astype(bool)
+    settled["pnl"] = settled.apply(
+        lambda row: (
+            float(row.shares) - float(row.total_cost_usdc)
+            if row.won
+            else -float(row.total_cost_usdc)
+        ),
+        axis=1,
+    )
+    settled["roi"] = settled.pnl / settled.total_cost_usdc
     settled = settled.sort_values("captured_at")
     settled["cumulative_pnl"] = settled.pnl.cumsum()
     return settled[columns].reset_index(drop=True)
