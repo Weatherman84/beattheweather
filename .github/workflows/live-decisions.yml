@@ -1,4 +1,4 @@
-name: 5 - Parallel shadow watcher and live decisions
+name: 5 - Parallel shadow watcher, fresh models and live decisions
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install .
-      - name: Collect live decisions and depth-aware shadow evaluations
+      - name: Refresh due models and collect live shadow evaluations
         run: python -m weatherman.cli collect-live-decisions
         env:
           METEOBLUE_API_KEY: ${{ secrets.METEOBLUE_API_KEY }}
