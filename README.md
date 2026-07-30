@@ -85,7 +85,10 @@ Repository. Du musst sonst nichts tun.
 3. Klicke rechts auf **Run workflow**.
 4. Bestätige noch einmal mit dem grünen Button **Run workflow**.
 
-Danach sammelt GitHub automatisch alle drei Stunden neue Vorhersagen, METAR- und TAF-Daten.
+Danach sammelt GitHub automatisch alle drei Stunden einen vollständigen Datenstand.
+Zusätzlich prüft Workflow 5 an jedem Trading-Tag ab 06:00 Uhr Flughafenzeit alle zehn
+Minuten, ob aktuelle Modelle nachgeladen werden müssen: Open-Meteo-Modelle spätestens
+nach 30 Minuten, meteoblue spätestens nach 60 Minuten.
 
 ## Schritt 6: Historische Marktpreise optional nachladen
 
@@ -536,6 +539,23 @@ erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
 - Rapid Heat Ramp, Regional Cluster und Clear-sky Override werden mit jedem
   Forecast-Snapshot gespeichert und können später getrennt gegen das tatsächliche
   Maximum geprüft werden.
+
+### Korrektur in Version 10.2.1
+
+- Workflow 5 lädt von 06:00 Uhr Flughafenzeit bis zum Ende des kritischen Fensters
+  automatisch fällige Modellvorhersagen nach. Der Shadow Watcher rechnet dadurch nicht
+  mehr nur mit dem letzten dreistündlichen Forecast-Snapshot.
+- Open-Meteo-Modelle werden spätestens nach 30 Minuten erneut abgefragt; meteoblue
+  spätestens nach 60 Minuten, um API-Credits kontrolliert zu verwenden.
+- Jeder Modellabruf zeigt sein tatsächliches Alter und ob er in den Live-Konsens
+  eingegangen ist.
+- Modelle mit einem Abrufalter über 90 Minuten werden aus einem ausreichend großen
+  frischen Konsens entfernt. Sind weniger als zwei frische Modelle vorhanden, bleiben
+  Forecast und Diagnose sichtbar, aber `BET` und `SHADOW BET` werden hart gesperrt.
+
+Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grünen Test
+abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
+**Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
 
 ### Update von v10.1 auf v10.2
 

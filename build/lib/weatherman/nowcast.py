@@ -28,11 +28,6 @@ from .taf import TafGuidance, build_taf_guidance
 @dataclass(frozen=True)
 class LiveNowcast:
     current: pd.DataFrame
-    model_freshness: pd.DataFrame
-    forecast_data_stale: bool
-    fresh_model_count: int
-    stale_models: tuple[str, ...]
-    latest_forecast_age_minutes: float | None
     corrected: Consensus
     heat: HeatSpikeAssessment
     day_status: DayStatus
@@ -876,7 +871,6 @@ def build_live_nowcast(
     critical_window_local: list[str] | tuple[str, ...] | None = None,
     post_convective_profile: dict | None = None,
     heat_regime_profile: dict | None = None,
-    maximum_model_age_minutes: int = 90,
 ) -> LiveNowcast | None:
     if forecasts.empty:
         return None
@@ -891,38 +885,6 @@ def build_live_nowcast(
     if current.empty:
         return None
     current = current.sort_values("run_at").drop_duplicates("model", keep="last")
-    fetched = (
-        pd.to_datetime(current.fetched_at, utc=True, errors="coerce")
-        if "fetched_at" in current
-        else pd.Series(pd.NaT, index=current.index, dtype="datetime64[ns, UTC]")
-    )
-    fetched = fetched.fillna(pd.to_datetime(current.run_at, utc=True, errors="coerce"))
-    current["data_timestamp"] = fetched
-    current["age_minutes"] = (
-        (as_of_utc - current.data_timestamp).dt.total_seconds() / 60
-    ).clip(lower=0)
-    freshness_limit = max(1, int(maximum_model_age_minutes))
-    current["is_fresh"] = current.age_minutes <= freshness_limit
-    fresh_current = current[current.is_fresh].copy()
-    forecast_data_stale = len(fresh_current) < 2
-    if not forecast_data_stale:
-        selected_models = set(fresh_current.model.astype(str))
-        current["used_in_forecast"] = current.model.astype(str).isin(selected_models)
-        forecast_current = fresh_current
-    else:
-        current["used_in_forecast"] = True
-        forecast_current = current.copy()
-    model_freshness = current.copy()
-    stale_models = tuple(
-        model_freshness.loc[~model_freshness.is_fresh, "model"].astype(str).tolist()
-    )
-    fresh_model_count = int(model_freshness.is_fresh.sum())
-    latest_forecast_age_minutes = (
-        float(model_freshness.age_minutes.min())
-        if model_freshness.age_minutes.notna().any()
-        else None
-    )
-    current = forecast_current
 
     d1 = available[available.horizon == "D-1"].copy()
     if not d1.empty:
@@ -1541,11 +1503,6 @@ def build_live_nowcast(
         "model_agreement": spread_score,
         "sample_size": sample_score,
         "live_data": live_score,
-        "model_freshness": (
-            max(0.0, min(100.0, 115 - latest_forecast_age_minutes))
-            if latest_forecast_age_minutes is not None
-            else 0.0
-        ),
     }
     base_confidence = (
         0.40 * history_score + 0.30 * spread_score + 0.20 * sample_score + 0.10 * live_score
@@ -1555,8 +1512,6 @@ def build_live_nowcast(
         forecast_confidence = round(0.80 * base_confidence + 0.20 * taf_guidance.confidence_score)
     else:
         forecast_confidence = round(base_confidence)
-    if forecast_data_stale:
-        forecast_confidence = min(40, forecast_confidence)
     if post_convective_active and not day_status.is_locked:
         confidence_factors["post_convective_regime"] = 35.0
         forecast_confidence = round(
@@ -1569,11 +1524,6 @@ def build_live_nowcast(
         )
     return LiveNowcast(
         current=current,
-        model_freshness=model_freshness,
-        forecast_data_stale=forecast_data_stale,
-        fresh_model_count=fresh_model_count,
-        stale_models=stale_models,
-        latest_forecast_age_minutes=latest_forecast_age_minutes,
         corrected=corrected,
         heat=heat,
         day_status=day_status,

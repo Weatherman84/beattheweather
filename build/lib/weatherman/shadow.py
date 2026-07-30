@@ -137,7 +137,6 @@ def evaluate_shadow_markets(
     day_status: DayStatus,
     metar_pending: bool = False,
     market_model_conflict: bool = False,
-    forecast_stale: bool = False,
     stake_usdc: float = 10.0,
     fee_rate: float = 0.05,
     safety_margin: float = 0.02,
@@ -213,8 +212,6 @@ def evaluate_shadow_markets(
             hard_blockers.append("A routine METAR is due but not yet available")
         if market_model_conflict:
             hard_blockers.append("A near-certain market price conflicts with the weather model")
-        if forecast_stale:
-            hard_blockers.append("Fewer than two current weather models are available")
         if bool(getattr(market, "closed", False)):
             hard_blockers.append("The market is closed")
         if token_id is None or not book:

@@ -68,7 +68,6 @@ def build_trade_decision(
     day_status: DayStatus,
     metar_pending: bool = False,
     market_model_conflict: bool = False,
-    forecast_stale: bool = False,
     previous_probabilities: dict[str, float] | None = None,
     live_signals: Iterable[str] = (),
     bet_edge: float = 0.08,
@@ -85,8 +84,6 @@ def build_trade_decision(
         blockers.append("A routine METAR is due but not yet available")
     if market_model_conflict:
         blockers.append("A near-certain market price conflicts with the weather model")
-    if forecast_stale:
-        blockers.append("Fewer than two current weather models are available")
     if markets.empty:
         blockers.append("No matching Polymarket market is stored")
         return TradeDecision(
@@ -156,7 +153,6 @@ def build_trade_decision(
         day_status.is_locked
         or metar_pending
         or market_model_conflict
-        or forecast_stale
         or ("closed" in markets and markets.closed.fillna(False).astype(bool).all())
         or actionable.empty
     )

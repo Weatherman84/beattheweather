@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.2.0")
+discard_stale_weatherman_modules("10.2.1")
 
 import pandas as pd
 import plotly.express as px
@@ -56,6 +56,7 @@ from weatherman.navigation import render_app_navigation
 from weatherman.research import filter_target_window, market_timing_metrics
 from weatherman.service import collect, collect_live_aviation
 from weatherman.catalog import trading_airports
+from weatherman.settings import settings
 from weatherman.taf import taf_verification_frame, taf_verification_metrics
 
 
@@ -417,6 +418,7 @@ with tab_live:
             "post_convective_uncertainty"
         ),
         heat_regime_profile=catalog[airport].get("heat_regime"),
+        maximum_model_age_minutes=settings.maximum_live_model_age_minutes,
     )
     if live_nowcast is None:
         st.info("No current forecast stored for this date. Click Refresh forecasts + METAR + TAF.")
@@ -456,9 +458,23 @@ with tab_live:
             day_status=day_status,
             metar_pending=live_nowcast.metar_pending,
             market_model_conflict=current_market_conflict.is_conflict,
+            forecast_stale=live_nowcast.forecast_data_stale,
             previous_probabilities=prior_probabilities,
             live_signals=strongest_live_signals,
         )
+
+        if live_nowcast.forecast_data_stale:
+            st.error(
+                "MODEL DATA STALE – do not trade. Fewer than two model feeds were fetched "
+                f"within the last {settings.maximum_live_model_age_minutes} minutes. "
+                "BET and SHADOW BET are blocked until fresh models arrive."
+            )
+        elif live_nowcast.stale_models:
+            st.warning(
+                "Stale model feed(s) omitted from the live consensus: "
+                + ", ".join(live_nowcast.stale_models)
+                + "."
+            )
 
         if live_nowcast.metar_pending:
             due_local = (
@@ -709,13 +725,15 @@ with tab_live:
             )
 
         st.subheader("Model maximum forecasts")
-        provenance = current[
+        provenance = live_nowcast.model_freshness[
             [
                 "model",
                 "model_run_at",
                 "available_at",
                 "fetched_at",
                 "provenance_status",
+                "age_minutes",
+                "used_in_forecast",
             ]
         ].copy()
         for column in ["model_run_at", "available_at", "fetched_at"]:
@@ -732,7 +750,12 @@ with tab_live:
                 "available_at": "Provider availability",
                 "fetched_at": "Fetched by Weatherman",
                 "provenance_status": "Provenance",
+                "age_minutes": "Fetch age (minutes)",
+                "used_in_forecast": "Used in live consensus",
             }
+        )
+        provenance["Fetch age (minutes)"] = provenance["Fetch age (minutes)"].map(
+            lambda value: round(float(value)) if pd.notna(value) else None
         )
         st.dataframe(provenance, hide_index=True, width="stretch")
         st.caption(
@@ -741,9 +764,11 @@ with tab_live:
             "the underlying NWP run, which is shown explicitly."
         )
         st.caption(
-            "The scheduled workflow refreshes weather models every three hours. The sidebar "
-            "button performs an immediate full fetch for this airport; a value can remain "
-            "unchanged when the provider still serves the same model run."
+            "Workflow 5 now checks current model data every ten minutes from 06:00 airport "
+            "local time through the end of the critical window. Open-Meteo providers are "
+            "refetched after 30 minutes and meteoblue after 60 minutes. A stale provider is "
+            "omitted; with fewer than two fresh models all trade signals are blocked. The "
+            "sidebar button still performs an immediate full fetch for this airport."
         )
         chart = current[["model", "max_temp_c", "corrected_max"]].melt(
             id_vars="model", var_name="forecast", value_name="temperature_c"

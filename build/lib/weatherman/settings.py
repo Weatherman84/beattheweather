@@ -23,15 +23,6 @@ class Settings:
     meteoblue_api_key: str = os.getenv("METEOBLUE_API_KEY", "")
     meteoblue_url_template: str = os.getenv("METEOBLUE_URL_TEMPLATE", DEFAULT_METEOBLUE_URL)
     timeout: float = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
-    live_open_meteo_refresh_minutes: int = int(
-        os.getenv("LIVE_OPEN_METEO_REFRESH_MINUTES", "30")
-    )
-    live_meteoblue_refresh_minutes: int = int(
-        os.getenv("LIVE_METEOBLUE_REFRESH_MINUTES", "60")
-    )
-    maximum_live_model_age_minutes: int = int(
-        os.getenv("MAXIMUM_LIVE_MODEL_AGE_MINUTES", "90")
-    )
 
 
 def airports() -> dict[str, dict]:

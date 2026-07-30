@@ -87,6 +87,18 @@ def test_decision_engine_blocks_when_metar_is_pending():
     assert any("METAR" in blocker for blocker in decision.blockers)
 
 
+def test_decision_engine_blocks_a_large_edge_when_models_are_stale():
+    decision = build_trade_decision(
+        probabilities={23: 0.10, 24: 0.70, 25: 0.20},
+        markets=markets(),
+        forecast_confidence=90,
+        day_status=active_day(),
+        forecast_stale=True,
+    )
+    assert decision.status == "NO BET"
+    assert any("current weather models" in blocker for blocker in decision.blockers)
+
+
 def test_latest_prior_probability_view_uses_latest_capture():
     frame = pd.DataFrame(
         [

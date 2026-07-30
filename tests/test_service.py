@@ -8,8 +8,10 @@ from weatherman.db import Base, Forecast, SignalSnapshot, StrategySnapshot
 from weatherman.service import (
     _record_signal_snapshots,
     _record_strategy_snapshots,
+    _source_refresh_due,
     _upsert_batch,
     in_critical_window,
+    in_forecast_refresh_window,
     provisional_metar_actuals,
 )
 
@@ -62,6 +64,63 @@ def test_failed_batch_does_not_poison_following_database_work():
         session.commit()
         assert stored == 1
         assert session.scalar(select(func.count()).select_from(Forecast)) == 1
+
+
+def test_live_provider_refresh_age_is_checked_against_real_fetch_time():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine)
+    now = datetime(2026, 7, 30, 8, tzinfo=timezone.utc)
+    target = date(2026, 7, 30)
+    with session_factory() as session:
+        session.add(
+            Forecast(
+                airport="EHAM",
+                model="meteoblue",
+                run_at=now - timedelta(minutes=59),
+                fetched_at=now - timedelta(minutes=59),
+                target_date=target,
+                max_temp_c=27,
+                source="meteoblue",
+                horizon="D0-morning",
+            )
+        )
+        session.commit()
+        assert not _source_refresh_due(
+            session,
+            airport_code="EHAM",
+            source="meteoblue",
+            target=target,
+            as_of=now,
+            maximum_age_minutes=60,
+        )
+        assert _source_refresh_due(
+            session,
+            airport_code="EHAM",
+            source="meteoblue",
+            target=target,
+            as_of=now + timedelta(minutes=2),
+            maximum_age_minutes=60,
+        )
+
+
+def test_forecast_refresh_begins_at_six_airport_local_time():
+    airport = {
+        "timezone": "Europe/Amsterdam",
+        "critical_window_local": ["11:30", "17:30"],
+    }
+    assert not in_forecast_refresh_window(
+        airport,
+        datetime(2026, 7, 30, 3, 59, tzinfo=timezone.utc),
+    )
+    assert in_forecast_refresh_window(
+        airport,
+        datetime(2026, 7, 30, 4, 0, tzinfo=timezone.utc),
+    )
+    assert not in_forecast_refresh_window(
+        airport,
+        datetime(2026, 7, 30, 15, 31, tzinfo=timezone.utc),
+    )
 
 
 def test_completed_metar_day_becomes_next_day_provisional_actual():

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from .analytics import detect_market_model_conflict, market_edges
 from .catalog import market_city_index, research_airports, trading_airports
@@ -40,7 +40,7 @@ from .providers import (
     recent_metars,
     recent_tafs,
 )
-from .settings import airports, settings
+from .settings import airports
 from .shadow import evaluate_shadow_markets
 
 
@@ -74,133 +74,6 @@ def _upsert_batch(
         print(f"WARN {label} storage rolled back: {type(exc).__name__}: {exc}")
         return 0
     return len(items)
-
-
-def _as_utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(
-        timezone.utc
-    )
-
-
-def _source_refresh_due(
-    session,
-    *,
-    airport_code: str,
-    source: str,
-    target: date,
-    as_of: datetime,
-    maximum_age_minutes: int,
-) -> bool:
-    """Return whether a provider needs another current-data poll."""
-    latest = session.scalar(
-        select(func.max(func.coalesce(Forecast.fetched_at, Forecast.run_at))).where(
-            Forecast.airport == airport_code,
-            Forecast.source == source,
-            Forecast.target_date == target,
-        )
-    )
-    if latest is None:
-        return True
-    age = _as_utc(as_of) - _as_utc(latest)
-    return age >= timedelta(minutes=max(1, maximum_age_minutes))
-
-
-def _store_current_provider_forecasts(
-    session,
-    *,
-    airport_code: str,
-    airport: dict,
-    as_of: datetime,
-    days: int = 3,
-) -> dict[str, int]:
-    """Refresh only provider data that is due for a live trading airport."""
-    local_target = _as_utc(as_of).astimezone(ZoneInfo(airport["timezone"])).date()
-    counts = {
-        "forecasts": 0,
-        "hourly_forecasts": 0,
-        "open_meteo_polls": 0,
-        "meteoblue_polls": 0,
-    }
-    batches: list[dict] = []
-    open_meteo_due = _source_refresh_due(
-        session,
-        airport_code=airport_code,
-        source="open-meteo",
-        target=local_target,
-        as_of=as_of,
-        maximum_age_minutes=settings.live_open_meteo_refresh_minutes,
-    )
-    if open_meteo_due:
-        counts["open_meteo_polls"] = 1
-        for model in airport["models"]:
-            try:
-                batches.extend(open_meteo_forecast(airport, model, days))
-            except Exception as exc:
-                print(f"WARN {airport_code}/{model} live model refresh: {exc}")
-            try:
-                hourly_rows = open_meteo_hourly(airport, model, days)
-            except Exception as exc:
-                print(f"WARN {airport_code}/{model} live hourly refresh: {exc}")
-            else:
-                counts["hourly_forecasts"] += _upsert_batch(
-                    session,
-                    HourlyForecast,
-                    hourly_rows,
-                    lambda item: {
-                        "airport": airport_code,
-                        "model": item["model"],
-                        "run_at": item["run_at"],
-                        "valid_at": item["valid_at"],
-                    },
-                    lambda item: {
-                        "temp_c": item["temp_c"],
-                        "dewpoint_c": item["dewpoint_c"],
-                        "cloud_cover": item["cloud_cover"],
-                        "wind_kph": item["wind_kph"],
-                        "wind_direction": item["wind_direction"],
-                        "radiation_wm2": item["radiation_wm2"],
-                        "temp_850hpa_c": item["temp_850hpa_c"],
-                    },
-                    f"{airport_code}/{model} live hourly forecasts",
-                )
-
-    meteoblue_due = _source_refresh_due(
-        session,
-        airport_code=airport_code,
-        source="meteoblue",
-        target=local_target,
-        as_of=as_of,
-        maximum_age_minutes=settings.live_meteoblue_refresh_minutes,
-    )
-    if meteoblue_due:
-        counts["meteoblue_polls"] = 1
-        try:
-            batches.extend(meteoblue_forecast(airport))
-        except Exception as exc:
-            print(f"WARN {airport_code}/meteoblue live model refresh: {exc}")
-
-    counts["forecasts"] += _upsert_batch(
-        session,
-        Forecast,
-        batches,
-        lambda item: {
-            "airport": airport_code,
-            "model": item["model"],
-            "run_at": item["run_at"],
-            "target_date": item["target_date"],
-        },
-        lambda item: {
-            "max_temp_c": item["max_temp_c"],
-            "source": item["source"],
-            "horizon": item["horizon"],
-            "model_run_at": item.get("model_run_at"),
-            "available_at": item.get("available_at"),
-            "fetched_at": item.get("fetched_at", item["run_at"]),
-            "provenance_status": item.get("provenance_status"),
-        },
-        f"{airport_code}/live current forecasts",
-    )
-    return counts
 
 
 def _signal_timing(captured_at: datetime, target: date, timezone_name: str) -> str:
@@ -655,7 +528,6 @@ def _record_shadow_evaluations(
         day_status=nowcast.day_status,
         metar_pending=nowcast.metar_pending,
         market_model_conflict=conflict.is_conflict,
-        forecast_stale=nowcast.forecast_data_stale,
     )
     return _upsert_batch(
         session,
@@ -1137,25 +1009,6 @@ def in_critical_window(airport: dict, now: datetime) -> bool:
     return current >= start or current <= end
 
 
-def in_forecast_refresh_window(airport: dict, now: datetime) -> bool:
-    """Poll current model data from D0 morning through the end of live trading."""
-    local = _as_utc(now).astimezone(ZoneInfo(airport["timezone"]))
-    configured = airport.get("forecast_refresh_window_local")
-    if not isinstance(configured, (list, tuple)) or len(configured) != 2:
-        critical = airport.get("critical_window_local", ["11:30", "18:00"])
-        configured = ["06:00", critical[-1]]
-
-    def minutes(value: object) -> int:
-        hour, minute = str(value).split(":", maxsplit=1)
-        return int(hour) * 60 + int(minute)
-
-    start, end = (minutes(value) for value in configured)
-    current = local.hour * 60 + local.minute
-    if start <= end:
-        return start <= current <= end
-    return current >= start or current <= end
-
-
 def collect_live_decision_checkpoints(
     airport_codes: list[str] | None = None,
     *,
@@ -1171,18 +1024,8 @@ def collect_live_decision_checkpoints(
         for code in requested
         if code in catalog and in_critical_window(catalog[code], captured_at)
     ]
-    forecast_due_codes = [
-        code
-        for code in requested
-        if code in catalog and in_forecast_refresh_window(catalog[code], captured_at)
-    ]
     counts = {
         "airports_due": len(due_codes),
-        "forecast_airports_due": len(forecast_due_codes),
-        "forecasts": 0,
-        "hourly_forecasts": 0,
-        "open_meteo_polls": 0,
-        "meteoblue_polls": 0,
         "observations": 0,
         "taf_reports": 0,
         "market_prices": 0,
@@ -1192,25 +1035,14 @@ def collect_live_decision_checkpoints(
         "shadow_evaluations": 0,
         "provisional_actuals": 0,
     }
-    if not due_codes and not forecast_due_codes:
+    if not due_codes:
         return counts
-    fetched_tafs = []
-    if due_codes:
-        try:
-            fetched_tafs = recent_tafs(due_codes, attempts=2, timeout=10)
-        except Exception as exc:
-            print(f"WARN live-decision TAF batch: {exc}")
+    try:
+        fetched_tafs = recent_tafs(due_codes, attempts=2, timeout=10)
+    except Exception as exc:
+        print(f"WARN live-decision TAF batch: {exc}")
+        fetched_tafs = []
     with Session() as session:
-        for code in forecast_due_codes:
-            provider_counts = _store_current_provider_forecasts(
-                session,
-                airport_code=code,
-                airport=catalog[code],
-                as_of=captured_at,
-            )
-            for key, value in provider_counts.items():
-                counts[key] += value
-        session.commit()
         for code in due_codes:
             airport = catalog[code]
             try:

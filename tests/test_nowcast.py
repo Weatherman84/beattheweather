@@ -7,6 +7,84 @@ import pandas as pd
 from weatherman.nowcast import build_live_nowcast, rapid_heat_ramp_regime
 
 
+def test_stale_meteoblue_is_omitted_when_current_models_are_available():
+    as_of = datetime(2026, 7, 30, 8, tzinfo=timezone.utc)
+    target = as_of.date()
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "EHAM",
+                "model": model,
+                "run_at": as_of - age,
+                "fetched_at": as_of - age,
+                "target_date": target,
+                "max_temp_c": maximum,
+                "source": source,
+                "horizon": "D0-morning",
+            }
+            for model, maximum, source, age in [
+                ("ecmwf", 28.0, "open-meteo", timedelta(minutes=20)),
+                ("icon_eu", 29.0, "open-meteo", timedelta(minutes=20)),
+                ("harmonie", 30.0, "open-meteo", timedelta(minutes=20)),
+                ("meteoblue", 23.0, "meteoblue", timedelta(hours=9)),
+            ]
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=pd.DataFrame(),
+        hourly=pd.DataFrame(),
+        markets=pd.DataFrame(),
+        timezone_name="Europe/Amsterdam",
+        target=target,
+        as_of=as_of,
+    )
+    assert result is not None
+    assert not result.forecast_data_stale
+    assert result.fresh_model_count == 3
+    assert result.stale_models == ("meteoblue",)
+    assert set(result.current.model) == {"ecmwf", "icon_eu", "harmonie"}
+    assert result.raw_model_mean == 29.0
+    meteoblue = result.model_freshness[result.model_freshness.model == "meteoblue"].iloc[0]
+    assert not bool(meteoblue.used_in_forecast)
+
+
+def test_all_old_models_keep_diagnostics_visible_but_mark_forecast_stale():
+    as_of = datetime(2026, 7, 30, 8, tzinfo=timezone.utc)
+    target = as_of.date()
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "EHAM",
+                "model": model,
+                "run_at": as_of - timedelta(hours=3),
+                "fetched_at": as_of - timedelta(hours=3),
+                "target_date": target,
+                "max_temp_c": maximum,
+                "source": "open-meteo",
+                "horizon": "D0-morning",
+            }
+            for model, maximum in [("ecmwf", 28.0), ("icon_eu", 29.0)]
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=pd.DataFrame(),
+        hourly=pd.DataFrame(),
+        markets=pd.DataFrame(),
+        timezone_name="Europe/Amsterdam",
+        target=target,
+        as_of=as_of,
+    )
+    assert result is not None
+    assert result.forecast_data_stale
+    assert result.fresh_model_count == 0
+    assert result.forecast_confidence <= 40
+    assert set(result.current.model) == {"ecmwf", "icon_eu"}
+
+
 def test_shared_nowcast_locks_completed_evening_peak():
     as_of = datetime(2026, 7, 20, 21, tzinfo=ZoneInfo("Europe/Madrid"))
     as_of_utc = as_of.astimezone(timezone.utc)
