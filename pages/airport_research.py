@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.2.1")
+discard_stale_weatherman_modules("10.3.0")
 
 import pandas as pd
 import plotly.express as px
@@ -21,6 +21,8 @@ import streamlit as st
 from sqlalchemy import select
 
 from weatherman.analytics import (
+    champion_challenger_metrics,
+    champion_challenger_trading_metrics,
     fixed_decision_snapshots,
     forecast_ladder_frame,
     historical_d1_ladder,
@@ -29,13 +31,16 @@ from weatherman.analytics import (
     preferred_station_actuals,
     settled_signal_performance,
     settled_shadow_performance,
+    settled_basket_performance,
     settled_strategy_performance,
 )
 from weatherman.db import (
     AirportMarketUniverse,
+    BasketSnapshot,
     DailyActual,
     Forecast,
     ForecastSnapshot,
+    ForecastVariantSnapshot,
     MarketSnapshot,
     Observation,
     Session,
@@ -126,6 +131,14 @@ def load_weather_research_data(
                 ),
                 session.bind,
             ),
+            "variants": pd.read_sql(
+                scoped_statement(
+                    ForecastVariantSnapshot,
+                    airport_codes,
+                    earliest_target=earliest_target,
+                ),
+                session.bind,
+            ),
         }
 
 
@@ -165,6 +178,14 @@ def load_strategy_research_data(
                 "shadows": pd.read_sql(
                     scoped_statement(
                         ShadowEvaluation,
+                        airport_codes,
+                        earliest_target=earliest_target,
+                    ),
+                    session.bind,
+                ),
+                "baskets": pd.read_sql(
+                    scoped_statement(
+                        BasketSnapshot,
                         airport_codes,
                         earliest_target=earliest_target,
                     ),
@@ -313,6 +334,10 @@ def calculate_timing_bundle(
     if include_diagnostics:
         result["diagnostics"] = live_factor_diagnostics(
             filter_target_window(data["snapshots"], window_days),
+            station_actuals,
+        )
+        result["challengers"] = champion_challenger_metrics(
+            filter_target_window(data["variants"], window_days),
             station_actuals,
         )
     return result
@@ -751,6 +776,90 @@ elif module == "Forecast stages":
             "at its current conservative coefficient; negative means it hurt."
         )
 
+    challengers = timing_bundle.get("challengers", pd.DataFrame())
+    st.subheader("Champion vs challenger · same information set")
+    if challengers.empty:
+        st.caption(
+            "Parallel one-factor-disabled challengers start collecting after this update. "
+            "Results appear after the corresponding airport-days have settled."
+        )
+    else:
+        challenger_table = challengers.copy()
+        for column in [
+            "champion_mae",
+            "challenger_mae",
+            "mae_gain",
+            "champion_bias",
+            "challenger_bias",
+        ]:
+            challenger_table[column] = challenger_table[column].map(
+                lambda value, signed=column in {
+                    "mae_gain",
+                    "champion_bias",
+                    "challenger_bias",
+                }: format_temp(value, signed=signed)
+            )
+        for column in [
+            "champion_exact_hit",
+            "challenger_exact_hit",
+            "exact_hit_gain",
+            "champion_high_confidence_hit",
+            "champion_low_confidence_hit",
+        ]:
+            challenger_table[column] = challenger_table[column].map(format_percent)
+        for column in [
+            "champion_brier_score",
+            "challenger_brier_score",
+            "brier_gain",
+            "champion_log_loss",
+            "challenger_log_loss",
+            "log_loss_gain",
+            "champion_calibration_error",
+            "challenger_calibration_error",
+        ]:
+            challenger_table[column] = challenger_table[column].map(
+                lambda value: f"{float(value):.3f}" if pd.notna(value) else "—"
+            )
+        st.dataframe(
+            challenger_table[
+                [
+                    "airport",
+                    "information_set",
+                    "factor",
+                    "n_days",
+                    "evidence",
+                    "mae_winner",
+                    "champion_mae",
+                    "challenger_mae",
+                    "mae_gain",
+                    "champion_bias",
+                    "challenger_bias",
+                    "champion_exact_hit",
+                    "challenger_exact_hit",
+                    "exact_hit_gain",
+                    "champion_brier_score",
+                    "challenger_brier_score",
+                    "brier_gain",
+                    "champion_log_loss",
+                    "challenger_log_loss",
+                    "log_loss_gain",
+                    "champion_calibration_error",
+                    "challenger_calibration_error",
+                    "champion_high_confidence_hit",
+                    "champion_low_confidence_hit",
+                ]
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "Positive MAE, Brier and log-loss gain means the Champion improved on the "
+            "same snapshot; negative gain means the Challenger improved. Learned analog "
+            "patterns appear as `regime_memory_analog` and remain shadow-only until their "
+            "separate 30-day OOS promotion gate passes. Evidence: under 10 days case studies, "
+            "10–29 early tendency, 30–59 usable, 60+ stronger."
+        )
+
 elif module == "Strategy performance":
     st.subheader("Strategy Performance · forward and historical paper tests")
     st.caption(
@@ -758,15 +867,17 @@ elif module == "Strategy performance":
         "Real tracked asks and explicitly labelled historical price samples are "
         "kept together here, with one entry per strategy and airport-day."
     )
-    with st.expander("What the four tables mean"):
+    with st.expander("What the six tables mean"):
         st.markdown(
             """
 | Table | What is hypothetically bought? | Entry timing and price |
 |---|---|---|
 | **Fixed-checkpoint top-bucket benchmark** | The highest-probability bucket from each forecast stage, whether or not it has positive edge | D-1 Evening at 20:00 and D0 Morning at 10:00 local airport time; first journaled entry at the checkpoint's recorded YES ask |
+| **Event-level basket** | All simultaneously executable positive-edge buckets, evaluated as one mutually exclusive position | First complete SHADOW BASKET per airport-day; full combined cost and a single maximum $1 payout |
 | **Net-edge shadow watcher** | Every first SHADOW BET after checking the full YES ask book for a $10 paper stake | During the live critical window; includes actual depth, slippage, the weather-market taker fee and a 2-point safety margin |
 | **Possible-edge tracker** | Every market bucket whose Weatherman probability first exceeds its current YES ask by at least 8 percentage points | The first recorded Possible-edge signal for that bucket; D-1, D0 and Live signals may all occur |
 | **Historical price simulation** | The rounded bucket from the reconstructed D-1 forecast | D-1 at 20:00 local airport time; nearest stored historical trade-price sample, not an executable old ask |
+| **Champion vs challenger trading** | The best guarded ask-based paper entry with and without one active forecast factor | Same stored snapshot and market prices; aggregated by independent settled airport-days |
 """
         )
         st.caption(
@@ -792,6 +903,8 @@ elif module == "Strategy performance":
     signals = strategy_data["signals"]
     strategies = strategy_data["strategies"]
     shadows = strategy_data["shadows"]
+    baskets = strategy_data["baskets"]
+    variants = strategy_data["variants"]
     local_timezones = {
         code: timezone_by_airport[code]
         for code in airport_codes
@@ -811,6 +924,8 @@ elif module == "Strategy performance":
     )
     edge_results = settled_signal_performance(signals, markets)
     shadow_results = settled_shadow_performance(shadows, markets)
+    basket_results = settled_basket_performance(baskets, markets)
+    challenger_trading = champion_challenger_trading_metrics(variants, markets)
     canonical_strategies = canonical_strategy_checkpoints(strategies)
     consensus_results = settled_strategy_performance(canonical_strategies, markets)
     price_history_results = historical_price_strategy_simulation(
@@ -828,6 +943,16 @@ elif module == "Strategy performance":
             shadow_results[shadow_results.airport == selected_airport]
             if "airport" in shadow_results.columns
             else shadow_results.iloc[0:0]
+        )
+        basket_results = (
+            basket_results[basket_results.airport == selected_airport]
+            if "airport" in basket_results.columns
+            else basket_results.iloc[0:0]
+        )
+        challenger_trading = (
+            challenger_trading[challenger_trading.airport == selected_airport]
+            if "airport" in challenger_trading.columns
+            else challenger_trading.iloc[0:0]
         )
         consensus_results = (
             consensus_results[consensus_results.airport == selected_airport]
@@ -892,6 +1017,49 @@ elif module == "Strategy performance":
                 else f"${float(value):.2f}"
             )
         st.dataframe(summary, hide_index=True, width="stretch")
+
+    st.subheader("Event-level basket · independent settled airport-days")
+    if basket_results.empty:
+        recorded_baskets = (
+            int((baskets.status == "SHADOW BASKET").sum())
+            if not baskets.empty and "status" in baskets
+            else 0
+        )
+        basket_warnings = (
+            int((baskets.status == "BASKET WATCH").sum())
+            if not baskets.empty and "status" in baskets
+            else 0
+        )
+        st.caption(
+            f"No event basket has settled in this scope yet. {recorded_baskets} "
+            f"SHADOW BASKET and {basket_warnings} BASKET WATCH checkpoint(s) are journaled."
+        )
+    else:
+        basket_summary = basket_results.groupby("airport", as_index=False).agg(
+            independent_days=("target_date", "nunique"),
+            hit_rate=("won", "mean"),
+            pnl=("pnl", "sum"),
+            total_cost=("total_cost", "sum"),
+            average_net_edge=("net_edge", "mean"),
+            average_buckets=("market_count", "mean"),
+        )
+        basket_summary["roi"] = basket_summary.pnl / basket_summary.total_cost
+        for column in ["hit_rate", "average_net_edge", "roi"]:
+            basket_summary[column] = basket_summary[column].map(format_percent)
+        basket_summary["pnl"] = basket_summary.pnl.map(
+            lambda value: f"${float(value):+.2f}"
+        )
+        basket_summary["total_cost"] = basket_summary.total_cost.map(
+            lambda value: f"${float(value):.2f}"
+        )
+        basket_summary["average_buckets"] = basket_summary.average_buckets.map(
+            lambda value: f"{float(value):.1f}"
+        )
+        st.dataframe(basket_summary, hide_index=True, width="stretch")
+        st.caption(
+            "A day is counted once. A basket wins if any selected bucket wins; its "
+            "combined cost is compared with the event's single $1 payout."
+        )
 
     st.subheader("Net-edge shadow watcher · $10 all-in paper stakes")
     if shadow_results.empty:
@@ -978,6 +1146,33 @@ elif module == "Strategy performance":
         st.warning(
             "Historical CLOB points are observed trade-price samples, not old "
             "executable asks or reconstructed order books."
+        )
+
+    st.subheader("Champion vs challenger · trading impact")
+    if challenger_trading.empty:
+        st.caption(
+            "Trading impact appears after paired Champion and challenger snapshots have "
+            "matching resolved markets."
+        )
+    else:
+        trading_table = challenger_trading.copy()
+        for column in [
+            "champion_hit_rate",
+            "challenger_hit_rate",
+            "champion_average_net_edge",
+            "challenger_average_net_edge",
+            "champion_roi",
+            "challenger_roi",
+        ]:
+            trading_table[column] = trading_table[column].map(format_percent)
+        for column in ["champion_net_pnl", "challenger_net_pnl"]:
+            trading_table[column] = trading_table[column].map(
+                lambda value: f"${float(value):+.2f}" if pd.notna(value) else "—"
+            )
+        st.dataframe(trading_table, hide_index=True, width="stretch")
+        st.caption(
+            "Entries, hit rate, average net edge, net P/L and ROI are compared from the "
+            "same information and market snapshot, one first entry per independent day."
         )
 
 elif module == "Universe & coverage":

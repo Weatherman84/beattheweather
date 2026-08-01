@@ -20,6 +20,20 @@ class TradeDecision:
     confidence: int
     reasons: tuple[str, ...]
     blockers: tuple[str, ...]
+    basket: EdgeBasket | None = None
+
+
+@dataclass(frozen=True)
+class EdgeBasket:
+    bucket_labels: tuple[str, ...]
+    market_ids: tuple[str, ...]
+    fair_probability: float
+    total_cost: float
+    edge: float
+    top_model_bucket: str
+    top_model_included: bool
+    middle_bucket_excluded: bool
+    warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -60,6 +74,71 @@ def latest_prior_probabilities(
     }
 
 
+def build_edge_basket(
+    probabilities: dict[int, float],
+    markets: pd.DataFrame,
+    *,
+    minimum_individual_edge: float = 0.04,
+) -> EdgeBasket | None:
+    """Evaluate simultaneous positive-edge buckets as one mutually exclusive event."""
+    comparison = market_edges(probabilities, markets)
+    if comparison.empty:
+        return None
+    actionable = comparison[comparison.best_ask.notna()].copy()
+    if "closed" in actionable:
+        actionable = actionable[~actionable.closed.fillna(False).astype(bool)]
+    selected = actionable[actionable.edge >= float(minimum_individual_edge)].copy()
+    if len(selected) < 2:
+        return None
+
+    def order_value(row: pd.Series) -> float:
+        if pd.notna(row.get("bucket_low_c")):
+            return float(row.bucket_low_c)
+        if pd.notna(row.get("bucket_high_c")):
+            return float(row.bucket_high_c) - 1000.0
+        return 0.0
+
+    ordered = comparison.copy()
+    ordered["_order"] = ordered.apply(order_value, axis=1)
+    ordered = ordered.sort_values(["_order", "bucket_label"]).reset_index(drop=True)
+    selected_ids = set(selected.market_id.astype(str))
+    positions = [
+        index
+        for index, market_id in enumerate(ordered.market_id.astype(str))
+        if market_id in selected_ids
+    ]
+    selected_ordered = ordered[
+        ordered.market_id.astype(str).isin(selected_ids)
+    ]
+    middle_bucket_excluded = any(
+        str(ordered.iloc[index].market_id) not in selected_ids
+        for index in range(min(positions), max(positions) + 1)
+    )
+    top = comparison.sort_values("model_probability", ascending=False).iloc[0]
+    top_label = str(top.bucket_label)
+    top_included = str(top.market_id) in selected_ids
+    warnings: list[str] = []
+    if not top_included:
+        warnings.append("Most likely bucket excluded")
+    if middle_bucket_excluded:
+        warnings.append("Middle bucket excluded")
+    fair_probability = float(selected.model_probability.sum())
+    total_cost = float(selected.buy_price.sum())
+    if total_cost >= 1.0:
+        warnings.append("Basket costs at least the maximum $1 payout")
+    return EdgeBasket(
+        bucket_labels=tuple(selected_ordered.bucket_label.astype(str)),
+        market_ids=tuple(selected_ordered.market_id.astype(str)),
+        fair_probability=fair_probability,
+        total_cost=total_cost,
+        edge=fair_probability - total_cost,
+        top_model_bucket=top_label,
+        top_model_included=top_included,
+        middle_bucket_excluded=middle_bucket_excluded,
+        warnings=tuple(warnings),
+    )
+
+
 def build_trade_decision(
     *,
     probabilities: dict[int, float],
@@ -68,6 +147,7 @@ def build_trade_decision(
     day_status: DayStatus,
     metar_pending: bool = False,
     market_model_conflict: bool = False,
+    forecast_stale: bool = False,
     previous_probabilities: dict[str, float] | None = None,
     live_signals: Iterable[str] = (),
     bet_edge: float = 0.08,
@@ -84,6 +164,8 @@ def build_trade_decision(
         blockers.append("A routine METAR is due but not yet available")
     if market_model_conflict:
         blockers.append("A near-certain market price conflicts with the weather model")
+    if forecast_stale:
+        blockers.append("Fewer than two current weather models are available")
     if markets.empty:
         blockers.append("No matching Polymarket market is stored")
         return TradeDecision(
@@ -101,6 +183,11 @@ def build_trade_decision(
         blockers.append("The market is closed")
 
     comparison = market_edges(probabilities, markets)
+    basket = build_edge_basket(
+        probabilities,
+        markets,
+        minimum_individual_edge=watch_edge,
+    )
     if comparison.empty:
         blockers.append("The market buckets could not be matched to Celsius outcomes")
         return TradeDecision(
@@ -135,6 +222,8 @@ def build_trade_decision(
         blockers.append(f"Forecast confidence {confidence}/100 is below {minimum_confidence}/100")
     if spread is not None and spread > maximum_spread:
         blockers.append(f"Bid-ask spread {spread:.1%} is wider than the {maximum_spread:.0%} limit")
+    if basket is not None:
+        blockers.extend(f"Basket warning: {warning}" for warning in basket.warnings)
 
     reasons = [
         (
@@ -147,12 +236,19 @@ def build_trade_decision(
     ]
     if probability_change is not None:
         reasons.append(f"Fair probability changed {probability_change:+.1%}")
+    if basket is not None:
+        reasons.append(
+            f"Event basket {', '.join(basket.bucket_labels)}: "
+            f"fair probability {basket.fair_probability:.1%}, total ask "
+            f"{basket.total_cost:.1%}, combined edge {basket.edge:+.1%}"
+        )
     reasons.extend(str(signal) for signal in live_signals if signal)
 
     hard_block = (
         day_status.is_locked
         or metar_pending
         or market_model_conflict
+        or forecast_stale
         or ("closed" in markets and markets.closed.fillna(False).astype(bool).all())
         or actionable.empty
     )
@@ -172,6 +268,7 @@ def build_trade_decision(
         confidence,
         tuple(reasons),
         tuple(blockers),
+        basket,
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.2.1")
+discard_stale_weatherman_modules("10.3.0")
 
 import pandas as pd
 import plotly.express as px
@@ -31,12 +32,15 @@ from weatherman.analytics import (
     score_frame,
 )
 from weatherman.db import (
+    BasketSnapshot,
     DailyActual,
     Forecast,
     ForecastSnapshot,
+    ForecastVariantSnapshot,
     HourlyForecast,
     MarketSnapshot,
     Observation,
+    RegimeMemorySnapshot,
     Session,
     ShadowEvaluation,
     SignalSnapshot,
@@ -52,6 +56,7 @@ from weatherman.decision import (
     latest_prior_probabilities,
 )
 from weatherman.nowcast import build_live_nowcast
+from weatherman.regime_memory import enrich_nowcast_with_regime_memory
 from weatherman.navigation import render_app_navigation
 from weatherman.research import filter_target_window, market_timing_metrics
 from weatherman.service import collect, collect_live_aviation
@@ -310,8 +315,24 @@ with Session() as session:
         select(ShadowEvaluation).where(ShadowEvaluation.airport == airport),
         session.bind,
     )
+    all_basket_snapshots = pd.read_sql(
+        select(BasketSnapshot).where(BasketSnapshot.airport == airport),
+        session.bind,
+    )
     all_forecast_snapshots = pd.read_sql(
         select(ForecastSnapshot).where(ForecastSnapshot.airport == airport),
+        session.bind,
+    )
+    all_forecast_variants = pd.read_sql(
+        select(ForecastVariantSnapshot).where(
+            ForecastVariantSnapshot.airport == airport
+        ),
+        session.bind,
+    )
+    all_regime_memory_snapshots = pd.read_sql(
+        select(RegimeMemorySnapshot).where(
+            RegimeMemorySnapshot.airport == airport
+        ),
         session.bind,
     )
     all_tafs = pd.read_sql(select(TafReport).where(TafReport.airport == airport), session.bind)
@@ -348,6 +369,11 @@ shadow_evaluations = (
     all_shadow_evaluations[all_shadow_evaluations.airport == airport].copy()
     if not all_shadow_evaluations.empty
     else all_shadow_evaluations
+)
+basket_snapshots = (
+    all_basket_snapshots[all_basket_snapshots.airport == airport].copy()
+    if not all_basket_snapshots.empty
+    else all_basket_snapshots
 )
 tafs = all_tafs[all_tafs.airport == airport].copy() if not all_tafs.empty else all_tafs
 
@@ -401,6 +427,7 @@ day_status = None
 trade_decision = None
 prior_probabilities: dict[str, float] = {}
 with tab_live:
+    live_as_of = datetime.now(ZoneInfo("UTC"))
     live_nowcast = build_live_nowcast(
         forecasts=forecasts,
         actuals=actuals,
@@ -410,7 +437,7 @@ with tab_live:
         tafs=tafs,
         timezone_name=timezone_name,
         target=target,
-        as_of=datetime.now(ZoneInfo("UTC")),
+        as_of=live_as_of,
         wind_profile=catalog[airport].get("heat_wind_profile"),
         routine_metar_minutes=catalog[airport].get("metar_minutes"),
         critical_window_local=catalog[airport].get("critical_window_local"),
@@ -418,7 +445,31 @@ with tab_live:
             "post_convective_uncertainty"
         ),
         heat_regime_profile=catalog[airport].get("heat_regime"),
+        phase_amplitude_profile=catalog[airport].get("phase_vs_amplitude"),
+        maritime_advection_profile=catalog[airport].get("maritime_advection"),
+        maritime_low_range_profile=catalog[airport].get("maritime_low_range"),
         maximum_model_age_minutes=settings.maximum_live_model_age_minutes,
+    )
+    memory_config = dict(catalog[airport].get("regime_memory") or {})
+    memory_config.setdefault(
+        "allow_promoted",
+        settings.regime_memory_allow_promoted,
+    )
+    memory_config.setdefault(
+        "minimum_oos_days",
+        settings.regime_memory_minimum_oos_days,
+    )
+    live_nowcast = enrich_nowcast_with_regime_memory(
+        live_nowcast,
+        all_forecast_snapshots,
+        actuals,
+        observations,
+        all_forecast_variants,
+        airport_profile=catalog[airport],
+        timezone_name=timezone_name,
+        target=target,
+        as_of=live_as_of,
+        config=memory_config,
     )
     if live_nowcast is None:
         st.info("No current forecast stored for this date. Click Refresh forecasts + METAR + TAF.")
@@ -535,6 +586,26 @@ with tab_live:
                 "WATCH means the weather setup may be interesting but at least one "
                 "required condition is still missing."
             )
+        if trade_decision.basket is not None:
+            basket = trade_decision.basket
+            st.subheader("Event-level edge basket")
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Selected buckets", ", ".join(basket.bucket_labels))
+            b2.metric("Combined fair probability", f"{basket.fair_probability:.1%}")
+            b3.metric("Combined YES asks", f"{basket.total_cost:.1%}")
+            b4.metric("Combined edge", f"{basket.edge:+.1%}")
+            if basket.warnings:
+                st.warning(
+                    "Basket blocked: "
+                    + " · ".join(basket.warnings)
+                    + ". The buckets are mutually exclusive and are evaluated as one position."
+                )
+            else:
+                st.caption(
+                    "The basket includes the model's most likely bucket and has no gap "
+                    "between selected ranges. Fees and order-book depth are applied separately "
+                    "by the Shadow watcher."
+                )
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Raw model mean", f"{live_nowcast.raw_model_mean:.1f} °C")
@@ -568,6 +639,95 @@ with tab_live:
         s4.metric("Forecast confidence", f"{live_nowcast.forecast_confidence}/100")
         s5.metric("Day status", day_status.label)
         st.caption(day_status.explanation)
+
+        memory = live_nowcast.regime_memory
+        if memory is not None:
+            memory_title = f"Regime Memory · {memory.status} · {memory.label}"
+            if memory.status == "CONFIRMED":
+                st.success(memory_title)
+            elif memory.status in {"WATCH", "PREDICTED"}:
+                st.warning(memory_title)
+            else:
+                st.info(memory_title)
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Early-warning confidence", f"{memory.confidence}/100")
+            r2.metric("Comparable days", str(memory.analog_count))
+            r3.metric(
+                "Analog effect",
+                f"{memory.center_adjustment_c:+.2f} °C",
+                "Challenger" if memory.shadow_only else "Champion",
+            )
+            r4.metric(
+                "Promotion gate",
+                memory.promotion.status,
+                f"{memory.promotion.oos_days}/{memory.promotion.minimum_oos_days} OOS days",
+            )
+            st.caption(memory.explanation)
+            today_memory = all_regime_memory_snapshots.copy()
+            if not today_memory.empty:
+                today_memory["target_date"] = pd.to_datetime(
+                    today_memory.target_date,
+                    errors="coerce",
+                ).dt.date
+                today_memory["captured_at"] = pd.to_datetime(
+                    today_memory.captured_at,
+                    utc=True,
+                    errors="coerce",
+                )
+                same_regime = today_memory[
+                    (today_memory.target_date == target)
+                    & (today_memory.label == memory.label)
+                    & today_memory.status.isin(["PREDICTED", "WATCH", "CONFIRMED"])
+                ]
+                if not same_regime.empty:
+                    detected = same_regime.captured_at.min().tz_convert(timezone_name)
+                    st.caption(f"Detected since {detected:%H:%M} airport local time.")
+            with st.expander("Why this regime, historical analogs and safety gate", expanded=True):
+                regime_rows = [
+                    {
+                        "Regime": state.name,
+                        "Status": state.status,
+                        "Confidence": f"{state.confidence}/100",
+                        "Origin": state.source,
+                        "Champion effect": state.champion_effect,
+                        "Why": state.explanation,
+                    }
+                    for state in memory.regimes
+                ]
+                if regime_rows:
+                    st.dataframe(pd.DataFrame(regime_rows), hide_index=True, width="stretch")
+                if memory.pro_signals:
+                    st.markdown("**Signals for the current regime**")
+                    for signal in memory.pro_signals:
+                        st.write(f"• {signal}")
+                if memory.contra_signals:
+                    st.markdown("**Signals against / unresolved**")
+                    for signal in memory.contra_signals:
+                        st.write(f"• {signal}")
+                analog_rows = [
+                    {
+                        "Date": analog.target_date,
+                        "Similarity": f"{analog.similarity:.0%}",
+                        "Forecast": f"{analog.forecast_c:.1f} °C",
+                        "Actual": f"{analog.actual_c:.1f} °C",
+                        "Residual": f"{analog.residual_c:+.1f} °C",
+                        "Matched on": ", ".join(analog.matched_on),
+                    }
+                    for analog in memory.analogs
+                ]
+                if analog_rows:
+                    st.dataframe(pd.DataFrame(analog_rows), hide_index=True, width="stretch")
+                else:
+                    st.caption(
+                        "No settled historical day yet clears the minimum similarity and "
+                        "same-information-set checks."
+                    )
+                st.caption(memory.promotion.explanation)
+                st.caption(
+                    "Automatically learned patterns start as Challenger-only. In-sample "
+                    "matches never count toward promotion; only forecasts saved before later "
+                    "settled outcomes count as out-of-sample evidence."
+                )
 
         taf = live_nowcast.taf_guidance
         if taf is None:
@@ -655,11 +815,34 @@ with tab_live:
                 f"TAF {live_nowcast.taf_adjustment_c:+.2f} °C → final "
                 f"{live_nowcast.final_forecast_mean:.2f} °C. TAF remains a separate stage."
             )
+            if memory is not None:
+                if memory.applied_to_champion:
+                    st.success(
+                        f"Promoted Regime Memory contributes "
+                        f"{memory.center_adjustment_c:+.2f} °C after passing the OOS gate."
+                    )
+                elif memory.challenger_ready:
+                    st.info(
+                        f"Regime Memory proposes {memory.suggested_forecast_c:.2f} °C "
+                        f"({memory.center_adjustment_c:+.2f} °C), but this is stored only as "
+                        "the Analog Memory Challenger and does not change the forecast above."
+                    )
+                else:
+                    st.caption(
+                        "Regime Memory is collecting comparable settled days; it currently "
+                        "has no numerical effect on either Champion or Challenger."
+                    )
             features = pd.DataFrame(
                 [
                     {
                         "Stored feature": name.replace("_", " ").title(),
-                        "Value": "—" if value is None else f"{value:.2f}",
+                        "Value": (
+                            "—"
+                            if value is None
+                            else f"{value:.2f}"
+                            if isinstance(value, (int, float)) and not isinstance(value, bool)
+                            else str(value)
+                        ),
                     }
                     for name, value in live_nowcast.live_features.items()
                 ]
@@ -1171,6 +1354,13 @@ with tab_shadow:
         if not shadow_evaluations.empty
         else shadow_evaluations
     )
+    target_baskets = (
+        basket_snapshots[
+            pd.to_datetime(basket_snapshots.target_date).dt.date == target
+        ].copy()
+        if not basket_snapshots.empty
+        else basket_snapshots
+    )
     if target_shadow.empty:
         st.info(
             "No shadow evaluation is stored for this airport and date yet. "
@@ -1259,6 +1449,28 @@ with tab_shadow:
             }
         )
         st.dataframe(shown, hide_index=True, width="stretch")
+        if not target_baskets.empty:
+            target_baskets["captured_at"] = pd.to_datetime(
+                target_baskets.captured_at,
+                utc=True,
+            )
+            latest_basket = target_baskets.sort_values("captured_at").iloc[-1]
+            labels = json.loads(str(latest_basket.bucket_labels_json))
+            warnings = json.loads(str(latest_basket.warnings_json))
+            st.subheader("Latest simultaneous event basket")
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Buckets", ", ".join(str(value) for value in labels))
+            b2.metric("Fair probability", f"{float(latest_basket.fair_probability):.1%}")
+            b3.metric("All-in basket cost", f"{float(latest_basket.total_cost):.1%}")
+            b4.metric("Net basket edge", f"{float(latest_basket.net_edge):+.1%}")
+            if warnings:
+                st.warning(
+                    f"{latest_basket.status}: " + " · ".join(str(value) for value in warnings)
+                )
+            else:
+                st.success(
+                    f"{latest_basket.status}: evaluated jointly as one mutually exclusive event."
+                )
         paper_entries = target_shadow[
             target_shadow.status == "SHADOW BET"
         ].sort_values("captured_at")

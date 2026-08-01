@@ -10,6 +10,7 @@ src/weatherman/decision.py
 src/weatherman/navigation.py
 src/weatherman/nowcast.py
 src/weatherman/providers.py
+src/weatherman/regime_memory.py
 src/weatherman/research.py
 src/weatherman/service.py
 src/weatherman/settings.py
@@ -33,4 +34,6 @@ tests/test_service.py
 tests/test_settings.py
 tests/test_shadow.py
 tests/test_taf.py
+tests/test_v1021_regimes_and_baskets.py
+tests/test_v1030_regime_memory.py
 tests/test_workflows.py

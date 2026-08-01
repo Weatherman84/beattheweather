@@ -32,6 +32,13 @@ class Settings:
     maximum_live_model_age_minutes: int = int(
         os.getenv("MAXIMUM_LIVE_MODEL_AGE_MINUTES", "90")
     )
+    regime_memory_allow_promoted: bool = os.getenv(
+        "REGIME_MEMORY_ALLOW_PROMOTED",
+        "false",
+    ).strip().casefold() in {"1", "true", "yes", "on"}
+    regime_memory_minimum_oos_days: int = int(
+        os.getenv("REGIME_MEMORY_MINIMUM_OOS_DAYS", "30")
+    )
 
 
 def airports() -> dict[str, dict]:

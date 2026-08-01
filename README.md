@@ -552,6 +552,71 @@ erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
 - Modelle mit einem Abrufalter über 90 Minuten werden aus einem ausreichend großen
   frischen Konsens entfernt. Sind weniger als zwei frische Modelle vorhanden, bleiben
   Forecast und Diagnose sichtbar, aber `BET` und `SHADOW BET` werden hart gesperrt.
+- Madrids neues **Persistent-Hot-Regime** erkennt die Fortsetzung einer etablierten
+  Hitzephase auch dann, wenn der heutige Rohforecast nicht noch weiter über das
+  gestrige Maximum steigt. Wiederholte warme Modellfehler, ein sehr heißer Vortag
+  sowie TX-/Clear-sky-Unterstützung schwächen in diesem Regime eine kalte
+  Biaskorrektur ab und verbreitern den oberen Tail.
+- AROME und AROME-HD werden bei Madrid nur innerhalb dieses bestätigten Regimes
+  stärker gewichtet. Außerhalb davon bleibt ihre normale historische
+  Biaskorrektur aktiv.
+- Münchens **Phase-vs.-Amplitude-Erkennung** passt die jüngsten METARs parallel als
+  zeitlich vorgezogene Modellkurve und als vertikal verschobenen Temperaturpfad an.
+  Erklärt eine Zeitverschiebung den Morgen besser, wird nicht mehr der gesamte
+  frühe Wärmevorsprung auf das Tagesmaximum übertragen.
+- Amsterdams **Maritime-Advection-Override** erkennt den Wechsel in einen stärker
+  werdenden West-/Nordwestsektor zusammen mit einem Temperaturplateau oder Rückgang.
+  Positive Heizfaktoren und die verbleibende Erwärmung werden dann begrenzt.
+- Istanbuls **Maritime Low-Range Regime** dämpft Anchor-, Heating-Rate- und
+  Dryness-Aufschläge bei anhaltend starkem Seewind, kleiner Tagesamplitude und
+  frühem Plateau. In diesem stabilen Regime wird die Bucket-Verteilung vorsichtig
+  enger.
+- Mehrere positive Bucket-Edges desselben Marktes werden zusätzlich als ein
+  **Event-level Basket** bewertet: gemeinsame Wahrscheinlichkeit, kombinierte
+  Kosten, Netto-Edge und ROI bei nur einer möglichen Auszahlung. `Most likely
+  bucket excluded` und ein ausgelassener mittlerer Bucket blockieren ein
+  BET-/SHADOW-BASKET-Signal.
+- Strategy Performance zählt Basket-Ergebnisse nach unabhängigen abgerechneten
+  Airport-Tagen statt nach wiederholten Snapshots. Ankara erhält aufgrund des
+  27-°C-Treffers ausdrücklich keine pauschale Temperatur-Aufwärtskorrektur.
+- Für jeden aktiven v10.2-/v10.2.1-Faktor wird derselbe Informationsstand parallel
+  als **Champion** und als Challenger ohne genau diesen Faktor gespeichert.
+  Airport Research vergleicht anschließend MAE, RMSE, Bias, exakten Bucket-Treffer,
+  Brier Score, Log Loss, Kalibrierungsfehler, hohe/niedrige Confidence sowie
+  Entry-Anzahl, Netto-Edge, Trefferquote, P/L und ROI.
+- Die Evidenzstufen werden sichtbar getrennt: unter 10 aktiven Tagen nur
+  Einzelfälle, 10–29 erste Tendenz, 30–59 brauchbare Evidenz und ab 60 Tagen
+  deutlich belastbarer. Diese parallelen Varianten sammeln erst ab Installation
+  vorwärts Daten und werden nicht rückwirkend rekonstruiert.
+
+### Neu in Version 10.3.0 · Regime Memory
+
+- Der Trading Desk zeigt Regime bereits als **PREDICTED**, **WATCH**,
+  **CONFIRMED** oder **REJECTED** und erklärt Signale dafür und dagegen.
+- Die erklärbare Analogsuche vergleicht Windrichtung/-stärke, Taupunkt und
+  Trockenheit, Bewölkung, Erwärmungsrate, Strahlung, verbleibende Modellerwärmung,
+  TAF-Einfluss, Zeit bis zum Peak und vorhandene Regimezustände.
+- Ein Analogtag darf nur vor dem aktuellen Target-Tag liegen. Pro historischem
+  Tag wird der Snapshot mit möglichst gleichem Informationsstand gewählt; das
+  spätere Tagesergebnis wird ausschließlich zur nachträglichen Bewertung benutzt.
+- Die ähnlichsten Tage werden mit Datum, Ähnlichkeit, damaligem Forecast,
+  tatsächlichem Maximum, Residual und den wichtigsten Übereinstimmungen angezeigt.
+- Der aus Analogtagen abgeleitete Temperaturimpuls wird robust geschrumpft und
+  auf ±1,0 °C begrenzt. Er startet ausschließlich als **Analog Memory Challenger**
+  und verändert weder Live-Forecast noch BET-Signal.
+- Der Promotion-Gate zählt nur sequenzielle, später abgerechnete OOS-Tage. Vor
+  30 Tagen ist eine Promotion technisch gesperrt. Danach müssen zusätzlich MAE,
+  Brier Score, exakter Bucket und Bias die Sicherheitsgrenzen bestehen.
+- Auch ein bestandenes Gate setzt den Faktor nur auf **ELIGIBLE FOR REVIEW**.
+  Der Champion wird erst nach dem ausdrücklichen Schalter
+  `REGIME_MEMORY_ALLOW_PROMOTED=true` beeinflusst; Standard bleibt `false`.
+- Kandidaten wie **Wind Shift / Air-mass Change** und **Convective Peak Timing**
+  werden früh sichtbar und gespeichert, bleiben aber Challenger-only. Damit
+  führen einzelne Überraschungen in Madrid, Ankara, Warschau oder München nicht
+  automatisch zu dauerhaften Airport-Regeln.
+- Workflow 2 und Workflow 5 melden zusätzlich `regime_memory_snapshots`. Die
+  Datenbanktabelle wird beim ersten Start automatisch angelegt; kein Backfill ist
+  erforderlich und bestehende Daten bleiben erhalten.
 
 Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grünen Test
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über

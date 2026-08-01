@@ -25,6 +25,20 @@ class FillEstimate:
     fully_fillable: bool
 
 
+@dataclass(frozen=True)
+class ShadowBasket:
+    market_ids: tuple[str, ...]
+    bucket_labels: tuple[str, ...]
+    fair_probability: float
+    total_cost: float
+    net_edge: float
+    top_model_bucket: str
+    top_model_included: bool
+    middle_bucket_excluded: bool
+    status: str
+    warnings: tuple[str, ...]
+
+
 def taker_fee_per_share(price: float, fee_rate: float = 0.05) -> float:
     """Return Polymarket's dynamic taker fee for one share at ``price``."""
     probability = max(0.0, min(1.0, float(price)))
@@ -303,3 +317,73 @@ def evaluate_shadow_markets(
             }
         )
     return rows
+
+
+def build_shadow_basket(
+    rows: list[dict],
+    markets: pd.DataFrame,
+    *,
+    minimum_individual_net_edge: float = 0.05,
+) -> ShadowBasket | None:
+    """Combine simultaneous executable bucket edges into one event-level paper basket."""
+    if not rows or markets.empty:
+        return None
+    frame = pd.DataFrame(rows)
+    candidates = frame[
+        frame.fully_fillable.fillna(False).astype(bool)
+        & frame.all_in_price.notna()
+        & frame.net_edge.notna()
+        & (frame.net_edge >= float(minimum_individual_net_edge))
+        & (frame.status == "SHADOW BET")
+    ].copy()
+    if len(candidates) < 2:
+        return None
+    market_order = markets.copy()
+
+    def order_value(row: pd.Series) -> float:
+        if pd.notna(row.get("bucket_low_c")):
+            return float(row.bucket_low_c)
+        if pd.notna(row.get("bucket_high_c")):
+            return float(row.bucket_high_c) - 1000.0
+        return 0.0
+
+    market_order["_order"] = market_order.apply(order_value, axis=1)
+    market_order = market_order.sort_values(["_order", "bucket_label"]).reset_index(drop=True)
+    selected_ids = set(candidates.market_id.astype(str))
+    positions = [
+        index
+        for index, market_id in enumerate(market_order.market_id.astype(str))
+        if market_id in selected_ids
+    ]
+    middle_bucket_excluded = any(
+        str(market_order.iloc[index].market_id) not in selected_ids
+        for index in range(min(positions), max(positions) + 1)
+    )
+    top = frame.sort_values("fair_probability", ascending=False).iloc[0]
+    top_label = str(top.bucket_label)
+    top_included = str(top.market_id) in selected_ids
+    warnings: list[str] = []
+    if not top_included:
+        warnings.append("Most likely bucket excluded")
+    if middle_bucket_excluded:
+        warnings.append("Middle bucket excluded")
+    fair_probability = float(candidates.fair_probability.sum())
+    total_cost = float(candidates.all_in_price.sum())
+    safety_total = float(
+        pd.to_numeric(candidates.safety_margin, errors="coerce").fillna(0.0).sum()
+    )
+    net_edge = fair_probability - total_cost - safety_total
+    if total_cost >= 1.0:
+        warnings.append("Basket costs at least the maximum $1 payout")
+    return ShadowBasket(
+        market_ids=tuple(candidates.market_id.astype(str)),
+        bucket_labels=tuple(candidates.bucket_label.astype(str)),
+        fair_probability=fair_probability,
+        total_cost=total_cost,
+        net_edge=net_edge,
+        top_model_bucket=top_label,
+        top_model_included=top_included,
+        middle_bucket_excluded=middle_bucket_excluded,
+        status="SHADOW BASKET" if not warnings and net_edge >= 0.05 else "BASKET WATCH",
+        warnings=tuple(warnings),
+    )

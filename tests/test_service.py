@@ -4,8 +4,19 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
-from weatherman.db import Base, Forecast, SignalSnapshot, StrategySnapshot
+from weatherman.db import (
+    Base,
+    BasketSnapshot,
+    Forecast,
+    ForecastVariantSnapshot,
+    RegimeMemorySnapshot,
+    SignalSnapshot,
+    StrategySnapshot,
+)
 from weatherman.service import (
+    _record_forecast_variants,
+    _record_regime_memory_snapshot,
+    _record_shadow_evaluations,
     _record_signal_snapshots,
     _record_strategy_snapshots,
     _source_refresh_due,
@@ -240,6 +251,181 @@ def test_consensus_strategy_journal_chooses_model_mode_without_edge_filter():
         assert strategy.strategy == "Raw model mean"
         assert strategy.model_bucket_c == 35
         assert strategy.buy_price == 0.72
+
+
+def test_collection_journals_champion_and_same_snapshot_challenger():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine, expire_on_commit=False)
+    captured_at = datetime(2026, 7, 30, 10, tzinfo=timezone.utc)
+    nowcast = SimpleNamespace(
+        final_forecast_mean=38.4,
+        final_forecast_spread=1.1,
+        probabilities={37: 0.2, 38: 0.5, 39: 0.3},
+        forecast_confidence=72,
+        day_status=SimpleNamespace(phase="heating"),
+        challenger_variants={
+            "Without Persistent Hot": {
+                "factor": "persistent_hot",
+                "forecast_mean_c": 37.8,
+                "spread_c": 0.8,
+                "probabilities": {37: 0.4, 38: 0.5, 39: 0.1},
+                "forecast_confidence": 80,
+            }
+        },
+    )
+    with session_factory() as session:
+        stored = _record_forecast_variants(
+            session,
+            "LEMD",
+            {"timezone": "Europe/Madrid"},
+            date(2026, 7, 30),
+            captured_at,
+            nowcast,
+        )
+        session.commit()
+        rows = list(
+            session.scalars(
+                select(ForecastVariantSnapshot).order_by(
+                    ForecastVariantSnapshot.variant
+                )
+            )
+        )
+        assert stored == 2
+        assert {row.variant for row in rows} == {
+            "Champion",
+            "Without Persistent Hot",
+        }
+        assert len({row.captured_at for row in rows}) == 1
+
+
+def test_collection_journals_explainable_regime_memory_snapshot():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine, expire_on_commit=False)
+    captured_at = datetime(2026, 8, 1, 10, tzinfo=timezone.utc)
+    memory = SimpleNamespace(
+        status="WATCH",
+        label="Learned Analog Pattern",
+        confidence=67,
+        analog_count=3,
+        best_similarity=0.82,
+        center_adjustment_c=0.27,
+        suggested_forecast_c=39.27,
+        suggested_spread_c=1.0,
+        shadow_only=True,
+        applied_to_champion=False,
+        promotion=SimpleNamespace(
+            status="SHADOW",
+            eligible=False,
+            oos_days=0,
+        ),
+        regimes=(
+            SimpleNamespace(
+                name="Learned Analog Pattern",
+                status="WATCH",
+                confidence=67,
+                source="learned",
+                champion_effect="Challenger only",
+                supports=("three similar days",),
+                contradictions=("OOS gate not met",),
+                explanation="Stored without changing the Champion.",
+            ),
+        ),
+        analogs=(
+            SimpleNamespace(
+                target_date="2026-07-31",
+                captured_at="2026-07-31T10:00:00+00:00",
+                similarity=0.82,
+                forecast_c=38.0,
+                actual_c=39.0,
+                residual_c=1.0,
+                matched_on=("heating rate", "wind direction"),
+            ),
+        ),
+        pro_signals=("three similar days",),
+        contra_signals=("OOS gate not met",),
+        explanation="The learned pattern remains Challenger-only.",
+        feature_signature={"heating_rate_surprise_cph": 0.4},
+    )
+    with session_factory() as session:
+        stored = _record_regime_memory_snapshot(
+            session,
+            "LEMD",
+            {"timezone": "Europe/Madrid"},
+            date(2026, 8, 1),
+            captured_at,
+            SimpleNamespace(regime_memory=memory),
+        )
+        session.commit()
+        row = session.scalar(select(RegimeMemorySnapshot))
+        assert stored == 1
+        assert row is not None
+        assert row.shadow_only
+        assert not row.applied_to_champion
+        assert row.analog_count == 3
+        assert "heating rate" in row.analogs_json
+
+
+def test_shadow_collection_journals_one_event_level_basket():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine, expire_on_commit=False)
+    captured_at = datetime(2026, 7, 30, 10, tzinfo=timezone.utc)
+    fair = {25: 0.15, 26: 0.20, 27: 0.35, 28: 0.20, 29: 0.10}
+    prices = {25: 0.05, 26: 0.10, 27: 0.40, 28: 0.10, 29: 0.15}
+    market_rows = [
+        {
+            "target_date": date(2026, 7, 30),
+            "event_slug": "ankara-temperature",
+            "market_id": f"m{bucket}",
+            "token_id": f"t{bucket}",
+            "bucket_label": f"{bucket}°C",
+            "bucket_low_c": bucket,
+            "bucket_high_c": bucket,
+            "yes_price": price,
+            "best_bid": max(0.01, price - 0.01),
+            "best_ask": price,
+            "closed": False,
+            "yes_won": False,
+            "captured_at": captured_at,
+        }
+        for bucket, price in prices.items()
+    ]
+    books = {
+        f"t{bucket}": {
+            "observed_at": captured_at,
+            "hash": f"book-{bucket}",
+            "bids": [{"price": str(max(0.01, price - 0.01)), "size": "1000"}],
+            "asks": [{"price": str(price), "size": "1000"}],
+            "min_order_size": "5",
+        }
+        for bucket, price in prices.items()
+    }
+    nowcast = SimpleNamespace(
+        probabilities=fair,
+        forecast_confidence=85,
+        day_status=SimpleNamespace(is_locked=False, phase="heating"),
+        metar_pending=False,
+        forecast_data_stale=False,
+    )
+    with session_factory() as session:
+        shadow_count, basket_count = _record_shadow_evaluations(
+            session,
+            "LTAC",
+            {"timezone": "Europe/Istanbul"},
+            market_rows,
+            books,
+            nowcast,
+        )
+        session.commit()
+        basket = session.scalar(select(BasketSnapshot))
+        assert shadow_count == 5
+        assert basket_count == 1
+        assert basket is not None
+        assert basket.status == "BASKET WATCH"
+        assert not basket.top_model_included
+        assert basket.middle_bucket_excluded
 
 
 def test_airport_specific_critical_window_uses_local_time():

@@ -60,7 +60,7 @@ class LiveNowcast:
     bias_corrected_equal_spread: float
     stage_probabilities: dict[str, dict[int, float]]
     adjustment_contributions: dict[str, float]
-    live_features: dict[str, float | None]
+    live_features: dict[str, object]
     metar_conditioned_probabilities: dict[int, float]
     metar_conditioned_mean: float
     metar_conditioned_spread: float
@@ -72,6 +72,8 @@ class LiveNowcast:
     hours_to_peak: float | None
     metar_pending: bool
     metar_due_at: datetime | None
+    challenger_variants: dict[str, dict[str, object]]
+    regime_memory: object | None = None
 
 
 def local_observations(
@@ -394,14 +396,142 @@ def rapid_heat_ramp_regime(
     }
 
 
+def persistent_hot_regime(
+    actuals: pd.DataFrame,
+    scored: pd.DataFrame,
+    *,
+    target: date,
+    forecast_mean: float,
+    taf_guidance: TafGuidance | None,
+    profile: dict | None = None,
+) -> dict[str, float | bool | None]:
+    """Detect continuation of established heat even when models no longer rise day-on-day."""
+    configured = (profile or {}).get("persistent_hot") or {}
+    defaults: dict[str, float | bool | None] = {
+        "active": False,
+        "latest_actual_c": None,
+        "recent_baseline_c": None,
+        "latest_anomaly_c": None,
+        "forecast_vs_latest_c": None,
+        "recent_warm_error_c": None,
+        "taf_support": False,
+        "clear_support": False,
+        "bias_multiplier": 1.0,
+        "spread_multiplier": 1.0,
+        "confidence_multiplier": 1.0,
+    }
+    if not configured.get("enabled", False) or actuals.empty:
+        return defaults
+    frame = actuals.copy()
+    frame["target_date"] = pd.to_datetime(frame.target_date).dt.date
+    frame = (
+        frame[frame.target_date < target]
+        .sort_values("target_date")
+        .drop_duplicates("target_date", keep="last")
+        .tail(15)
+    )
+    if frame.empty:
+        return defaults
+    latest = frame.iloc[-1]
+    if (target - latest.target_date).days > 2:
+        return defaults
+    latest_actual = float(latest.max_temp_c)
+    baseline_values = frame.iloc[:-1].max_temp_c.astype(float).tail(14)
+    recent_baseline = (
+        float(baseline_values.median()) if not baseline_values.empty else latest_actual
+    )
+    anomaly = latest_actual - recent_baseline
+    forecast_vs_latest = float(forecast_mean) - latest_actual
+
+    recent_warm_error = None
+    if not scored.empty:
+        errors = scored.copy()
+        errors["target_date"] = pd.to_datetime(errors.target_date).dt.date
+        errors = errors[
+            (errors.target_date < target)
+            & (errors.target_date >= target - timedelta(days=5))
+        ]
+        if not errors.empty:
+            # Forecast minus actual: a negative value means the station finished warmer.
+            recent_warm_error = float(errors.groupby("target_date").error.median().tail(3).median())
+
+    taf_support = bool(
+        taf_guidance is not None
+        and taf_guidance.temperature_influence_active
+        and taf_guidance.max_temp_c is not None
+        and taf_guidance.max_temp_c
+        >= max(
+            float(forecast_mean) + float(configured.get("minimum_taf_gap_c", 1.0)),
+            latest_actual - float(configured.get("taf_below_latest_tolerance_c", 0.5)),
+        )
+    )
+    clear_support = bool(
+        taf_guidance is not None
+        and taf_guidance.cloud_risk == "No significant cloud near peak"
+        and not taf_guidance.precipitation_risk
+        and not taf_guidance.thunderstorm_risk
+    )
+    hot_yesterday = bool(
+        latest_actual >= float(configured.get("minimum_latest_actual_c", 37.0))
+        or anomaly >= float(configured.get("minimum_latest_anomaly_c", 3.0))
+    )
+    forecast_still_hot = forecast_vs_latest >= -float(
+        configured.get("maximum_forecast_drop_c", 2.5)
+    )
+    repeated_warm_error = bool(
+        recent_warm_error is not None
+        and recent_warm_error <= -float(configured.get("minimum_recent_warm_error_c", 0.6))
+    )
+    confirmations = sum(
+        [
+            bool(forecast_still_hot),
+            bool(taf_support),
+            bool(clear_support),
+            bool(repeated_warm_error),
+        ]
+    )
+    active = hot_yesterday and confirmations >= int(
+        configured.get("minimum_confirmations", 2)
+    )
+    result = {
+        **defaults,
+        "active": active,
+        "latest_actual_c": latest_actual,
+        "recent_baseline_c": recent_baseline,
+        "latest_anomaly_c": anomaly,
+        "forecast_vs_latest_c": forecast_vs_latest,
+        "recent_warm_error_c": recent_warm_error,
+        "taf_support": taf_support,
+        "clear_support": clear_support,
+    }
+    if not active:
+        return result
+    return {
+        **result,
+        "bias_multiplier": max(
+            0.0,
+            min(1.0, float(configured.get("positive_bias_multiplier", 0.20))),
+        ),
+        "spread_multiplier": max(
+            1.0,
+            min(1.6, float(configured.get("spread_multiplier", 1.30))),
+        ),
+        "confidence_multiplier": max(
+            0.5,
+            min(1.0, float(configured.get("confidence_multiplier", 0.88))),
+        ),
+    }
+
+
 def regional_heat_cluster(
     current: pd.DataFrame,
     *,
     profile: dict | None,
-    rapid_heat_active: bool,
+    heat_regime_active: bool,
+    persistent_hot_active: bool,
     taf_clear: bool,
 ) -> dict[str, float | bool | None | pd.Series]:
-    """Protect a coherent warm regional-model cluster during a rapid heat ramp."""
+    """Protect a coherent warm regional-model cluster during an active heat regime."""
     defaults: dict[str, float | bool | None | pd.Series] = {
         "active": False,
         "regional_mean_c": None,
@@ -410,9 +540,17 @@ def regional_heat_cluster(
         "multiplier": 1.0,
         "members": pd.Series(False, index=current.index),
     }
-    if not profile or not profile.get("enabled", True) or current.empty or not rapid_heat_active:
+    if not profile or not profile.get("enabled", True) or current.empty or not heat_regime_active:
         return defaults
-    configured_models = {str(value) for value in profile.get("regional_models", [])}
+    persistent = profile.get("persistent_hot") or {}
+    configured_models = {
+        str(value)
+        for value in (
+            persistent.get("regional_models", [])
+            if persistent_hot_active and persistent.get("regional_models")
+            else profile.get("regional_models", [])
+        )
+    }
     if not configured_models:
         return defaults
     members = current.model.astype(str).isin(configured_models)
@@ -430,7 +568,11 @@ def regional_heat_cluster(
             "mean_gap_c": gap,
             "members": members,
         }
-    multiplier = float(profile.get("regional_weight_multiplier", 1.35))
+    multiplier = float(
+        persistent.get("regional_weight_multiplier", 1.50)
+        if persistent_hot_active
+        else profile.get("regional_weight_multiplier", 1.35)
+    )
     if not taf_clear:
         multiplier = min(multiplier, float(profile.get("unconfirmed_multiplier", 1.20)))
     return {
@@ -545,6 +687,352 @@ def temperature_anchor_profile(
     if streak >= 3 and recent_median is not None and abs(recent_median) >= 0.40:
         gain = min(0.88, gain + 0.15)
     return effective, gain, streak, recent_median
+
+
+def _direction_in_sectors(direction: float, sectors: object) -> bool:
+    value = float(direction) % 360
+    for sector in sectors or []:
+        if not isinstance(sector, (list, tuple)) or len(sector) != 2:
+            continue
+        start, end = float(sector[0]) % 360, float(sector[1]) % 360
+        if start <= end and start <= value <= end:
+            return True
+        if start > end and (value >= start or value <= end):
+            return True
+    return False
+
+
+def _latest_hourly_paths(
+    hourly: pd.DataFrame,
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+) -> pd.DataFrame:
+    paths = _hourly_for_target(hourly, timezone_name, target, as_of)
+    if paths.empty:
+        return paths
+    paths = paths.sort_values("run_at").drop_duplicates(["model", "valid_at"], keep="last")
+    latest_runs = paths.groupby("model").run_at.transform("max")
+    return paths[paths.run_at == latest_runs].copy()
+
+
+def _path_expected_temperature(
+    paths: pd.DataFrame,
+    timestamp: pd.Timestamp,
+    *,
+    maximum_distance_minutes: float = 50,
+) -> float | None:
+    values: list[float] = []
+    for _, model_frame in paths.groupby("model"):
+        distance = (model_frame.valid_at - timestamp).abs()
+        if distance.empty:
+            continue
+        nearest = distance.idxmin()
+        if distance.loc[nearest] <= timedelta(minutes=maximum_distance_minutes):
+            values.append(float(model_frame.loc[nearest, "temp_c"]))
+    return float(pd.Series(values).median()) if values else None
+
+
+def phase_vs_amplitude_regime(
+    hourly: pd.DataFrame,
+    observations: pd.DataFrame,
+    *,
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+    hours_to_peak: float | None,
+    profile: dict | None,
+) -> dict[str, float | bool | None | str]:
+    """Separate an early/late model curve from a persistent vertical level error."""
+    configured = profile or {}
+    defaults: dict[str, float | bool | None | str] = {
+        "active": False,
+        "classification": "insufficient data",
+        "phase_shift_hours": 0.0,
+        "same_time_residual_c": None,
+        "level_residual_after_shift_c": None,
+        "baseline_rmse_c": None,
+        "phase_rmse_c": None,
+        "anchor_blend": 0.0,
+    }
+    if not configured.get("enabled", False) or len(observations) < 3:
+        return defaults
+    if hours_to_peak is not None and hours_to_peak <= float(
+        configured.get("minimum_hours_to_peak", 1.0)
+    ):
+        return {**defaults, "classification": "near peak · level retained"}
+    paths = _latest_hourly_paths(hourly, timezone_name, target, as_of)
+    if paths.empty:
+        return defaults
+    frame = observations.sort_values("observed_at").copy()
+    latest_at = pd.Timestamp(frame.observed_at.iloc[-1])
+    frame = frame[
+        frame.observed_at
+        >= latest_at - timedelta(hours=float(configured.get("window_hours", 3.5)))
+    ].tail(7)
+    if len(frame) < int(configured.get("minimum_reports", 3)):
+        return defaults
+
+    def residuals_for_shift(shift_hours: float) -> list[float]:
+        values: list[float] = []
+        for observation in frame.itertuples():
+            expected = _path_expected_temperature(
+                paths,
+                pd.Timestamp(observation.observed_at) + timedelta(hours=shift_hours),
+            )
+            if expected is not None:
+                values.append(float(observation.temp_c) - expected)
+        return values
+
+    same_time = residuals_for_shift(0.0)
+    minimum_reports = int(configured.get("minimum_reports", 3))
+    if len(same_time) < minimum_reports:
+        return defaults
+
+    def rmse(values: list[float]) -> float:
+        return math.sqrt(sum(value * value for value in values) / len(values))
+
+    baseline_rmse = rmse(same_time)
+    same_time_residual = float(pd.Series(same_time).median())
+    maximum_shift = float(configured.get("maximum_phase_shift_hours", 3.0))
+    step = max(0.25, float(configured.get("phase_step_hours", 0.5)))
+    shift_count = int(round(maximum_shift / step))
+    candidates: list[tuple[float, float, list[float]]] = []
+    for index in range(-shift_count, shift_count + 1):
+        shift = index * step
+        shifted_residuals = residuals_for_shift(shift)
+        if len(shifted_residuals) >= minimum_reports:
+            candidates.append((rmse(shifted_residuals), shift, shifted_residuals))
+    if not candidates:
+        return defaults
+    best_rmse, best_shift, best_residuals = min(
+        candidates,
+        key=lambda item: (item[0], abs(item[1])),
+    )
+    level_after_shift = float(pd.Series(best_residuals).median())
+    minimum_shift = float(configured.get("minimum_phase_shift_hours", 0.75))
+    minimum_gain = float(configured.get("minimum_rmse_gain_c", 0.30))
+    maximum_phase_rmse = float(configured.get("maximum_phase_rmse_c", 1.0))
+    active = bool(
+        abs(best_shift) >= minimum_shift
+        and baseline_rmse - best_rmse >= minimum_gain
+        and best_rmse <= maximum_phase_rmse
+    )
+    if not active:
+        return {
+            **defaults,
+            "classification": "level/amplitude",
+            "same_time_residual_c": same_time_residual,
+            "level_residual_after_shift_c": level_after_shift,
+            "baseline_rmse_c": baseline_rmse,
+            "phase_rmse_c": best_rmse,
+        }
+    return {
+        "active": True,
+        "classification": "phase-dominant",
+        "phase_shift_hours": float(best_shift),
+        "same_time_residual_c": same_time_residual,
+        "level_residual_after_shift_c": level_after_shift,
+        "baseline_rmse_c": baseline_rmse,
+        "phase_rmse_c": best_rmse,
+        "anchor_blend": max(
+            0.0,
+            min(0.90, float(configured.get("phase_anchor_blend", 0.75))),
+        ),
+    }
+
+
+def _recent_temperature_rate(frame: pd.DataFrame) -> float | None:
+    if len(frame) < 2:
+        return None
+    elapsed = (
+        pd.Timestamp(frame.observed_at.iloc[-1]) - pd.Timestamp(frame.observed_at.iloc[0])
+    ).total_seconds() / 3600
+    if elapsed <= 0:
+        return None
+    return (float(frame.temp_c.iloc[-1]) - float(frame.temp_c.iloc[0])) / elapsed
+
+
+def maritime_advection_regime(
+    observations: pd.DataFrame,
+    *,
+    profile: dict | None,
+) -> dict[str, float | bool | None]:
+    """Detect an early North-Sea-type cooling intrusion from observed wind changes."""
+    configured = profile or {}
+    defaults: dict[str, float | bool | None] = {
+        "active": False,
+        "temperature_rate_cph": None,
+        "wind_speed_kph": None,
+        "wind_speed_change_kph": None,
+        "maritime_fraction": None,
+        "entered_maritime_sector": False,
+        "center_adjustment_c": 0.0,
+        "positive_factor_multiplier": 1.0,
+        "remaining_rise_cap_c": None,
+        "confidence_multiplier": 1.0,
+    }
+    minimum_reports = int(configured.get("minimum_reports", 3))
+    if not configured.get("enabled", False) or len(observations) < minimum_reports:
+        return defaults
+    frame = observations.sort_values("observed_at").copy()
+    latest_at = pd.Timestamp(frame.observed_at.iloc[-1])
+    frame = frame[
+        frame.observed_at
+        >= latest_at - timedelta(hours=float(configured.get("window_hours", 3.0)))
+    ]
+    usable = frame.dropna(subset=["wind_kph", "wind_direction"])
+    if len(usable) < minimum_reports:
+        return defaults
+    in_sector = usable.wind_direction.astype(float).map(
+        lambda value: _direction_in_sectors(value, configured.get("maritime_sectors"))
+    )
+    recent_fraction = float(in_sector.tail(minimum_reports).mean())
+    latest_speed = float(usable.wind_kph.iloc[-1])
+    speed_change = latest_speed - float(usable.wind_kph.iloc[0])
+    rate = _recent_temperature_rate(frame)
+    entered_sector = bool(not in_sector.iloc[0] and in_sector.iloc[-1])
+    plateau = rate is not None and rate <= float(
+        configured.get("maximum_temperature_rate_cph", 0.20)
+    )
+    enough_wind = latest_speed >= float(configured.get("minimum_wind_kph", 14.0))
+    strengthened = speed_change >= float(configured.get("minimum_wind_increase_kph", 2.0))
+    strong = latest_speed >= float(configured.get("strong_wind_kph", 18.0))
+    active = bool(
+        recent_fraction >= float(configured.get("minimum_maritime_fraction", 2 / 3))
+        and plateau
+        and enough_wind
+        and (entered_sector or strengthened or strong)
+    )
+    result = {
+        **defaults,
+        "active": active,
+        "temperature_rate_cph": rate,
+        "wind_speed_kph": latest_speed,
+        "wind_speed_change_kph": speed_change,
+        "maritime_fraction": recent_fraction,
+        "entered_maritime_sector": entered_sector,
+    }
+    if not active:
+        return result
+    cooling_strength = max(0.0, -(rate or 0.0))
+    adjustment = min(
+        float(configured.get("maximum_cooling_adjustment_c", 0.65)),
+        float(configured.get("base_cooling_adjustment_c", 0.30))
+        + 0.15 * cooling_strength
+        + 0.015 * max(0.0, latest_speed - float(configured.get("minimum_wind_kph", 14.0))),
+    )
+    return {
+        **result,
+        "center_adjustment_c": -adjustment,
+        "positive_factor_multiplier": max(
+            0.0,
+            min(1.0, float(configured.get("positive_factor_multiplier", 0.25))),
+        ),
+        "remaining_rise_cap_c": max(
+            0.0,
+            float(configured.get("remaining_rise_cap_c", 0.40)),
+        ),
+        "confidence_multiplier": max(
+            0.5,
+            min(1.0, float(configured.get("confidence_multiplier", 0.90))),
+        ),
+    }
+
+
+def maritime_low_range_regime(
+    observations: pd.DataFrame,
+    *,
+    local_now: datetime,
+    profile: dict | None,
+) -> dict[str, float | bool | None]:
+    """Detect a stable strong sea-wind day whose daily temperature range is capped."""
+    configured = profile or {}
+    defaults: dict[str, float | bool | None] = {
+        "active": False,
+        "temperature_rate_cph": None,
+        "recent_range_c": None,
+        "daily_range_c": None,
+        "median_wind_kph": None,
+        "sea_wind_fraction": None,
+        "positive_factor_multiplier": 1.0,
+        "spread_multiplier": 1.0,
+        "remaining_rise_cap_c": None,
+        "confidence_multiplier": 1.0,
+    }
+    minimum_reports = int(configured.get("minimum_reports", 4))
+    if (
+        not configured.get("enabled", False)
+        or len(observations) < minimum_reports
+        or local_now.hour < int(configured.get("minimum_local_hour", 10))
+    ):
+        return defaults
+    frame = observations.sort_values("observed_at").copy()
+    latest_at = pd.Timestamp(frame.observed_at.iloc[-1])
+    recent = frame[
+        frame.observed_at
+        >= latest_at - timedelta(hours=float(configured.get("window_hours", 4.0)))
+    ]
+    usable = recent.dropna(subset=["wind_kph", "wind_direction"])
+    if len(usable) < minimum_reports:
+        return defaults
+    sea_wind = usable.wind_direction.astype(float).map(
+        lambda value: _direction_in_sectors(value, configured.get("sea_wind_sectors"))
+    )
+    fraction = float(sea_wind.mean())
+    median_wind = float(usable.wind_kph.astype(float).median())
+    recent_range = float(recent.temp_c.max() - recent.temp_c.min())
+    daily_range = float(frame.temp_c.max() - frame.temp_c.min())
+    rate = _recent_temperature_rate(recent)
+    active = bool(
+        fraction >= float(configured.get("minimum_sea_wind_fraction", 0.80))
+        and median_wind >= float(configured.get("minimum_wind_kph", 28.0))
+        and recent_range <= float(configured.get("maximum_recent_range_c", 1.5))
+        and daily_range <= float(configured.get("maximum_daily_range_c", 4.5))
+        and rate is not None
+        and abs(rate) <= float(configured.get("maximum_abs_temperature_rate_cph", 0.30))
+    )
+    result = {
+        **defaults,
+        "active": active,
+        "temperature_rate_cph": rate,
+        "recent_range_c": recent_range,
+        "daily_range_c": daily_range,
+        "median_wind_kph": median_wind,
+        "sea_wind_fraction": fraction,
+    }
+    if not active:
+        return result
+    return {
+        **result,
+        "positive_factor_multiplier": max(
+            0.0,
+            min(1.0, float(configured.get("positive_factor_multiplier", 0.15))),
+        ),
+        "spread_multiplier": max(
+            0.70,
+            min(1.0, float(configured.get("spread_multiplier", 0.85))),
+        ),
+        "remaining_rise_cap_c": max(
+            0.0,
+            float(configured.get("remaining_rise_cap_c", 0.40)),
+        ),
+        "confidence_multiplier": max(
+            0.5,
+            min(1.0, float(configured.get("confidence_multiplier", 0.95))),
+        ),
+    }
+
+
+def _damp_positive_contributions(
+    contributions: dict[str, float],
+    multiplier: float,
+) -> dict[str, float]:
+    bounded = max(0.0, min(1.0, float(multiplier)))
+    return {
+        name: value * bounded if value > 0 else value
+        for name, value in contributions.items()
+    }
 
 
 def dewpoint_trend(observations: pd.DataFrame) -> float | None:
@@ -876,7 +1364,12 @@ def build_live_nowcast(
     critical_window_local: list[str] | tuple[str, ...] | None = None,
     post_convective_profile: dict | None = None,
     heat_regime_profile: dict | None = None,
+    phase_amplitude_profile: dict | None = None,
+    maritime_advection_profile: dict | None = None,
+    maritime_low_range_profile: dict | None = None,
     maximum_model_age_minutes: int = 90,
+    _disabled_factors: frozenset[str] = frozenset(),
+    _build_challengers: bool = True,
 ) -> LiveNowcast | None:
     if forecasts.empty:
         return None
@@ -950,18 +1443,38 @@ def build_live_nowcast(
         observed_cooling=False,
     )
     rapid_heat = rapid_heat_ramp_regime(
-        prior_actuals,
+        prior_actuals if "rapid_heat_ramp" not in _disabled_factors else pd.DataFrame(),
         target=target,
         forecast_mean=raw_equal.mean,
         profile=heat_regime_profile,
     )
+    persistent_hot = persistent_hot_regime(
+        (
+            prior_actuals
+            if "persistent_hot" not in _disabled_factors
+            else pd.DataFrame()
+        ),
+        d1_scored,
+        target=target,
+        forecast_mean=raw_equal.mean,
+        taf_guidance=preliminary_taf,
+        profile=heat_regime_profile,
+    )
     current["historical_d1_bias"] = current.model.map(bias_map).fillna(0).astype(float)
     current["d1_bias"] = current.historical_d1_bias
-    if rapid_heat["active"]:
+    active_bias_multipliers = [
+        float(regime["bias_multiplier"])
+        for regime in (rapid_heat, persistent_hot)
+        if regime["active"]
+    ]
+    effective_bias_multiplier = (
+        min(active_bias_multipliers) if active_bias_multipliers else 1.0
+    )
+    if effective_bias_multiplier < 1.0:
         positive_bias = current.d1_bias > 0
         current.loc[positive_bias, "d1_bias"] = (
             current.loc[positive_bias, "d1_bias"]
-            * float(rapid_heat["bias_multiplier"])
+            * effective_bias_multiplier
         )
     current["corrected_max"] = current.max_temp_c - current.d1_bias
     current["performance_weight"] = (
@@ -978,8 +1491,13 @@ def build_live_nowcast(
     )
     cluster = regional_heat_cluster(
         current,
-        profile=heat_regime_profile,
-        rapid_heat_active=bool(rapid_heat["active"]),
+        profile=(
+            heat_regime_profile
+            if "regional_cluster" not in _disabled_factors
+            else None
+        ),
+        heat_regime_active=bool(rapid_heat["active"] or persistent_hot["active"]),
+        persistent_hot_active=bool(persistent_hot["active"]),
         taf_clear=taf_clear,
     )
     if cluster["active"]:
@@ -1024,6 +1542,14 @@ def build_live_nowcast(
         current.d1_bias.tolist(),
         weights=current.model_weight.tolist(),
     )
+    active_spread_multipliers = [
+        float(regime["spread_multiplier"])
+        for regime in (rapid_heat, persistent_hot)
+        if regime["active"]
+    ]
+    heat_spread_multiplier = (
+        max(active_spread_multipliers) if active_spread_multipliers else 1.0
+    )
     corrected = (
         consensus(
             current.max_temp_c.tolist(),
@@ -1031,13 +1557,22 @@ def build_live_nowcast(
             weights=current.model_weight.tolist(),
             sigma_floor=(
                 corrected_unbroadened.spread
-                * float(rapid_heat["spread_multiplier"])
+                * heat_spread_multiplier
             ),
         )
-        if rapid_heat["active"]
+        if heat_spread_multiplier > 1.0
         else corrected_unbroadened
     )
-    rapid_heat_adjustment = bias_relaxed_baseline.mean - full_bias_baseline.mean
+    rapid_heat_adjustment = (
+        bias_relaxed_baseline.mean - full_bias_baseline.mean
+        if rapid_heat["active"]
+        else 0.0
+    )
+    persistent_hot_adjustment = (
+        bias_relaxed_baseline.mean - full_bias_baseline.mean
+        if persistent_hot["active"]
+        else 0.0
+    )
     regional_cluster_adjustment = corrected.mean - bias_relaxed_baseline.mean
 
     obs_today = local_observations(observations, timezone_name, target, as_of)
@@ -1232,11 +1767,53 @@ def build_live_nowcast(
         temperature_anomaly,
         hours_to_peak,
     )
+    unphased_temperature_residual = effective_temperature_residual
+    phase_amplitude = phase_vs_amplitude_regime(
+        hourly,
+        obs_today,
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        hours_to_peak=hours_to_peak,
+        profile=(
+            phase_amplitude_profile
+            if "phase_vs_amplitude" not in _disabled_factors
+            else None
+        ),
+    )
+    if phase_amplitude["active"] and effective_temperature_residual is not None:
+        blend = float(phase_amplitude["anchor_blend"])
+        shifted_level = float(phase_amplitude["level_residual_after_shift_c"])
+        effective_temperature_residual = (
+            (1.0 - blend) * effective_temperature_residual
+            + blend * shifted_level
+        )
+        shift_hours = float(phase_amplitude["phase_shift_hours"])
+        if peak_at is not None:
+            peak_at = peak_at - timedelta(hours=shift_hours)
+            hours_to_peak = (
+                peak_at - as_of_utc.to_pydatetime()
+            ).total_seconds() / 3600
+    phase_anchor_delta = (
+        temperature_anchor_gain
+        * (
+            float(effective_temperature_residual)
+            - float(unphased_temperature_residual)
+        )
+        if phase_amplitude["active"]
+        and effective_temperature_residual is not None
+        and unphased_temperature_residual is not None
+        else 0.0
+    )
     observed_dewpoint_trend = dewpoint_trend(obs_today)
     post_convective = post_convective_uncertainty(
         observations,
         as_of,
-        post_convective_profile,
+        (
+            post_convective_profile
+            if "post_convective_uncertainty" not in _disabled_factors
+            else None
+        ),
     )
     post_convective_active = bool(
         post_convective["active"] and target == local_now.date()
@@ -1262,6 +1839,25 @@ def build_live_nowcast(
         obs_today,
         model_cloud_cover=cloud_cover,
         taf_guidance=taf_guidance,
+    )
+    if "clear_sky_override" in _disabled_factors:
+        clear_sky_override, clear_sky_signal = 0.0, None
+    maritime_advection = maritime_advection_regime(
+        obs_today,
+        profile=(
+            maritime_advection_profile
+            if "maritime_advection" not in _disabled_factors
+            else None
+        ),
+    )
+    maritime_low_range = maritime_low_range_regime(
+        obs_today,
+        local_now=local_now,
+        profile=(
+            maritime_low_range_profile
+            if "maritime_low_range" not in _disabled_factors
+            else None
+        ),
     )
 
     def limited(value: float | None, lower: float, upper: float) -> float:
@@ -1340,11 +1936,25 @@ def build_live_nowcast(
         "clear_sky_override": (
             clear_sky_override if live_observation_available else 0.0
         ),
+        "maritime_advection": 0.0,
     }
     contributions = _protect_persistent_anchor(
         contributions,
         anchor_streak=temperature_anchor_streak,
     )
+    if live_observation_available and maritime_advection["active"]:
+        contributions = _damp_positive_contributions(
+            contributions,
+            float(maritime_advection["positive_factor_multiplier"]),
+        )
+        contributions["maritime_advection"] = float(
+            maritime_advection["center_adjustment_c"]
+        )
+    if live_observation_available and maritime_low_range["active"]:
+        contributions = _damp_positive_contributions(
+            contributions,
+            float(maritime_low_range["positive_factor_multiplier"]),
+        )
     adjustments = _scaled_live_adjustments(contributions)
     live_adjustment = adjustments["total"]
     heat = HeatSpikeAssessment(
@@ -1382,6 +1992,38 @@ def build_live_nowcast(
             ),
             *(
                 [
+                    "Persistent-hot regime: established station heat, TAF guidance "
+                    "and the warm regional-model cluster weaken normal warm-bias removal"
+                ]
+                if persistent_hot["active"]
+                else []
+            ),
+            *(
+                [
+                    "Phase-dominant METAR path: the model curve is shifted in time "
+                    "instead of transferring the full morning residual to Tmax"
+                ]
+                if phase_amplitude["active"]
+                else []
+            ),
+            *(
+                [
+                    "Maritime advection override: strengthening sea-sector wind and "
+                    "a temperature plateau reduce the remaining heating tail"
+                ]
+                if maritime_advection["active"]
+                else []
+            ),
+            *(
+                [
+                    "Maritime low-range regime: stable strong sea wind suppresses "
+                    "positive live corrections and narrows the distribution"
+                ]
+                if maritime_low_range["active"]
+                else []
+            ),
+            *(
+                [
                     "Post-convective regime: bucket uncertainty is broadened "
                     "without shifting the forecast centre"
                 ]
@@ -1402,11 +2044,26 @@ def build_live_nowcast(
             live_sigma_floor,
             corrected.spread * float(post_convective["spread_multiplier"]),
         )
+    if maritime_low_range["active"] and not post_convective_active:
+        live_sigma_floor = max(
+            0.50,
+            live_sigma_floor * float(maritime_low_range["spread_multiplier"]),
+        )
     metar_unconditioned = consensus(
         (current.corrected_max + live_adjustment).tolist(),
         weights=current.model_weight.tolist(),
         sigma_floor=live_sigma_floor,
     )
+    effective_remaining_rise = remaining_rise
+    for regime in (maritime_advection, maritime_low_range):
+        cap = regime.get("remaining_rise_cap_c")
+        if regime["active"] and cap is not None:
+            effective_remaining_rise = (
+                float(cap)
+                if effective_remaining_rise is None
+                else min(float(effective_remaining_rise), float(cap))
+            )
+    remaining_rise = effective_remaining_rise
     resolution = resolved_market_range(markets)
     day_status = assess_day_status(
         target_date=target,
@@ -1491,6 +2148,23 @@ def build_live_nowcast(
             rapid_heat["spread_multiplier"]
         ),
         "rapid_heat_ramp_adjustment_c": rapid_heat_adjustment,
+        "persistent_hot_active": float(bool(persistent_hot["active"])),
+        "persistent_hot_latest_actual_c": persistent_hot["latest_actual_c"],
+        "persistent_hot_recent_baseline_c": persistent_hot["recent_baseline_c"],
+        "persistent_hot_latest_anomaly_c": persistent_hot["latest_anomaly_c"],
+        "persistent_hot_forecast_vs_latest_c": persistent_hot[
+            "forecast_vs_latest_c"
+        ],
+        "persistent_hot_recent_warm_error_c": persistent_hot[
+            "recent_warm_error_c"
+        ],
+        "persistent_hot_taf_support": float(bool(persistent_hot["taf_support"])),
+        "persistent_hot_clear_support": float(bool(persistent_hot["clear_support"])),
+        "persistent_hot_bias_multiplier": float(persistent_hot["bias_multiplier"]),
+        "persistent_hot_spread_multiplier": float(
+            persistent_hot["spread_multiplier"]
+        ),
+        "persistent_hot_adjustment_c": persistent_hot_adjustment,
         "regional_cluster_active": float(bool(cluster["active"])),
         "regional_cluster_mean_gap_c": cluster["mean_gap_c"],
         "regional_cluster_weight_multiplier": float(cluster["multiplier"]),
@@ -1500,6 +2174,39 @@ def build_live_nowcast(
         "hours_since_latest_convection": post_convective["hours_since_latest"],
         "post_convective_spread_multiplier": float(
             post_convective["spread_multiplier"]
+        ),
+        "phase_vs_amplitude_active": float(bool(phase_amplitude["active"])),
+        "phase_vs_amplitude_classification": phase_amplitude["classification"],
+        "phase_shift_hours": float(phase_amplitude["phase_shift_hours"]),
+        "phase_same_time_residual_c": phase_amplitude["same_time_residual_c"],
+        "phase_level_residual_after_shift_c": phase_amplitude[
+            "level_residual_after_shift_c"
+        ],
+        "phase_baseline_rmse_c": phase_amplitude["baseline_rmse_c"],
+        "phase_fit_rmse_c": phase_amplitude["phase_rmse_c"],
+        "phase_anchor_blend": float(phase_amplitude["anchor_blend"]),
+        "phase_anchor_delta_c": phase_anchor_delta,
+        "maritime_advection_active": float(bool(maritime_advection["active"])),
+        "maritime_advection_temperature_rate_cph": maritime_advection[
+            "temperature_rate_cph"
+        ],
+        "maritime_advection_wind_speed_kph": maritime_advection["wind_speed_kph"],
+        "maritime_advection_wind_speed_change_kph": maritime_advection[
+            "wind_speed_change_kph"
+        ],
+        "maritime_advection_fraction": maritime_advection["maritime_fraction"],
+        "maritime_advection_adjustment_c": float(
+            maritime_advection["center_adjustment_c"]
+        ),
+        "maritime_low_range_active": float(bool(maritime_low_range["active"])),
+        "maritime_low_range_recent_range_c": maritime_low_range["recent_range_c"],
+        "maritime_low_range_daily_range_c": maritime_low_range["daily_range_c"],
+        "maritime_low_range_median_wind_kph": maritime_low_range["median_wind_kph"],
+        "maritime_low_range_sea_wind_fraction": maritime_low_range[
+            "sea_wind_fraction"
+        ],
+        "maritime_low_range_spread_multiplier": float(
+            maritime_low_range["spread_multiplier"]
         ),
     }
     if not d1_scored.empty:
@@ -1567,6 +2274,79 @@ def build_live_nowcast(
         forecast_confidence = round(
             forecast_confidence * float(rapid_heat["confidence_multiplier"])
         )
+    if persistent_hot["active"] and not day_status.is_locked:
+        confidence_factors["persistent_hot_regime"] = 50.0
+        forecast_confidence = round(
+            forecast_confidence * float(persistent_hot["confidence_multiplier"])
+        )
+    if maritime_advection["active"] and not day_status.is_locked:
+        confidence_factors["maritime_advection_regime"] = 55.0
+        forecast_confidence = round(
+            forecast_confidence * float(maritime_advection["confidence_multiplier"])
+        )
+    if maritime_low_range["active"] and not day_status.is_locked:
+        confidence_factors["maritime_low_range_regime"] = 70.0
+        forecast_confidence = round(
+            forecast_confidence * float(maritime_low_range["confidence_multiplier"])
+        )
+
+    challenger_variants: dict[str, dict[str, object]] = {}
+    active_challengers = {
+        "rapid_heat_ramp": bool(rapid_heat["active"]),
+        "regional_cluster": bool(cluster["active"]),
+        "clear_sky_override": bool(clear_sky_override > 0),
+        "post_convective_uncertainty": bool(post_convective_active),
+        "persistent_hot": bool(persistent_hot["active"]),
+        "phase_vs_amplitude": bool(phase_amplitude["active"]),
+        "maritime_advection": bool(maritime_advection["active"]),
+        "maritime_low_range": bool(maritime_low_range["active"]),
+    }
+    challenger_labels = {
+        "rapid_heat_ramp": "Without Rapid Heat Ramp",
+        "regional_cluster": "Without Regional Cluster",
+        "clear_sky_override": "Without Clear-sky Override",
+        "post_convective_uncertainty": "Without Post-Convective Uncertainty",
+        "persistent_hot": "Without Persistent Hot",
+        "phase_vs_amplitude": "Without Phase-vs-Amplitude",
+        "maritime_advection": "Without Maritime Advection",
+        "maritime_low_range": "Without Maritime Low-Range",
+    }
+    if _build_challengers:
+        for factor, active in active_challengers.items():
+            if not active:
+                continue
+            challenger = build_live_nowcast(
+                forecasts=forecasts,
+                actuals=actuals,
+                observations=observations,
+                hourly=hourly,
+                markets=markets,
+                tafs=tafs,
+                timezone_name=timezone_name,
+                target=target,
+                as_of=as_of,
+                wind_profile=wind_profile,
+                routine_metar_minutes=routine_metar_minutes,
+                critical_window_local=critical_window_local,
+                post_convective_profile=post_convective_profile,
+                heat_regime_profile=heat_regime_profile,
+                phase_amplitude_profile=phase_amplitude_profile,
+                maritime_advection_profile=maritime_advection_profile,
+                maritime_low_range_profile=maritime_low_range_profile,
+                maximum_model_age_minutes=maximum_model_age_minutes,
+                _disabled_factors=frozenset({*_disabled_factors, factor}),
+                _build_challengers=False,
+            )
+            if challenger is None:
+                continue
+            challenger_variants[challenger_labels[factor]] = {
+                "factor": factor,
+                "forecast_mean_c": challenger.final_forecast_mean,
+                "spread_c": challenger.final_forecast_spread,
+                "probabilities": challenger.probabilities,
+                "forecast_confidence": challenger.forecast_confidence,
+            }
+
     return LiveNowcast(
         current=current,
         model_freshness=model_freshness,
@@ -1613,4 +2393,5 @@ def build_live_nowcast(
         hours_to_peak=hours_to_peak,
         metar_pending=schedule.is_pending,
         metar_due_at=schedule.due_at,
+        challenger_variants=challenger_variants,
     )

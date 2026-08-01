@@ -214,8 +214,15 @@ class ForecastSnapshot(Base):
     clear_sky_override_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     rapid_heat_ramp_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     regional_cluster_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    persistent_hot_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    phase_anchor_delta_c: Mapped[float] = mapped_column(Float, default=0.0)
+    maritime_advection_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     rapid_heat_ramp_active: Mapped[bool] = mapped_column(Boolean, default=False)
     regional_cluster_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    persistent_hot_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    phase_vs_amplitude_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    maritime_advection_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    maritime_low_range_active: Mapped[bool] = mapped_column(Boolean, default=False)
     post_convective_active: Mapped[bool] = mapped_column(Boolean, default=False)
     post_convective_reports: Mapped[int] = mapped_column(Integer, default=0)
     post_convective_spread_multiplier: Mapped[float] = mapped_column(
@@ -229,6 +236,65 @@ class ForecastSnapshot(Base):
     live_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
     features_json: Mapped[str] = mapped_column(Text, default="{}")
     peak_lock_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class ForecastVariantSnapshot(Base):
+    """Champion and one-factor-disabled challengers from the same information set."""
+
+    __tablename__ = "forecast_variant_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "airport",
+            "target_date",
+            "captured_at",
+            "variant",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    timing: Mapped[str] = mapped_column(String(30), index=True)
+    variant: Mapped[str] = mapped_column(String(80), index=True)
+    factor: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    forecast_c: Mapped[float] = mapped_column(Float)
+    spread_c: Mapped[float] = mapped_column(Float)
+    probabilities_json: Mapped[str] = mapped_column(Text)
+    forecast_confidence: Mapped[int] = mapped_column(Integer)
+    day_phase: Mapped[str] = mapped_column(String(20), index=True)
+
+
+class RegimeMemorySnapshot(Base):
+    """Explainable early-warning and analog-memory state at one information set."""
+
+    __tablename__ = "regime_memory_snapshots"
+    __table_args__ = (
+        UniqueConstraint("airport", "target_date", "captured_at"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    timing: Mapped[str] = mapped_column(String(30), index=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    label: Mapped[str] = mapped_column(String(80), index=True)
+    confidence: Mapped[int] = mapped_column(Integer)
+    analog_count: Mapped[int] = mapped_column(Integer, default=0)
+    best_similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    center_adjustment_c: Mapped[float] = mapped_column(Float, default=0.0)
+    suggested_forecast_c: Mapped[float] = mapped_column(Float)
+    suggested_spread_c: Mapped[float] = mapped_column(Float)
+    shadow_only: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    applied_to_champion: Mapped[bool] = mapped_column(Boolean, default=False)
+    promotion_status: Mapped[str] = mapped_column(String(40), index=True)
+    promotion_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
+    oos_days: Mapped[int] = mapped_column(Integer, default=0)
+    regimes_json: Mapped[str] = mapped_column(Text, default="[]")
+    analogs_json: Mapped[str] = mapped_column(Text, default="[]")
+    pro_signals_json: Mapped[str] = mapped_column(Text, default="[]")
+    contra_signals_json: Mapped[str] = mapped_column(Text, default="[]")
+    explanation: Mapped[str] = mapped_column(Text)
+    feature_signature_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
 class StrategySnapshot(Base):
@@ -294,6 +360,40 @@ class ShadowEvaluation(Base):
     status: Mapped[str] = mapped_column(String(30), index=True)
     blockers_json: Mapped[str] = mapped_column(Text, default="[]")
     reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class BasketSnapshot(Base):
+    """One simultaneous event-level basket assembled from executable shadow rows."""
+
+    __tablename__ = "basket_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "airport",
+            "target_date",
+            "captured_at",
+            "strategy",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    airport: Mapped[str] = mapped_column(String(4), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    event_slug: Mapped[str] = mapped_column(String(250), index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    timing: Mapped[str] = mapped_column(String(30), index=True)
+    strategy: Mapped[str] = mapped_column(String(60), index=True)
+    market_ids_json: Mapped[str] = mapped_column(Text)
+    bucket_labels_json: Mapped[str] = mapped_column(Text)
+    market_count: Mapped[int] = mapped_column(Integer)
+    fair_probability: Mapped[float] = mapped_column(Float)
+    total_cost: Mapped[float] = mapped_column(Float)
+    net_edge: Mapped[float] = mapped_column(Float)
+    top_model_bucket: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    top_model_included: Mapped[bool] = mapped_column(Boolean, default=False)
+    middle_bucket_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    forecast_confidence: Mapped[int] = mapped_column(Integer)
+    day_phase: Mapped[str] = mapped_column(String(20))
+    warnings_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 class AirportMarketUniverse(Base):
@@ -405,8 +505,15 @@ def init_db() -> None:
                     "clear_sky_override_adjustment_c": "FLOAT DEFAULT 0",
                     "rapid_heat_ramp_adjustment_c": "FLOAT DEFAULT 0",
                     "regional_cluster_adjustment_c": "FLOAT DEFAULT 0",
+                    "persistent_hot_adjustment_c": "FLOAT DEFAULT 0",
+                    "phase_anchor_delta_c": "FLOAT DEFAULT 0",
+                    "maritime_advection_adjustment_c": "FLOAT DEFAULT 0",
                     "rapid_heat_ramp_active": "BOOLEAN DEFAULT 0",
                     "regional_cluster_active": "BOOLEAN DEFAULT 0",
+                    "persistent_hot_active": "BOOLEAN DEFAULT 0",
+                    "phase_vs_amplitude_active": "BOOLEAN DEFAULT 0",
+                    "maritime_advection_active": "BOOLEAN DEFAULT 0",
+                    "maritime_low_range_active": "BOOLEAN DEFAULT 0",
                     "post_convective_active": "BOOLEAN DEFAULT 0",
                     "post_convective_reports": "INTEGER DEFAULT 0",
                     "post_convective_spread_multiplier": "FLOAT DEFAULT 1",

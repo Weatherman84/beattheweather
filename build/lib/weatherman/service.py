@@ -7,18 +7,21 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .analytics import detect_market_model_conflict, market_edges
 from .catalog import market_city_index, research_airports, trading_airports
 from .db import (
     AirportMarketUniverse,
+    BasketSnapshot,
     DailyActual,
     Forecast,
     ForecastSnapshot,
+    ForecastVariantSnapshot,
     HourlyForecast,
     MarketSnapshot,
     Observation,
+    RegimeMemorySnapshot,
     Session,
     ShadowEvaluation,
     SignalSnapshot,
@@ -27,6 +30,7 @@ from .db import (
     init_db,
 )
 from .nowcast import build_live_nowcast
+from .regime_memory import enrich_nowcast_with_regime_memory
 from .providers import (
     discover_polymarket_temperature_events,
     historical_actuals,
@@ -40,8 +44,8 @@ from .providers import (
     recent_metars,
     recent_tafs,
 )
-from .settings import airports
-from .shadow import evaluate_shadow_markets
+from .settings import airports, settings
+from .shadow import build_shadow_basket, evaluate_shadow_markets
 
 
 def _upsert(session, model, keys: dict, values: dict) -> None:
@@ -74,6 +78,133 @@ def _upsert_batch(
         print(f"WARN {label} storage rolled back: {type(exc).__name__}: {exc}")
         return 0
     return len(items)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(
+        timezone.utc
+    )
+
+
+def _source_refresh_due(
+    session,
+    *,
+    airport_code: str,
+    source: str,
+    target: date,
+    as_of: datetime,
+    maximum_age_minutes: int,
+) -> bool:
+    """Return whether a provider needs another current-data poll."""
+    latest = session.scalar(
+        select(func.max(func.coalesce(Forecast.fetched_at, Forecast.run_at))).where(
+            Forecast.airport == airport_code,
+            Forecast.source == source,
+            Forecast.target_date == target,
+        )
+    )
+    if latest is None:
+        return True
+    age = _as_utc(as_of) - _as_utc(latest)
+    return age >= timedelta(minutes=max(1, maximum_age_minutes))
+
+
+def _store_current_provider_forecasts(
+    session,
+    *,
+    airport_code: str,
+    airport: dict,
+    as_of: datetime,
+    days: int = 3,
+) -> dict[str, int]:
+    """Refresh only provider data that is due for a live trading airport."""
+    local_target = _as_utc(as_of).astimezone(ZoneInfo(airport["timezone"])).date()
+    counts = {
+        "forecasts": 0,
+        "hourly_forecasts": 0,
+        "open_meteo_polls": 0,
+        "meteoblue_polls": 0,
+    }
+    batches: list[dict] = []
+    open_meteo_due = _source_refresh_due(
+        session,
+        airport_code=airport_code,
+        source="open-meteo",
+        target=local_target,
+        as_of=as_of,
+        maximum_age_minutes=settings.live_open_meteo_refresh_minutes,
+    )
+    if open_meteo_due:
+        counts["open_meteo_polls"] = 1
+        for model in airport["models"]:
+            try:
+                batches.extend(open_meteo_forecast(airport, model, days))
+            except Exception as exc:
+                print(f"WARN {airport_code}/{model} live model refresh: {exc}")
+            try:
+                hourly_rows = open_meteo_hourly(airport, model, days)
+            except Exception as exc:
+                print(f"WARN {airport_code}/{model} live hourly refresh: {exc}")
+            else:
+                counts["hourly_forecasts"] += _upsert_batch(
+                    session,
+                    HourlyForecast,
+                    hourly_rows,
+                    lambda item: {
+                        "airport": airport_code,
+                        "model": item["model"],
+                        "run_at": item["run_at"],
+                        "valid_at": item["valid_at"],
+                    },
+                    lambda item: {
+                        "temp_c": item["temp_c"],
+                        "dewpoint_c": item["dewpoint_c"],
+                        "cloud_cover": item["cloud_cover"],
+                        "wind_kph": item["wind_kph"],
+                        "wind_direction": item["wind_direction"],
+                        "radiation_wm2": item["radiation_wm2"],
+                        "temp_850hpa_c": item["temp_850hpa_c"],
+                    },
+                    f"{airport_code}/{model} live hourly forecasts",
+                )
+
+    meteoblue_due = _source_refresh_due(
+        session,
+        airport_code=airport_code,
+        source="meteoblue",
+        target=local_target,
+        as_of=as_of,
+        maximum_age_minutes=settings.live_meteoblue_refresh_minutes,
+    )
+    if meteoblue_due:
+        counts["meteoblue_polls"] = 1
+        try:
+            batches.extend(meteoblue_forecast(airport))
+        except Exception as exc:
+            print(f"WARN {airport_code}/meteoblue live model refresh: {exc}")
+
+    counts["forecasts"] += _upsert_batch(
+        session,
+        Forecast,
+        batches,
+        lambda item: {
+            "airport": airport_code,
+            "model": item["model"],
+            "run_at": item["run_at"],
+            "target_date": item["target_date"],
+        },
+        lambda item: {
+            "max_temp_c": item["max_temp_c"],
+            "source": item["source"],
+            "horizon": item["horizon"],
+            "model_run_at": item.get("model_run_at"),
+            "available_at": item.get("available_at"),
+            "fetched_at": item.get("fetched_at", item["run_at"]),
+            "provenance_status": item.get("provenance_status"),
+        },
+        f"{airport_code}/live current forecasts",
+    )
+    return counts
 
 
 def _signal_timing(captured_at: datetime, target: date, timezone_name: str) -> str:
@@ -203,7 +334,21 @@ def _build_nowcast_from_session(
     observations = pd.read_sql(select(Observation).where(Observation.airport == code), connection)
     hourly = pd.read_sql(select(HourlyForecast).where(HourlyForecast.airport == code), connection)
     tafs = pd.read_sql(select(TafReport).where(TafReport.airport == code), connection)
-    return build_live_nowcast(
+    snapshots = pd.read_sql(
+        select(ForecastSnapshot).where(
+            ForecastSnapshot.airport == code,
+            ForecastSnapshot.target_date < target,
+        ),
+        connection,
+    )
+    variants = pd.read_sql(
+        select(ForecastVariantSnapshot).where(
+            ForecastVariantSnapshot.airport == code,
+            ForecastVariantSnapshot.target_date < target,
+        ),
+        connection,
+    )
+    nowcast = build_live_nowcast(
         forecasts=forecasts,
         actuals=actuals,
         observations=observations,
@@ -218,6 +363,30 @@ def _build_nowcast_from_session(
         critical_window_local=airport.get("critical_window_local"),
         post_convective_profile=airport.get("post_convective_uncertainty"),
         heat_regime_profile=airport.get("heat_regime"),
+        phase_amplitude_profile=airport.get("phase_vs_amplitude"),
+        maritime_advection_profile=airport.get("maritime_advection"),
+        maritime_low_range_profile=airport.get("maritime_low_range"),
+    )
+    memory_config = dict(airport.get("regime_memory") or {})
+    memory_config.setdefault(
+        "allow_promoted",
+        settings.regime_memory_allow_promoted,
+    )
+    memory_config.setdefault(
+        "minimum_oos_days",
+        settings.regime_memory_minimum_oos_days,
+    )
+    return enrich_nowcast_with_regime_memory(
+        nowcast,
+        snapshots,
+        actuals,
+        observations,
+        variants,
+        airport_profile=airport,
+        timezone_name=airport["timezone"],
+        target=target,
+        as_of=captured_at,
+        config=memory_config,
     )
 
 
@@ -299,11 +468,33 @@ def _record_forecast_snapshot(
         "regional_cluster_adjustment_c": float(
             nowcast.live_features.get("regional_cluster_adjustment_c", 0.0) or 0.0
         ),
+        "persistent_hot_adjustment_c": float(
+            nowcast.live_features.get("persistent_hot_adjustment_c", 0.0) or 0.0
+        ),
+        "phase_anchor_delta_c": float(
+            nowcast.live_features.get("phase_anchor_delta_c", 0.0) or 0.0
+        ),
+        "maritime_advection_adjustment_c": float(
+            nowcast.live_features.get("maritime_advection_adjustment_c", 0.0)
+            or 0.0
+        ),
         "rapid_heat_ramp_active": bool(
             nowcast.live_features.get("rapid_heat_ramp_active", 0)
         ),
         "regional_cluster_active": bool(
             nowcast.live_features.get("regional_cluster_active", 0)
+        ),
+        "persistent_hot_active": bool(
+            nowcast.live_features.get("persistent_hot_active", 0)
+        ),
+        "phase_vs_amplitude_active": bool(
+            nowcast.live_features.get("phase_vs_amplitude_active", 0)
+        ),
+        "maritime_advection_active": bool(
+            nowcast.live_features.get("maritime_advection_active", 0)
+        ),
+        "maritime_low_range_active": bool(
+            nowcast.live_features.get("maritime_low_range_active", 0)
         ),
         "post_convective_active": bool(
             nowcast.live_features.get("post_convective_uncertainty_active", 0)
@@ -347,6 +538,161 @@ def _record_forecast_snapshot(
             if key not in {"airport", "target_date", "captured_at"}
         },
         f"{code}/forecast ladder/{target}",
+    )
+
+
+def _record_forecast_variants(
+    session,
+    code: str,
+    airport: dict,
+    target: date,
+    captured_at: datetime,
+    nowcast,
+) -> int:
+    """Persist the champion and every active one-factor-disabled challenger."""
+    if nowcast is None or not nowcast.challenger_variants:
+        return 0
+    timing = _signal_timing(captured_at, target, airport["timezone"])
+    rows = [
+        {
+            "airport": code,
+            "target_date": target,
+            "captured_at": captured_at,
+            "timing": timing,
+            "variant": "Champion",
+            "factor": None,
+            "forecast_c": nowcast.final_forecast_mean,
+            "spread_c": nowcast.final_forecast_spread,
+            "probabilities_json": json.dumps(
+                nowcast.probabilities,
+                separators=(",", ":"),
+            ),
+            "forecast_confidence": nowcast.forecast_confidence,
+            "day_phase": nowcast.day_status.phase,
+        }
+    ]
+    for variant, values in nowcast.challenger_variants.items():
+        rows.append(
+            {
+                "airport": code,
+                "target_date": target,
+                "captured_at": captured_at,
+                "timing": timing,
+                "variant": variant,
+                "factor": values["factor"],
+                "forecast_c": values["forecast_mean_c"],
+                "spread_c": values["spread_c"],
+                "probabilities_json": json.dumps(
+                    values["probabilities"],
+                    separators=(",", ":"),
+                ),
+                "forecast_confidence": values["forecast_confidence"],
+                "day_phase": nowcast.day_status.phase,
+            }
+        )
+    return _upsert_batch(
+        session,
+        ForecastVariantSnapshot,
+        rows,
+        lambda item: {
+            "airport": item["airport"],
+            "target_date": item["target_date"],
+            "captured_at": item["captured_at"],
+            "variant": item["variant"],
+        },
+        lambda item: {
+            key: value
+            for key, value in item.items()
+            if key not in {"airport", "target_date", "captured_at", "variant"}
+        },
+        f"{code}/champion challengers/{target}",
+    )
+
+
+def _record_regime_memory_snapshot(
+    session,
+    code: str,
+    airport: dict,
+    target: date,
+    captured_at: datetime,
+    nowcast,
+) -> int:
+    """Persist the explainable early-warning state and its leakage-free analogs."""
+    if nowcast is None or nowcast.regime_memory is None:
+        return 0
+    memory = nowcast.regime_memory
+    row = {
+        "airport": code,
+        "target_date": target,
+        "captured_at": captured_at,
+        "timing": _signal_timing(captured_at, target, airport["timezone"]),
+        "status": memory.status,
+        "label": memory.label,
+        "confidence": memory.confidence,
+        "analog_count": memory.analog_count,
+        "best_similarity": memory.best_similarity,
+        "center_adjustment_c": memory.center_adjustment_c,
+        "suggested_forecast_c": memory.suggested_forecast_c,
+        "suggested_spread_c": memory.suggested_spread_c,
+        "shadow_only": memory.shadow_only,
+        "applied_to_champion": memory.applied_to_champion,
+        "promotion_status": memory.promotion.status,
+        "promotion_eligible": memory.promotion.eligible,
+        "oos_days": memory.promotion.oos_days,
+        "regimes_json": json.dumps(
+            [
+                {
+                    "name": state.name,
+                    "status": state.status,
+                    "confidence": state.confidence,
+                    "source": state.source,
+                    "champion_effect": state.champion_effect,
+                    "supports": list(state.supports),
+                    "contradictions": list(state.contradictions),
+                    "explanation": state.explanation,
+                }
+                for state in memory.regimes
+            ],
+            separators=(",", ":"),
+        ),
+        "analogs_json": json.dumps(
+            [
+                {
+                    "target_date": analog.target_date,
+                    "captured_at": analog.captured_at,
+                    "similarity": analog.similarity,
+                    "forecast_c": analog.forecast_c,
+                    "actual_c": analog.actual_c,
+                    "residual_c": analog.residual_c,
+                    "matched_on": list(analog.matched_on),
+                }
+                for analog in memory.analogs
+            ],
+            separators=(",", ":"),
+        ),
+        "pro_signals_json": json.dumps(memory.pro_signals, separators=(",", ":")),
+        "contra_signals_json": json.dumps(memory.contra_signals, separators=(",", ":")),
+        "explanation": memory.explanation,
+        "feature_signature_json": json.dumps(
+            memory.feature_signature,
+            separators=(",", ":"),
+        ),
+    }
+    return _upsert_batch(
+        session,
+        RegimeMemorySnapshot,
+        [row],
+        lambda item: {
+            "airport": item["airport"],
+            "target_date": item["target_date"],
+            "captured_at": item["captured_at"],
+        },
+        lambda item: {
+            key: value
+            for key, value in item.items()
+            if key not in {"airport", "target_date", "captured_at"}
+        },
+        f"{code}/regime memory/{target}",
     )
 
 
@@ -506,10 +852,10 @@ def _record_shadow_evaluations(
     market_rows: list[dict],
     books: dict[str, dict],
     nowcast,
-) -> int:
+) -> tuple[int, int]:
     """Persist fee-, slippage- and depth-aware paper decisions."""
     if nowcast is None or not market_rows:
-        return 0
+        return 0, 0
     captured_at = max(row["captured_at"] for row in market_rows)
     target = market_rows[0]["target_date"]
     conflict = detect_market_model_conflict(
@@ -528,8 +874,9 @@ def _record_shadow_evaluations(
         day_status=nowcast.day_status,
         metar_pending=nowcast.metar_pending,
         market_model_conflict=conflict.is_conflict,
+        forecast_stale=nowcast.forecast_data_stale,
     )
-    return _upsert_batch(
+    shadow_count = _upsert_batch(
         session,
         ShadowEvaluation,
         rows,
@@ -544,6 +891,51 @@ def _record_shadow_evaluations(
         },
         f"{code}/shadow watcher/{target}",
     )
+    basket = build_shadow_basket(rows, pd.DataFrame(market_rows))
+    if basket is None:
+        return shadow_count, 0
+    basket_row = {
+        "airport": code,
+        "target_date": target,
+        "event_slug": str(market_rows[0]["event_slug"]),
+        "captured_at": captured_at,
+        "timing": _signal_timing(captured_at, target, airport["timezone"]),
+        "strategy": "Executable positive-edge basket",
+        "market_ids_json": json.dumps(basket.market_ids, separators=(",", ":")),
+        "bucket_labels_json": json.dumps(
+            basket.bucket_labels,
+            separators=(",", ":"),
+        ),
+        "market_count": len(basket.market_ids),
+        "fair_probability": basket.fair_probability,
+        "total_cost": basket.total_cost,
+        "net_edge": basket.net_edge,
+        "top_model_bucket": basket.top_model_bucket,
+        "top_model_included": basket.top_model_included,
+        "middle_bucket_excluded": basket.middle_bucket_excluded,
+        "status": basket.status,
+        "forecast_confidence": nowcast.forecast_confidence,
+        "day_phase": nowcast.day_status.phase,
+        "warnings_json": json.dumps(basket.warnings, separators=(",", ":")),
+    }
+    basket_count = _upsert_batch(
+        session,
+        BasketSnapshot,
+        [basket_row],
+        lambda item: {
+            "airport": item["airport"],
+            "target_date": item["target_date"],
+            "captured_at": item["captured_at"],
+            "strategy": item["strategy"],
+        },
+        lambda item: {
+            key: value
+            for key, value in item.items()
+            if key not in {"airport", "target_date", "captured_at", "strategy"}
+        },
+        f"{code}/event basket/{target}",
+    )
+    return shadow_count, basket_count
 
 
 def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, int]:
@@ -557,6 +949,8 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
         "signals": 0,
         "strategy_snapshots": 0,
         "forecast_snapshots": 0,
+        "forecast_variants": 0,
+        "regime_memory_snapshots": 0,
         "actuals": 0,
         "provisional_actuals": 0,
     }
@@ -746,6 +1140,24 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
                             captured_at,
                             nowcast,
                         )
+                        counts["forecast_variants"] += _record_forecast_variants(
+                            session,
+                            code,
+                            airport,
+                            market_target,
+                            captured_at,
+                            nowcast,
+                        )
+                        counts["regime_memory_snapshots"] += (
+                            _record_regime_memory_snapshot(
+                                session,
+                                code,
+                                airport,
+                                market_target,
+                                captured_at,
+                                nowcast,
+                            )
+                        )
                         if not market_rows:
                             continue
                         counts["signals"] += _record_signal_snapshots(
@@ -781,6 +1193,8 @@ def collect_research_checkpoints(
         "airports_due": 0,
         "forecasts": 0,
         "forecast_snapshots": 0,
+        "forecast_variants": 0,
+        "regime_memory_snapshots": 0,
         "actuals": 0,
     }
     try:
@@ -928,6 +1342,24 @@ def collect_research_checkpoints(
                         captured_at,
                         nowcast,
                     )
+                    counts["forecast_variants"] += _record_forecast_variants(
+                        session,
+                        code,
+                        airport,
+                        target,
+                        captured_at,
+                        nowcast,
+                    )
+                    counts["regime_memory_snapshots"] += (
+                        _record_regime_memory_snapshot(
+                            session,
+                            code,
+                            airport,
+                            target,
+                            captured_at,
+                            nowcast,
+                        )
+                    )
                 except Exception as exc:
                     print(f"WARN {code}/research checkpoint journal/{target}: {exc}")
             session.commit()
@@ -1009,6 +1441,25 @@ def in_critical_window(airport: dict, now: datetime) -> bool:
     return current >= start or current <= end
 
 
+def in_forecast_refresh_window(airport: dict, now: datetime) -> bool:
+    """Poll current model data from D0 morning through the end of live trading."""
+    local = _as_utc(now).astimezone(ZoneInfo(airport["timezone"]))
+    configured = airport.get("forecast_refresh_window_local")
+    if not isinstance(configured, (list, tuple)) or len(configured) != 2:
+        critical = airport.get("critical_window_local", ["11:30", "18:00"])
+        configured = ["06:00", critical[-1]]
+
+    def minutes(value: object) -> int:
+        hour, minute = str(value).split(":", maxsplit=1)
+        return int(hour) * 60 + int(minute)
+
+    start, end = (minutes(value) for value in configured)
+    current = local.hour * 60 + local.minute
+    if start <= end:
+        return start <= current <= end
+    return current >= start or current <= end
+
+
 def collect_live_decision_checkpoints(
     airport_codes: list[str] | None = None,
     *,
@@ -1024,25 +1475,49 @@ def collect_live_decision_checkpoints(
         for code in requested
         if code in catalog and in_critical_window(catalog[code], captured_at)
     ]
+    forecast_due_codes = [
+        code
+        for code in requested
+        if code in catalog and in_forecast_refresh_window(catalog[code], captured_at)
+    ]
     counts = {
         "airports_due": len(due_codes),
+        "forecast_airports_due": len(forecast_due_codes),
+        "forecasts": 0,
+        "hourly_forecasts": 0,
+        "open_meteo_polls": 0,
+        "meteoblue_polls": 0,
         "observations": 0,
         "taf_reports": 0,
         "market_prices": 0,
         "forecast_snapshots": 0,
+        "forecast_variants": 0,
+        "regime_memory_snapshots": 0,
         "signals": 0,
         "strategy_snapshots": 0,
         "shadow_evaluations": 0,
+        "basket_snapshots": 0,
         "provisional_actuals": 0,
     }
-    if not due_codes:
+    if not due_codes and not forecast_due_codes:
         return counts
-    try:
-        fetched_tafs = recent_tafs(due_codes, attempts=2, timeout=10)
-    except Exception as exc:
-        print(f"WARN live-decision TAF batch: {exc}")
-        fetched_tafs = []
+    fetched_tafs = []
+    if due_codes:
+        try:
+            fetched_tafs = recent_tafs(due_codes, attempts=2, timeout=10)
+        except Exception as exc:
+            print(f"WARN live-decision TAF batch: {exc}")
     with Session() as session:
+        for code in forecast_due_codes:
+            provider_counts = _store_current_provider_forecasts(
+                session,
+                airport_code=code,
+                airport=catalog[code],
+                as_of=captured_at,
+            )
+            for key, value in provider_counts.items():
+                counts[key] += value
+        session.commit()
         for code in due_codes:
             airport = catalog[code]
             try:
@@ -1153,6 +1628,22 @@ def collect_live_decision_checkpoints(
                     snapshot_at,
                     nowcast,
                 )
+                counts["forecast_variants"] += _record_forecast_variants(
+                    session,
+                    code,
+                    airport,
+                    local_target,
+                    snapshot_at,
+                    nowcast,
+                )
+                counts["regime_memory_snapshots"] += _record_regime_memory_snapshot(
+                    session,
+                    code,
+                    airport,
+                    local_target,
+                    snapshot_at,
+                    nowcast,
+                )
                 if market_rows:
                     counts["signals"] += _record_signal_snapshots(
                         session,
@@ -1168,7 +1659,7 @@ def collect_live_decision_checkpoints(
                         market_rows,
                         nowcast,
                     )
-                    counts["shadow_evaluations"] += _record_shadow_evaluations(
+                    shadow_count, basket_count = _record_shadow_evaluations(
                         session,
                         code,
                         airport,
@@ -1176,6 +1667,8 @@ def collect_live_decision_checkpoints(
                         books,
                         nowcast,
                     )
+                    counts["shadow_evaluations"] += shadow_count
+                    counts["basket_snapshots"] += basket_count
             except Exception as exc:
                 print(f"WARN {code}/live-decision snapshot: {exc}")
             session.commit()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import statistics
 from dataclasses import dataclass
@@ -800,6 +801,471 @@ def live_factor_diagnostics(
             )
             previous_mae = mae
     return pd.DataFrame(rows)
+
+
+def _variant_probabilities(value: object) -> dict[int, float]:
+    if isinstance(value, dict):
+        parsed = value
+    else:
+        try:
+            parsed = json.loads(str(value))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+    if not isinstance(parsed, dict):
+        return {}
+    probabilities: dict[int, float] = {}
+    for bucket, probability in parsed.items():
+        try:
+            probabilities[int(bucket)] = max(0.0, float(probability))
+        except (TypeError, ValueError):
+            continue
+    total = sum(probabilities.values())
+    return (
+        {bucket: probability / total for bucket, probability in probabilities.items()}
+        if total > 0
+        else {}
+    )
+
+
+def _calibration_error(samples: list[tuple[float, int]], bins: int = 10) -> float | None:
+    if not samples:
+        return None
+    total = len(samples)
+    error = 0.0
+    for index in range(bins):
+        lower = index / bins
+        upper = (index + 1) / bins
+        selected = [
+            (probability, outcome)
+            for probability, outcome in samples
+            if lower <= probability < upper or (index == bins - 1 and probability == 1.0)
+        ]
+        if not selected:
+            continue
+        mean_probability = sum(item[0] for item in selected) / len(selected)
+        observed_rate = sum(item[1] for item in selected) / len(selected)
+        error += len(selected) / total * abs(mean_probability - observed_rate)
+    return float(error)
+
+
+def champion_challenger_metrics(
+    variants: pd.DataFrame,
+    actuals: pd.DataFrame,
+) -> pd.DataFrame:
+    """Pair every active challenger with its same-snapshot champion and score both."""
+    if variants.empty or actuals.empty:
+        return pd.DataFrame()
+    frame = variants.copy()
+    required = {
+        "airport",
+        "target_date",
+        "captured_at",
+        "timing",
+        "variant",
+        "factor",
+        "forecast_c",
+        "probabilities_json",
+        "forecast_confidence",
+    }
+    if not required.issubset(frame.columns):
+        return pd.DataFrame()
+    frame["captured_at"] = pd.to_datetime(frame.captured_at, utc=True)
+    frame["target_date"] = pd.to_datetime(frame.target_date).dt.date
+    frame["information_set"] = frame.apply(
+        lambda row: _lead_bucket(str(row.timing), None),
+        axis=1,
+    )
+    champions = frame[frame.variant == "Champion"].copy()
+    challengers = frame[frame.variant != "Champion"].copy()
+    if champions.empty or challengers.empty:
+        return pd.DataFrame()
+    champion_columns = [
+        "airport",
+        "target_date",
+        "captured_at",
+        "forecast_c",
+        "probabilities_json",
+        "forecast_confidence",
+    ]
+    paired = challengers.merge(
+        champions[champion_columns],
+        on=["airport", "target_date", "captured_at"],
+        how="inner",
+        suffixes=("_challenger", "_champion"),
+    )
+    actual = actuals[["airport", "target_date", "max_temp_c"]].copy()
+    actual["target_date"] = pd.to_datetime(actual.target_date).dt.date
+    paired = paired.merge(actual, on=["airport", "target_date"], how="inner")
+    if paired.empty:
+        return pd.DataFrame()
+    paired = paired.sort_values("captured_at").drop_duplicates(
+        ["airport", "target_date", "information_set", "factor"],
+        keep="last",
+    )
+
+    def score_side(group: pd.DataFrame, side: str) -> dict[str, float | None]:
+        forecast = pd.to_numeric(group[f"forecast_c_{side}"], errors="coerce")
+        actual_values = pd.to_numeric(group.max_temp_c, errors="coerce")
+        error = forecast - actual_values
+        actual_buckets = actual_values.map(lambda value: math.floor(float(value) + 0.5))
+        forecast_buckets = forecast.map(lambda value: math.floor(float(value) + 0.5))
+        brier_values: list[float] = []
+        log_losses: list[float] = []
+        calibration_samples: list[tuple[float, int]] = []
+        for probability_value, actual_bucket in zip(
+            group[f"probabilities_json_{side}"],
+            actual_buckets,
+        ):
+            probabilities = _variant_probabilities(probability_value)
+            if not probabilities:
+                continue
+            buckets = set(probabilities) | {int(actual_bucket)}
+            brier_values.append(
+                sum(
+                    (
+                        probabilities.get(bucket, 0.0)
+                        - (1.0 if bucket == int(actual_bucket) else 0.0)
+                    )
+                    ** 2
+                    for bucket in buckets
+                )
+            )
+            log_losses.append(
+                -math.log(max(1e-12, probabilities.get(int(actual_bucket), 0.0)))
+            )
+            calibration_samples.extend(
+                (
+                    probability,
+                    int(bucket == int(actual_bucket)),
+                )
+                for bucket, probability in probabilities.items()
+            )
+        confidence = pd.to_numeric(
+            group[f"forecast_confidence_{side}"],
+            errors="coerce",
+        )
+        exact = forecast_buckets == actual_buckets
+        high = confidence >= 65
+        low = confidence < 65
+        return {
+            "bias": float(error.mean()),
+            "mae": float(error.abs().mean()),
+            "rmse": float(math.sqrt((error**2).mean())),
+            "exact_hit": float(exact.mean()),
+            "within_1c": float((error.abs() <= 1.0).mean()),
+            "brier_score": float(pd.Series(brier_values).mean())
+            if brier_values
+            else None,
+            "log_loss": float(pd.Series(log_losses).mean()) if log_losses else None,
+            "calibration_error": _calibration_error(calibration_samples),
+            "high_confidence_hit": float(exact[high].mean()) if high.any() else None,
+            "low_confidence_hit": float(exact[low].mean()) if low.any() else None,
+        }
+
+    rows = []
+    for (airport, information_set, factor, variant), group in paired.groupby(
+        ["airport", "information_set", "factor", "variant"],
+        dropna=False,
+    ):
+        champion = score_side(group, "champion")
+        challenger = score_side(group, "challenger")
+        days = int(group.target_date.nunique())
+        evidence = (
+            "Stronger"
+            if days >= 60
+            else "Usable"
+            if days >= 30
+            else "Early tendency"
+            if days >= 10
+            else "Case studies only"
+        )
+        row: dict[str, object] = {
+            "airport": airport,
+            "information_set": information_set,
+            "factor": factor,
+            "challenger": variant,
+            "n_days": days,
+            "evidence": evidence,
+        }
+        for metric, value in champion.items():
+            row[f"champion_{metric}"] = value
+        for metric, value in challenger.items():
+            row[f"challenger_{metric}"] = value
+        row["mae_gain"] = (
+            float(challenger["mae"]) - float(champion["mae"])
+        )
+        row["brier_gain"] = (
+            float(challenger["brier_score"]) - float(champion["brier_score"])
+            if challenger["brier_score"] is not None
+            and champion["brier_score"] is not None
+            else None
+        )
+        row["log_loss_gain"] = (
+            float(challenger["log_loss"]) - float(champion["log_loss"])
+            if challenger["log_loss"] is not None
+            and champion["log_loss"] is not None
+            else None
+        )
+        row["exact_hit_gain"] = (
+            float(champion["exact_hit"]) - float(challenger["exact_hit"])
+        )
+        row["mae_winner"] = (
+            "Champion"
+            if row["mae_gain"] > 1e-9
+            else "Challenger"
+            if row["mae_gain"] < -1e-9
+            else "Tie"
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def champion_challenger_trading_metrics(
+    variants: pd.DataFrame,
+    markets: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compare guarded ask-based paper entries for champion and challengers."""
+    if variants.empty or markets.empty:
+        return pd.DataFrame()
+    frame = variants.copy()
+    frame["captured_at"] = pd.to_datetime(frame.captured_at, utc=True)
+    frame["target_date"] = pd.to_datetime(frame.target_date).dt.date
+    champions = frame[frame.variant == "Champion"].copy()
+    challengers = frame[frame.variant != "Champion"].copy()
+    if champions.empty or challengers.empty:
+        return pd.DataFrame()
+    pairs = challengers.merge(
+        champions[
+            [
+                "airport",
+                "target_date",
+                "captured_at",
+                "probabilities_json",
+                "forecast_confidence",
+            ]
+        ],
+        on=["airport", "target_date", "captured_at"],
+        how="inner",
+        suffixes=("_challenger", "_champion"),
+    )
+    market_frame = markets.copy()
+    market_frame["captured_at"] = pd.to_datetime(market_frame.captured_at, utc=True)
+    market_frame["target_date"] = pd.to_datetime(market_frame.target_date).dt.date
+    outcomes = resolved_market_outcomes(market_frame)
+    if pairs.empty or outcomes.empty:
+        return pd.DataFrame()
+    winner_map = dict(
+        zip(outcomes.market_id.astype(str), outcomes.yes_won.astype(bool))
+    )
+
+    def paper_entry(
+        probabilities_value: object,
+        confidence_value: object,
+        snapshot_markets: pd.DataFrame,
+    ) -> dict[str, object] | None:
+        probabilities = _variant_probabilities(probabilities_value)
+        if not probabilities or int(confidence_value) < 65:
+            return None
+        comparison = market_edges(probabilities, snapshot_markets)
+        if comparison.empty:
+            return None
+        actionable = comparison[comparison.best_ask.notna()].copy()
+        if "closed" in actionable:
+            actionable = actionable[~actionable.closed.fillna(False).astype(bool)]
+        if actionable.empty:
+            return None
+        actionable["fee_per_share"] = (
+            actionable.buy_price * 0.05 * (1.0 - actionable.buy_price)
+        )
+        actionable["all_in_price"] = actionable.buy_price + actionable.fee_per_share
+        actionable["net_edge"] = (
+            actionable.model_probability - actionable.all_in_price - 0.02
+        )
+        actionable = actionable[
+            (actionable.net_edge >= 0.05)
+            & (
+                actionable.spread.isna()
+                | (pd.to_numeric(actionable.spread, errors="coerce") <= 0.12)
+            )
+        ]
+        if actionable.empty:
+            return None
+        best = actionable.sort_values("net_edge", ascending=False).iloc[0]
+        market_id = str(best.market_id)
+        if market_id not in winner_map:
+            return None
+        won = bool(winner_map[market_id])
+        all_in = float(best.all_in_price)
+        return {
+            "market_id": market_id,
+            "net_edge": float(best.net_edge),
+            "won": won,
+            "pnl": 1.0 / all_in - 1.0 if won else -1.0,
+        }
+
+    entry_rows: list[dict[str, object]] = []
+    for pair in pairs.itertuples():
+        snapshot_markets = market_frame[
+            (market_frame.airport == pair.airport)
+            & (market_frame.target_date == pair.target_date)
+            & (market_frame.captured_at == pair.captured_at)
+        ]
+        if snapshot_markets.empty:
+            continue
+        information_set = _lead_bucket(str(pair.timing), None)
+        for side in ("champion", "challenger"):
+            entry = paper_entry(
+                getattr(pair, f"probabilities_json_{side}"),
+                getattr(pair, f"forecast_confidence_{side}"),
+                snapshot_markets,
+            )
+            if entry is None:
+                continue
+            entry_rows.append(
+                {
+                    "airport": pair.airport,
+                    "target_date": pair.target_date,
+                    "captured_at": pair.captured_at,
+                    "information_set": information_set,
+                    "factor": pair.factor,
+                    "challenger": pair.variant,
+                    "side": side,
+                    **entry,
+                }
+            )
+    if not entry_rows:
+        return pd.DataFrame()
+    entries = pd.DataFrame(entry_rows)
+    entries = entries.sort_values("captured_at").drop_duplicates(
+        [
+            "airport",
+            "target_date",
+            "information_set",
+            "factor",
+            "challenger",
+            "side",
+        ],
+        keep="first",
+    )
+    summaries = []
+    for keys, group in entries.groupby(
+        ["airport", "information_set", "factor", "challenger", "side"],
+        dropna=False,
+    ):
+        airport, information_set, factor, challenger, side = keys
+        summaries.append(
+            {
+                "airport": airport,
+                "information_set": information_set,
+                "factor": factor,
+                "challenger": challenger,
+                "side": side,
+                "entries": len(group),
+                "independent_days": int(group.target_date.nunique()),
+                "hit_rate": float(group.won.mean()),
+                "average_net_edge": float(group.net_edge.mean()),
+                "net_pnl": float(group.pnl.sum()),
+                "roi": float(group.pnl.sum() / len(group)),
+            }
+        )
+    summary = pd.DataFrame(summaries)
+    if summary.empty:
+        return summary
+    wide = summary.pivot(
+        index=["airport", "information_set", "factor", "challenger"],
+        columns="side",
+        values=[
+            "entries",
+            "independent_days",
+            "hit_rate",
+            "average_net_edge",
+            "net_pnl",
+            "roi",
+        ],
+    )
+    wide.columns = [f"{side}_{metric}" for metric, side in wide.columns]
+    result = wide.reset_index()
+    for side in ("champion", "challenger"):
+        for metric in (
+            "entries",
+            "independent_days",
+            "hit_rate",
+            "average_net_edge",
+            "net_pnl",
+            "roi",
+        ):
+            column = f"{side}_{metric}"
+            if column not in result:
+                result[column] = pd.NA
+    return result
+
+
+def settled_basket_performance(
+    baskets: pd.DataFrame,
+    markets: pd.DataFrame,
+) -> pd.DataFrame:
+    """Settle one first simultaneous SHADOW BASKET per independent airport-day."""
+    columns = [
+        "airport",
+        "target_date",
+        "event_slug",
+        "captured_at",
+        "timing",
+        "strategy",
+        "market_count",
+        "fair_probability",
+        "total_cost",
+        "net_edge",
+        "won",
+        "pnl",
+        "roi",
+        "cumulative_pnl",
+    ]
+    if baskets.empty or markets.empty:
+        return pd.DataFrame(columns=columns)
+    entries = baskets[baskets.status == "SHADOW BASKET"].copy()
+    if entries.empty:
+        return pd.DataFrame(columns=columns)
+    entries["captured_at"] = pd.to_datetime(entries.captured_at, utc=True)
+    entries["target_date"] = pd.to_datetime(entries.target_date).dt.date
+    entries = entries.sort_values("captured_at").drop_duplicates(
+        ["airport", "target_date", "strategy"],
+        keep="first",
+    )
+    outcomes = resolved_market_outcomes(markets)
+    if outcomes.empty:
+        return pd.DataFrame(columns=columns)
+    won_ids = set(outcomes.loc[outcomes.yes_won.astype(bool), "market_id"].astype(str))
+
+    def selected_ids(value: object) -> set[str]:
+        try:
+            parsed = json.loads(str(value))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return set()
+        return {str(item) for item in parsed} if isinstance(parsed, list) else set()
+
+    resolved_ids = set(outcomes.market_id.astype(str))
+    entries["_selected_ids"] = entries.market_ids_json.map(selected_ids)
+    entries = entries[
+        entries._selected_ids.map(
+            lambda values: bool(values) and values.issubset(resolved_ids)
+        )
+    ].copy()
+    if entries.empty:
+        return pd.DataFrame(columns=columns)
+    entries["won"] = entries._selected_ids.map(
+        lambda values: bool(values & won_ids)
+    )
+    entries["pnl"] = entries.apply(
+        lambda row: 1.0 - float(row.total_cost)
+        if row.won
+        else -float(row.total_cost),
+        axis=1,
+    )
+    entries["roi"] = entries.pnl / entries.total_cost
+    entries = entries.sort_values(["target_date", "captured_at"])
+    entries["cumulative_pnl"] = entries.groupby("strategy").pnl.cumsum()
+    return entries[columns].reset_index(drop=True)
 
 
 def settled_strategy_performance(
