@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: weatherman-trading
-Version: 10.3.0
+Version: 10.4.0
 Summary: Model consensus, nowcast and backtesting for daily maximum-temperature markets
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
@@ -637,6 +637,42 @@ erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
 Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grünen Test
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
 **Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
+
+### Neu in Version 10.4.0 · aufgeräumter Live Forecast
+
+- Der Live Forecast folgt nun drei klaren Ebenen: **Trading Cockpit**, **Forecast
+  Drivers** und standardmäßig eingeklappte technische Diagnostik.
+- Ganz oben stehen nur Recommendation, ausgewählter Bucket, Weatherman-
+  Wahrscheinlichkeit, YES-Ask, ausführbare Edge, Confidence und der wichtigste
+  Blocker. Die vollständige Entscheidungsbegründung ist aufklappbar.
+- Die eindeutige Forecast-Kette lautet **Weighted models → Bias / regime base →
+  Live weather adjusted → Champion forecast**. `Champion forecast` ist der aktuelle
+  finale Forecast inklusive TAF und nicht das spätere Outcome.
+- Nach Tagesabschluss erscheint das tatsächliche Maximum separat als **Outcome**
+  mit Gewinner-Bucket und Champion-Fehler.
+- Weatherman- und Marktwerte stehen in einer gemeinsamen, auf die fünf wichtigsten
+  Buckets reduzierten Tabelle. Die komplette Verteilung bleibt aufklappbar.
+- Die neue zentrale Tabelle **Forecast Drivers** bündelt Modelle/Bias, METAR-Pfad,
+  Feuchte/Wolken, Wind, TAF, aktive Live-Regime, Future Outlook, historische
+  Analog-Challenger und Tagesgrenzen samt konkreter Wirkung.
+- `Learned Analog Pattern` wird nicht länger wie ein aktives Live-Regime präsentiert.
+  Es heißt nun **Historical Analog Challenger · research only** und zeigt ausdrücklich
+  `Live +0.00 °C`, solange es nicht nach OOS-Prüfung freigegeben wurde.
+- Die frühere Heat-Spike-Tabelle und die lange Stored-Feature-Liste sind aus der
+  normalen Trading-Ansicht verschwunden. Beide bleiben ausschließlich unter
+  **Advanced diagnostics** erhalten.
+- TAF-Timing erkennt nun ausdrücklich die zukünftige Abfolge **Schauer/Regen endet →
+  Wolken brechen auf**. Stimmen zusätzlich verankerte Modellerwärmung, künftige
+  Strahlung und Zeit bis zum Peak, wird ein **Post-Rain Reheating Challenger**
+  gespeichert. Er ist zunächst research-only und verändert den Champion nicht.
+- Alle datenbankschreibenden Workflows checken beim tatsächlichen Start den neuesten
+  `main`-Stand aus. Ändert sich `main` dennoch während eines Laufs, wird der Collector
+  automatisch auf der neuesten SQLite-Datenbank erneut ausgeführt; binäre Datenbanken
+  werden nicht mehr per `git pull --rebase` zusammengeführt.
+
+Für das Update ist kein Backfill nötig. Nach dem Upload den grünen Test abwarten,
+**2 - Collect current forecasts** einmal manuell starten und Streamlit über
+**Manage app → Reboot app** neu starten.
 
 ### Update von v10.1 auf v10.2
 

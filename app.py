@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.3.0")
+discard_stale_weatherman_modules("10.4.0")
 
 import pandas as pd
 import plotly.express as px
@@ -58,6 +58,7 @@ from weatherman.decision import (
 from weatherman.nowcast import build_live_nowcast
 from weatherman.regime_memory import enrich_nowcast_with_regime_memory
 from weatherman.navigation import render_app_navigation
+from weatherman.live_ui import render_compact_live_forecast
 from weatherman.research import filter_target_window, market_timing_metrics
 from weatherman.service import collect, collect_live_aviation
 from weatherman.catalog import trading_airports
@@ -539,507 +540,522 @@ with tab_live:
                 "has not reached the official feed. Edge signals are temporarily blocked."
             )
 
-        decision_title = (
-            f"{trade_decision.status} · {trade_decision.bucket_label}"
-            if trade_decision.bucket_label
-            else trade_decision.status
+        render_compact_live_forecast(
+            st,
+            nowcast=live_nowcast,
+            trade_decision=trade_decision,
+            latest_markets=latest_markets,
+            prior_probabilities=prior_probabilities,
+            target=target,
+            timezone_name=timezone_name,
+            actuals=actuals,
+            regime_memory_snapshots=all_regime_memory_snapshots,
         )
-        if trade_decision.status == "BET":
-            st.success(f"v10 Decision Engine · {decision_title}")
-        elif trade_decision.status == "WATCH":
-            st.warning(f"v10 Decision Engine · {decision_title}")
-        else:
-            st.info(f"v10 Decision Engine · {decision_title}")
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric(
-            "Fair probability",
-            (
-                f"{trade_decision.fair_probability:.1%}"
-                if trade_decision.fair_probability is not None
-                else "—"
-            ),
-        )
-        d2.metric(
-            "YES ask",
-            (f"{trade_decision.buy_price:.1%}" if trade_decision.buy_price is not None else "—"),
-        )
-        d3.metric(
-            "Probability edge",
-            f"{trade_decision.edge:+.1%}" if trade_decision.edge is not None else "—",
-        )
-        d4.metric(
-            "Change since snapshot",
-            (
-                f"{trade_decision.probability_change:+.1%}"
-                if trade_decision.probability_change is not None
-                else "First snapshot"
-            ),
-        )
-        with st.expander("Why this decision?", expanded=trade_decision.status != "BET"):
-            for reason in trade_decision.reasons:
-                st.write(f"• {reason}")
-            for blocker in trade_decision.blockers:
-                st.write(f"• Blocker: {blocker}")
-            st.caption(
-                "BET requires at least eight percentage points of executable edge, "
-                "confidence of at least 65/100 and a bid-ask spread no wider than 12%. "
-                "WATCH means the weather setup may be interesting but at least one "
-                "required condition is still missing."
+
+        # The previous table-heavy renderer remains below for one release as an
+        # import-safe rollback reference, but is intentionally not shown.
+        if False:
+            decision_title = (
+                f"{trade_decision.status} · {trade_decision.bucket_label}"
+                if trade_decision.bucket_label
+                else trade_decision.status
             )
-        if trade_decision.basket is not None:
-            basket = trade_decision.basket
-            st.subheader("Event-level edge basket")
-            b1, b2, b3, b4 = st.columns(4)
-            b1.metric("Selected buckets", ", ".join(basket.bucket_labels))
-            b2.metric("Combined fair probability", f"{basket.fair_probability:.1%}")
-            b3.metric("Combined YES asks", f"{basket.total_cost:.1%}")
-            b4.metric("Combined edge", f"{basket.edge:+.1%}")
-            if basket.warnings:
-                st.warning(
-                    "Basket blocked: "
-                    + " · ".join(basket.warnings)
-                    + ". The buckets are mutually exclusive and are evaluated as one position."
-                )
+            if trade_decision.status == "BET":
+                st.success(f"v10 Decision Engine · {decision_title}")
+            elif trade_decision.status == "WATCH":
+                st.warning(f"v10 Decision Engine · {decision_title}")
             else:
+                st.info(f"v10 Decision Engine · {decision_title}")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric(
+                "Fair probability",
+                (
+                    f"{trade_decision.fair_probability:.1%}"
+                    if trade_decision.fair_probability is not None
+                    else "—"
+                ),
+            )
+            d2.metric(
+                "YES ask",
+                (f"{trade_decision.buy_price:.1%}" if trade_decision.buy_price is not None else "—"),
+            )
+            d3.metric(
+                "Probability edge",
+                f"{trade_decision.edge:+.1%}" if trade_decision.edge is not None else "—",
+            )
+            d4.metric(
+                "Change since snapshot",
+                (
+                    f"{trade_decision.probability_change:+.1%}"
+                    if trade_decision.probability_change is not None
+                    else "First snapshot"
+                ),
+            )
+            with st.expander("Why this decision?", expanded=trade_decision.status != "BET"):
+                for reason in trade_decision.reasons:
+                    st.write(f"• {reason}")
+                for blocker in trade_decision.blockers:
+                    st.write(f"• Blocker: {blocker}")
                 st.caption(
-                    "The basket includes the model's most likely bucket and has no gap "
-                    "between selected ranges. Fees and order-book depth are applied separately "
-                    "by the Shadow watcher."
+                    "BET requires at least eight percentage points of executable edge, "
+                    "confidence of at least 65/100 and a bid-ask spread no wider than 12%. "
+                    "WATCH means the weather setup may be interesting but at least one "
+                    "required condition is still missing."
                 )
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Raw model mean", f"{live_nowcast.raw_model_mean:.1f} °C")
-        c2.metric("Weighted raw ensemble", f"{live_nowcast.weighted_raw_mean:.1f} °C")
-        c3.metric(
-            "Bias corrected · equal weight",
-            f"{live_nowcast.bias_corrected_equal_mean:.1f} °C",
-        )
-        c4, c5, c6 = st.columns(3)
-        c4.metric("Bias corrected · weighted", f"{corrected.mean:.1f} °C")
-        c5.metric(
-            "METAR-conditioned",
-            f"{live_nowcast.metar_conditioned_mean:.1f} °C",
-        )
-        c6.metric(
-            "Final incl. TAF",
-            f"{live_mean:.1f} °C",
-            f"TAF {live_nowcast.taf_adjustment_c:+.2f} °C",
-        )
-        s1, s2, s3 = st.columns(3)
-        s1.metric("Bias-weighted spread", f"{corrected.spread:.1f} °C")
-        s2.metric(
-            "METAR max so far",
-            f"{observed_max:.0f} °C" if observed_max is not None else "Not available",
-        )
-        s3.metric(
-            "Model warming left",
-            f"≤ {remaining_rise:.1f} °C" if remaining_rise is not None else "Not available",
-        )
-        s4, s5 = st.columns(2)
-        s4.metric("Forecast confidence", f"{live_nowcast.forecast_confidence}/100")
-        s5.metric("Day status", day_status.label)
-        st.caption(day_status.explanation)
-
-        memory = live_nowcast.regime_memory
-        if memory is not None:
-            memory_title = f"Regime Memory · {memory.status} · {memory.label}"
-            if memory.status == "CONFIRMED":
-                st.success(memory_title)
-            elif memory.status in {"WATCH", "PREDICTED"}:
-                st.warning(memory_title)
-            else:
-                st.info(memory_title)
-            r1, r2, r3, r4 = st.columns(4)
-            r1.metric("Early-warning confidence", f"{memory.confidence}/100")
-            r2.metric("Comparable days", str(memory.analog_count))
-            r3.metric(
-                "Analog effect",
-                f"{memory.center_adjustment_c:+.2f} °C",
-                "Challenger" if memory.shadow_only else "Champion",
-            )
-            r4.metric(
-                "Promotion gate",
-                memory.promotion.status,
-                f"{memory.promotion.oos_days}/{memory.promotion.minimum_oos_days} OOS days",
-            )
-            st.caption(memory.explanation)
-            today_memory = all_regime_memory_snapshots.copy()
-            if not today_memory.empty:
-                today_memory["target_date"] = pd.to_datetime(
-                    today_memory.target_date,
-                    errors="coerce",
-                ).dt.date
-                today_memory["captured_at"] = pd.to_datetime(
-                    today_memory.captured_at,
-                    utc=True,
-                    errors="coerce",
-                )
-                same_regime = today_memory[
-                    (today_memory.target_date == target)
-                    & (today_memory.label == memory.label)
-                    & today_memory.status.isin(["PREDICTED", "WATCH", "CONFIRMED"])
-                ]
-                if not same_regime.empty:
-                    detected = same_regime.captured_at.min().tz_convert(timezone_name)
-                    st.caption(f"Detected since {detected:%H:%M} airport local time.")
-            with st.expander("Why this regime, historical analogs and safety gate", expanded=True):
-                regime_rows = [
-                    {
-                        "Regime": state.name,
-                        "Status": state.status,
-                        "Confidence": f"{state.confidence}/100",
-                        "Origin": state.source,
-                        "Champion effect": state.champion_effect,
-                        "Why": state.explanation,
-                    }
-                    for state in memory.regimes
-                ]
-                if regime_rows:
-                    st.dataframe(pd.DataFrame(regime_rows), hide_index=True, width="stretch")
-                if memory.pro_signals:
-                    st.markdown("**Signals for the current regime**")
-                    for signal in memory.pro_signals:
-                        st.write(f"• {signal}")
-                if memory.contra_signals:
-                    st.markdown("**Signals against / unresolved**")
-                    for signal in memory.contra_signals:
-                        st.write(f"• {signal}")
-                analog_rows = [
-                    {
-                        "Date": analog.target_date,
-                        "Similarity": f"{analog.similarity:.0%}",
-                        "Forecast": f"{analog.forecast_c:.1f} °C",
-                        "Actual": f"{analog.actual_c:.1f} °C",
-                        "Residual": f"{analog.residual_c:+.1f} °C",
-                        "Matched on": ", ".join(analog.matched_on),
-                    }
-                    for analog in memory.analogs
-                ]
-                if analog_rows:
-                    st.dataframe(pd.DataFrame(analog_rows), hide_index=True, width="stretch")
+            if trade_decision.basket is not None:
+                basket = trade_decision.basket
+                st.subheader("Event-level edge basket")
+                b1, b2, b3, b4 = st.columns(4)
+                b1.metric("Selected buckets", ", ".join(basket.bucket_labels))
+                b2.metric("Combined fair probability", f"{basket.fair_probability:.1%}")
+                b3.metric("Combined YES asks", f"{basket.total_cost:.1%}")
+                b4.metric("Combined edge", f"{basket.edge:+.1%}")
+                if basket.warnings:
+                    st.warning(
+                        "Basket blocked: "
+                        + " · ".join(basket.warnings)
+                        + ". The buckets are mutually exclusive and are evaluated as one position."
+                    )
                 else:
                     st.caption(
-                        "No settled historical day yet clears the minimum similarity and "
-                        "same-information-set checks."
+                        "The basket includes the model's most likely bucket and has no gap "
+                        "between selected ranges. Fees and order-book depth are applied separately "
+                        "by the Shadow watcher."
                     )
-                st.caption(memory.promotion.explanation)
-                st.caption(
-                    "Automatically learned patterns start as Challenger-only. In-sample "
-                    "matches never count toward promotion; only forecasts saved before later "
-                    "settled outcomes count as out-of-sample evidence."
-                )
-
-        taf = live_nowcast.taf_guidance
-        if taf is None:
-            st.info("No stored TAF currently covers the selected date.")
-        else:
-            local_issue = pd.Timestamp(taf.issue_time).tz_convert(timezone_name)
-            local_tx = (
-                pd.Timestamp(taf.max_temp_at).tz_convert(timezone_name)
-                if taf.max_temp_at is not None
-                else None
+    
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Raw model mean", f"{live_nowcast.raw_model_mean:.1f} °C")
+            c2.metric("Weighted raw ensemble", f"{live_nowcast.weighted_raw_mean:.1f} °C")
+            c3.metric(
+                "Bias corrected · equal weight",
+                f"{live_nowcast.bias_corrected_equal_mean:.1f} °C",
             )
-            title = f"TAF guidance · {taf.agreement}"
-            with st.expander(title, expanded=True):
-                t1, t2, t3 = st.columns(3)
-                t1.metric(
-                    "TAF TX",
-                    f"{taf.max_temp_c:.0f} °C" if taf.max_temp_c is not None else "Not issued",
-                    (
-                        f"at {local_tx:%H:%M} local"
-                        if local_tx is not None
-                        else "Conditions guidance only"
-                    ),
-                )
-                t2.metric("Agreement", taf.agreement)
-                t3.metric("Issued", f"{local_issue:%d.%m. %H:%M}", f"{taf.age_hours:.1f} h old")
-                risk_label = (
-                    "Thunderstorm risk"
-                    if taf.thunderstorm_risk
-                    else "Precipitation risk"
-                    if taf.precipitation_risk
-                    else taf.cloud_risk
-                )
-                p1, p2 = st.columns(2)
-                p1.metric("Peak conditions", risk_label)
-                p2.metric(
-                    "TAF center effect",
-                    f"{taf.center_adjustment_c:+.2f} °C",
-                    f"spread +{taf.spread_addition_c:.2f} °C",
-                )
-                for signal in taf.signals:
-                    st.write(f"• {signal}")
-                wind_bits = []
-                if taf.peak_wind_kph is not None:
-                    wind_bits.append(f"wind up to {taf.peak_wind_kph:.0f} km/h")
-                if taf.peak_wind_direction_deg is not None:
-                    wind_bits.append(f"from {taf.peak_wind_direction_deg:.0f}°")
-                if taf.peak_gust_kph is not None:
-                    wind_bits.append(f"gusts {taf.peak_gust_kph:.0f} km/h")
-                if wind_bits:
-                    st.caption("Peak-window TAF: " + " · ".join(wind_bits))
-                if taf.change_summary:
-                    st.info(f"Change from previous TAF: {taf.change_summary}.")
-                if not taf.temperature_influence_active and taf.max_temp_c is not None:
-                    st.success(
-                        "TAF TX temperature influence is off: its peak time has passed and "
-                        "the METAR series is cooling. The archived TX remains visible for scoring."
-                    )
-                st.code(taf.raw_taf, language=None, wrap_lines=True)
-                st.caption(
-                    f"TAF effect: {taf.center_adjustment_c:+.2f} °C on the final center and "
-                    f"+{taf.spread_addition_c:.2f} °C uncertainty floor. This is the single "
-                    "TAF temperature path and is capped at ±0.25 °C; the raw, bias-corrected "
-                    "and METAR-conditioned stages above remain unchanged."
-                )
-
-        with st.expander("How the live correction was built", expanded=True):
-            contributions = pd.DataFrame(
-                [
-                    {
-                        "Factor": name.replace("_", " ").title(),
-                        "Center contribution": value,
-                    }
-                    for name, value in live_nowcast.adjustment_contributions.items()
-                    if name != "total"
-                ]
+            c4, c5, c6 = st.columns(3)
+            c4.metric("Bias corrected · weighted", f"{corrected.mean:.1f} °C")
+            c5.metric(
+                "METAR-conditioned",
+                f"{live_nowcast.metar_conditioned_mean:.1f} °C",
             )
-            contributions["Center contribution"] = contributions["Center contribution"].map(
-                lambda value: f"{value:+.2f} °C"
+            c6.metric(
+                "Final incl. TAF",
+                f"{live_mean:.1f} °C",
+                f"TAF {live_nowcast.taf_adjustment_c:+.2f} °C",
             )
-            st.dataframe(contributions, hide_index=True, width="stretch")
-            st.caption(
-                f"Bias corrected {corrected.mean:.2f} °C → live factors "
-                f"{live_nowcast.adjustment_contributions['total']:+.2f} °C → "
-                f"METAR conditioned {live_nowcast.metar_conditioned_mean:.2f} °C → "
-                f"TAF {live_nowcast.taf_adjustment_c:+.2f} °C → final "
-                f"{live_nowcast.final_forecast_mean:.2f} °C. TAF remains a separate stage."
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Bias-weighted spread", f"{corrected.spread:.1f} °C")
+            s2.metric(
+                "METAR max so far",
+                f"{observed_max:.0f} °C" if observed_max is not None else "Not available",
             )
+            s3.metric(
+                "Model warming left",
+                f"≤ {remaining_rise:.1f} °C" if remaining_rise is not None else "Not available",
+            )
+            s4, s5 = st.columns(2)
+            s4.metric("Forecast confidence", f"{live_nowcast.forecast_confidence}/100")
+            s5.metric("Day status", day_status.label)
+            st.caption(day_status.explanation)
+    
+            memory = live_nowcast.regime_memory
             if memory is not None:
-                if memory.applied_to_champion:
-                    st.success(
-                        f"Promoted Regime Memory contributes "
-                        f"{memory.center_adjustment_c:+.2f} °C after passing the OOS gate."
-                    )
-                elif memory.challenger_ready:
-                    st.info(
-                        f"Regime Memory proposes {memory.suggested_forecast_c:.2f} °C "
-                        f"({memory.center_adjustment_c:+.2f} °C), but this is stored only as "
-                        "the Analog Memory Challenger and does not change the forecast above."
-                    )
+                memory_title = f"Regime Memory · {memory.status} · {memory.label}"
+                if memory.status == "CONFIRMED":
+                    st.success(memory_title)
+                elif memory.status in {"WATCH", "PREDICTED"}:
+                    st.warning(memory_title)
                 else:
-                    st.caption(
-                        "Regime Memory is collecting comparable settled days; it currently "
-                        "has no numerical effect on either Champion or Challenger."
+                    st.info(memory_title)
+                r1, r2, r3, r4 = st.columns(4)
+                r1.metric("Early-warning confidence", f"{memory.confidence}/100")
+                r2.metric("Comparable days", str(memory.analog_count))
+                r3.metric(
+                    "Analog effect",
+                    f"{memory.center_adjustment_c:+.2f} °C",
+                    "Challenger" if memory.shadow_only else "Champion",
+                )
+                r4.metric(
+                    "Promotion gate",
+                    memory.promotion.status,
+                    f"{memory.promotion.oos_days}/{memory.promotion.minimum_oos_days} OOS days",
+                )
+                st.caption(memory.explanation)
+                today_memory = all_regime_memory_snapshots.copy()
+                if not today_memory.empty:
+                    today_memory["target_date"] = pd.to_datetime(
+                        today_memory.target_date,
+                        errors="coerce",
+                    ).dt.date
+                    today_memory["captured_at"] = pd.to_datetime(
+                        today_memory.captured_at,
+                        utc=True,
+                        errors="coerce",
                     )
-            features = pd.DataFrame(
-                [
-                    {
-                        "Stored feature": name.replace("_", " ").title(),
-                        "Value": (
-                            "—"
-                            if value is None
-                            else f"{value:.2f}"
-                            if isinstance(value, (int, float)) and not isinstance(value, bool)
-                            else str(value)
+                    same_regime = today_memory[
+                        (today_memory.target_date == target)
+                        & (today_memory.label == memory.label)
+                        & today_memory.status.isin(["PREDICTED", "WATCH", "CONFIRMED"])
+                    ]
+                    if not same_regime.empty:
+                        detected = same_regime.captured_at.min().tz_convert(timezone_name)
+                        st.caption(f"Detected since {detected:%H:%M} airport local time.")
+                with st.expander("Why this regime, historical analogs and safety gate", expanded=True):
+                    regime_rows = [
+                        {
+                            "Regime": state.name,
+                            "Status": state.status,
+                            "Confidence": f"{state.confidence}/100",
+                            "Origin": state.source,
+                            "Champion effect": state.champion_effect,
+                            "Why": state.explanation,
+                        }
+                        for state in memory.regimes
+                    ]
+                    if regime_rows:
+                        st.dataframe(pd.DataFrame(regime_rows), hide_index=True, width="stretch")
+                    if memory.pro_signals:
+                        st.markdown("**Signals for the current regime**")
+                        for signal in memory.pro_signals:
+                            st.write(f"• {signal}")
+                    if memory.contra_signals:
+                        st.markdown("**Signals against / unresolved**")
+                        for signal in memory.contra_signals:
+                            st.write(f"• {signal}")
+                    analog_rows = [
+                        {
+                            "Date": analog.target_date,
+                            "Similarity": f"{analog.similarity:.0%}",
+                            "Forecast": f"{analog.forecast_c:.1f} °C",
+                            "Actual": f"{analog.actual_c:.1f} °C",
+                            "Residual": f"{analog.residual_c:+.1f} °C",
+                            "Matched on": ", ".join(analog.matched_on),
+                        }
+                        for analog in memory.analogs
+                    ]
+                    if analog_rows:
+                        st.dataframe(pd.DataFrame(analog_rows), hide_index=True, width="stretch")
+                    else:
+                        st.caption(
+                            "No settled historical day yet clears the minimum similarity and "
+                            "same-information-set checks."
+                        )
+                    st.caption(memory.promotion.explanation)
+                    st.caption(
+                        "Automatically learned patterns start as Challenger-only. In-sample "
+                        "matches never count toward promotion; only forecasts saved before later "
+                        "settled outcomes count as out-of-sample evidence."
+                    )
+    
+            taf = live_nowcast.taf_guidance
+            if taf is None:
+                st.info("No stored TAF currently covers the selected date.")
+            else:
+                local_issue = pd.Timestamp(taf.issue_time).tz_convert(timezone_name)
+                local_tx = (
+                    pd.Timestamp(taf.max_temp_at).tz_convert(timezone_name)
+                    if taf.max_temp_at is not None
+                    else None
+                )
+                title = f"TAF guidance · {taf.agreement}"
+                with st.expander(title, expanded=True):
+                    t1, t2, t3 = st.columns(3)
+                    t1.metric(
+                        "TAF TX",
+                        f"{taf.max_temp_c:.0f} °C" if taf.max_temp_c is not None else "Not issued",
+                        (
+                            f"at {local_tx:%H:%M} local"
+                            if local_tx is not None
+                            else "Conditions guidance only"
                         ),
+                    )
+                    t2.metric("Agreement", taf.agreement)
+                    t3.metric("Issued", f"{local_issue:%d.%m. %H:%M}", f"{taf.age_hours:.1f} h old")
+                    risk_label = (
+                        "Thunderstorm risk"
+                        if taf.thunderstorm_risk
+                        else "Precipitation risk"
+                        if taf.precipitation_risk
+                        else taf.cloud_risk
+                    )
+                    p1, p2 = st.columns(2)
+                    p1.metric("Peak conditions", risk_label)
+                    p2.metric(
+                        "TAF center effect",
+                        f"{taf.center_adjustment_c:+.2f} °C",
+                        f"spread +{taf.spread_addition_c:.2f} °C",
+                    )
+                    for signal in taf.signals:
+                        st.write(f"• {signal}")
+                    wind_bits = []
+                    if taf.peak_wind_kph is not None:
+                        wind_bits.append(f"wind up to {taf.peak_wind_kph:.0f} km/h")
+                    if taf.peak_wind_direction_deg is not None:
+                        wind_bits.append(f"from {taf.peak_wind_direction_deg:.0f}°")
+                    if taf.peak_gust_kph is not None:
+                        wind_bits.append(f"gusts {taf.peak_gust_kph:.0f} km/h")
+                    if wind_bits:
+                        st.caption("Peak-window TAF: " + " · ".join(wind_bits))
+                    if taf.change_summary:
+                        st.info(f"Change from previous TAF: {taf.change_summary}.")
+                    if not taf.temperature_influence_active and taf.max_temp_c is not None:
+                        st.success(
+                            "TAF TX temperature influence is off: its peak time has passed and "
+                            "the METAR series is cooling. The archived TX remains visible for scoring."
+                        )
+                    st.code(taf.raw_taf, language=None, wrap_lines=True)
+                    st.caption(
+                        f"TAF effect: {taf.center_adjustment_c:+.2f} °C on the final center and "
+                        f"+{taf.spread_addition_c:.2f} °C uncertainty floor. This is the single "
+                        "TAF temperature path and is capped at ±0.25 °C; the raw, bias-corrected "
+                        "and METAR-conditioned stages above remain unchanged."
+                    )
+    
+            with st.expander("How the live correction was built", expanded=True):
+                contributions = pd.DataFrame(
+                    [
+                        {
+                            "Factor": name.replace("_", " ").title(),
+                            "Center contribution": value,
+                        }
+                        for name, value in live_nowcast.adjustment_contributions.items()
+                        if name != "total"
+                    ]
+                )
+                contributions["Center contribution"] = contributions["Center contribution"].map(
+                    lambda value: f"{value:+.2f} °C"
+                )
+                st.dataframe(contributions, hide_index=True, width="stretch")
+                st.caption(
+                    f"Bias corrected {corrected.mean:.2f} °C → live factors "
+                    f"{live_nowcast.adjustment_contributions['total']:+.2f} °C → "
+                    f"METAR conditioned {live_nowcast.metar_conditioned_mean:.2f} °C → "
+                    f"TAF {live_nowcast.taf_adjustment_c:+.2f} °C → final "
+                    f"{live_nowcast.final_forecast_mean:.2f} °C. TAF remains a separate stage."
+                )
+                if memory is not None:
+                    if memory.applied_to_champion:
+                        st.success(
+                            f"Promoted Regime Memory contributes "
+                            f"{memory.center_adjustment_c:+.2f} °C after passing the OOS gate."
+                        )
+                    elif memory.challenger_ready:
+                        st.info(
+                            f"Regime Memory proposes {memory.suggested_forecast_c:.2f} °C "
+                            f"({memory.center_adjustment_c:+.2f} °C), but this is stored only as "
+                            "the Analog Memory Challenger and does not change the forecast above."
+                        )
+                    else:
+                        st.caption(
+                            "Regime Memory is collecting comparable settled days; it currently "
+                            "has no numerical effect on either Champion or Challenger."
+                        )
+                features = pd.DataFrame(
+                    [
+                        {
+                            "Stored feature": name.replace("_", " ").title(),
+                            "Value": (
+                                "—"
+                                if value is None
+                                else f"{value:.2f}"
+                                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                                else str(value)
+                            ),
+                        }
+                        for name, value in live_nowcast.live_features.items()
+                    ]
+                )
+                st.dataframe(features, hide_index=True, width="stretch")
+    
+            with st.expander("Dynamic model weights and confidence"):
+                weights = current[
+                    [
+                        "model",
+                        "model_weight",
+                        "performance_weight",
+                        "outlier_multiplier",
+                        "regime_weight_multiplier",
+                        "robust_distance_c",
+                        "historical_d1_bias",
+                        "d1_bias",
+                    ]
+                ].copy()
+                weights["model_weight"] = weights.model_weight.map(lambda value: f"{value:.1%}")
+                weights["performance_weight"] = weights.performance_weight.map(
+                    lambda value: f"{value:.2f}"
+                )
+                weights["outlier_multiplier"] = weights.outlier_multiplier.map(
+                    lambda value: f"{value:.2f}×"
+                )
+                weights["regime_weight_multiplier"] = weights.regime_weight_multiplier.map(
+                    lambda value: f"{value:.2f}×"
+                )
+                weights["robust_distance_c"] = weights.robust_distance_c.map(
+                    lambda value: f"{value:.2f} °C"
+                )
+                weights["d1_bias"] = weights.d1_bias.map(lambda value: f"{value:+.2f} °C")
+                weights["historical_d1_bias"] = weights.historical_d1_bias.map(
+                    lambda value: f"{value:+.2f} °C"
+                )
+                weights = weights.rename(
+                    columns={
+                        "model": "Model",
+                        "model_weight": "Current weight",
+                        "performance_weight": "Historical weight",
+                        "outlier_multiplier": "Outlier protection",
+                        "regime_weight_multiplier": "Heat-regime weight",
+                        "robust_distance_c": "Distance from median",
+                        "historical_d1_bias": "Historical D-1 bias",
+                        "d1_bias": "Effective D-1 bias",
                     }
-                    for name, value in live_nowcast.live_features.items()
-                ]
-            )
-            st.dataframe(features, hide_index=True, width="stretch")
-
-        with st.expander("Dynamic model weights and confidence"):
-            weights = current[
+                )
+                st.dataframe(weights, hide_index=True, width="stretch")
+                factors = pd.DataFrame(
+                    [
+                        {"Factor": name.replace("_", " ").title(), "Score": score}
+                        for name, score in live_nowcast.confidence_factors.items()
+                    ]
+                )
+                st.bar_chart(factors.set_index("Factor"), horizontal=True)
+                st.caption(
+                    "Weights use only earlier D-1 errors from the latest 90 days and are shrunk "
+                    "toward equal weighting when the sample is small. Confidence combines historical "
+                    "accuracy, current model agreement, sample size, live-data freshness and, when "
+                    "available, a limited TAF agreement factor. Confirmed post-convective and rapid "
+                    "heat-ramp regimes apply separate conservative confidence reductions."
+                )
+    
+            st.subheader("Model maximum forecasts")
+            provenance = live_nowcast.model_freshness[
                 [
                     "model",
-                    "model_weight",
-                    "performance_weight",
-                    "outlier_multiplier",
-                    "regime_weight_multiplier",
-                    "robust_distance_c",
-                    "historical_d1_bias",
-                    "d1_bias",
+                    "model_run_at",
+                    "available_at",
+                    "fetched_at",
+                    "provenance_status",
+                    "age_minutes",
+                    "used_in_forecast",
                 ]
             ].copy()
-            weights["model_weight"] = weights.model_weight.map(lambda value: f"{value:.1%}")
-            weights["performance_weight"] = weights.performance_weight.map(
-                lambda value: f"{value:.2f}"
-            )
-            weights["outlier_multiplier"] = weights.outlier_multiplier.map(
-                lambda value: f"{value:.2f}×"
-            )
-            weights["regime_weight_multiplier"] = weights.regime_weight_multiplier.map(
-                lambda value: f"{value:.2f}×"
-            )
-            weights["robust_distance_c"] = weights.robust_distance_c.map(
-                lambda value: f"{value:.2f} °C"
-            )
-            weights["d1_bias"] = weights.d1_bias.map(lambda value: f"{value:+.2f} °C")
-            weights["historical_d1_bias"] = weights.historical_d1_bias.map(
-                lambda value: f"{value:+.2f} °C"
-            )
-            weights = weights.rename(
+            for column in ["model_run_at", "available_at", "fetched_at"]:
+                provenance[column] = pd.to_datetime(
+                    provenance[column], utc=True, errors="coerce"
+                ).dt.tz_convert(timezone_name)
+                provenance[column] = provenance[column].map(
+                    lambda value: value.strftime("%d.%m. %H:%M") if pd.notna(value) else "Not supplied"
+                )
+            provenance = provenance.rename(
                 columns={
                     "model": "Model",
-                    "model_weight": "Current weight",
-                    "performance_weight": "Historical weight",
-                    "outlier_multiplier": "Outlier protection",
-                    "regime_weight_multiplier": "Heat-regime weight",
-                    "robust_distance_c": "Distance from median",
-                    "historical_d1_bias": "Historical D-1 bias",
-                    "d1_bias": "Effective D-1 bias",
+                    "model_run_at": "Model initialization",
+                    "available_at": "Provider availability",
+                    "fetched_at": "Fetched by Weatherman",
+                    "provenance_status": "Provenance",
+                    "age_minutes": "Fetch age (minutes)",
+                    "used_in_forecast": "Used in live consensus",
                 }
             )
-            st.dataframe(weights, hide_index=True, width="stretch")
-            factors = pd.DataFrame(
-                [
-                    {"Factor": name.replace("_", " ").title(), "Score": score}
-                    for name, score in live_nowcast.confidence_factors.items()
-                ]
+            provenance["Fetch age (minutes)"] = provenance["Fetch age (minutes)"].map(
+                lambda value: round(float(value)) if pd.notna(value) else None
             )
-            st.bar_chart(factors.set_index("Factor"), horizontal=True)
+            st.dataframe(provenance, hide_index=True, width="stretch")
             st.caption(
-                "Weights use only earlier D-1 errors from the latest 90 days and are shrunk "
-                "toward equal weighting when the sample is small. Confidence combines historical "
-                "accuracy, current model agreement, sample size, live-data freshness and, when "
-                "available, a limited TAF agreement factor. Confirmed post-convective and rapid "
-                "heat-ramp regimes apply separate conservative confidence reductions."
+                "Fetched time is not relabelled as model initialization. Meteoblue supplies mLM "
+                "run metadata when available; Open-Meteo's regular forecast response may not expose "
+                "the underlying NWP run, which is shown explicitly."
             )
-
-        st.subheader("Model maximum forecasts")
-        provenance = live_nowcast.model_freshness[
-            [
-                "model",
-                "model_run_at",
-                "available_at",
-                "fetched_at",
-                "provenance_status",
-                "age_minutes",
-                "used_in_forecast",
-            ]
-        ].copy()
-        for column in ["model_run_at", "available_at", "fetched_at"]:
-            provenance[column] = pd.to_datetime(
-                provenance[column], utc=True, errors="coerce"
-            ).dt.tz_convert(timezone_name)
-            provenance[column] = provenance[column].map(
-                lambda value: value.strftime("%d.%m. %H:%M") if pd.notna(value) else "Not supplied"
-            )
-        provenance = provenance.rename(
-            columns={
-                "model": "Model",
-                "model_run_at": "Model initialization",
-                "available_at": "Provider availability",
-                "fetched_at": "Fetched by Weatherman",
-                "provenance_status": "Provenance",
-                "age_minutes": "Fetch age (minutes)",
-                "used_in_forecast": "Used in live consensus",
-            }
-        )
-        provenance["Fetch age (minutes)"] = provenance["Fetch age (minutes)"].map(
-            lambda value: round(float(value)) if pd.notna(value) else None
-        )
-        st.dataframe(provenance, hide_index=True, width="stretch")
-        st.caption(
-            "Fetched time is not relabelled as model initialization. Meteoblue supplies mLM "
-            "run metadata when available; Open-Meteo's regular forecast response may not expose "
-            "the underlying NWP run, which is shown explicitly."
-        )
-        st.caption(
-            "Workflow 5 now checks current model data every ten minutes from 06:00 airport "
-            "local time through the end of the critical window. Open-Meteo providers are "
-            "refetched after 30 minutes and meteoblue after 60 minutes. A stale provider is "
-            "omitted; with fewer than two fresh models all trade signals are blocked. The "
-            "sidebar button still performs an immediate full fetch for this airport."
-        )
-        chart = current[["model", "max_temp_c", "corrected_max"]].melt(
-            id_vars="model", var_name="forecast", value_name="temperature_c"
-        )
-        st.plotly_chart(
-            px.bar(
-                chart,
-                x="model",
-                y="temperature_c",
-                color="forecast",
-                barmode="group",
-                labels={"temperature_c": "Max °C", "model": "Model"},
-            ),
-            width="stretch",
-        )
-
-        with st.expander(f"Heat Spike · {heat.status} ({heat.score}/100)", expanded=True):
-            for signal in heat.signals:
-                st.write(f"• {signal}")
-            context = []
-            if temp_850 is not None:
-                context.append(f"850 hPa: {temp_850:.1f} °C")
-            if radiation is not None:
-                context.append(f"Radiation: {radiation:.0f} W/m²")
-            if live_nowcast.wind_speed_kph is not None:
-                wind = f"Wind: {live_nowcast.wind_speed_kph:.0f} km/h"
-                if live_nowcast.wind_direction_deg is not None:
-                    wind += f" from {live_nowcast.wind_direction_deg:.0f}°"
-                if live_nowcast.wind_source:
-                    wind += f" ({live_nowcast.wind_source})"
-                context.append(wind)
-            if context:
-                st.caption(" · ".join(context))
             st.caption(
-                f"Cautious nowcast adjustment: {heat.adjustment_c:+.1f} °C. "
-                "The score will be calibrated per airport as observations accumulate."
+                "Workflow 5 now checks current model data every ten minutes from 06:00 airport "
+                "local time through the end of the critical window. Open-Meteo providers are "
+                "refetched after 30 minutes and meteoblue after 60 minutes. A stale provider is "
+                "omitted; with fewer than two fresh models all trade signals are blocked. The "
+                "sidebar button still performs an immediate full fetch for this airport."
             )
-
-        probs = pd.DataFrame(
-            [{"bucket": bucket, "probability": value} for bucket, value in probabilities.items()]
-        )
-        probs = probs[probs.probability >= 0.005]
-        if not latest_markets.empty and prior_probabilities:
-
-            def previous_for_bucket(bucket: int) -> float | None:
-                matches = latest_markets[
-                    (latest_markets.bucket_low_c.isna() | (latest_markets.bucket_low_c <= bucket))
-                    & (
-                        latest_markets.bucket_high_c.isna()
-                        | (latest_markets.bucket_high_c >= bucket)
-                    )
-                ]
-                if matches.empty:
-                    return None
-                return prior_probabilities.get(str(matches.iloc[0].bucket_label))
-
-            probs["change"] = probs.apply(
-                lambda row: (
-                    row.probability - previous_for_bucket(int(row.bucket))
-                    if previous_for_bucket(int(row.bucket)) is not None
-                    else None
+            chart = current[["model", "max_temp_c", "corrected_max"]].melt(
+                id_vars="model", var_name="forecast", value_name="temperature_c"
+            )
+            st.plotly_chart(
+                px.bar(
+                    chart,
+                    x="model",
+                    y="temperature_c",
+                    color="forecast",
+                    barmode="group",
+                    labels={"temperature_c": "Max °C", "model": "Model"},
                 ),
-                axis=1,
+                width="stretch",
             )
-        st.subheader("Final bucket probabilities")
-        shown_probabilities = probs.assign(
-            probability=lambda frame: frame.probability.map(lambda value: f"{value:.1%}")
-        )
-        if "change" in shown_probabilities:
-            shown_probabilities["change"] = shown_probabilities.change.map(
-                lambda value: f"{value:+.1%}" if pd.notna(value) else "—"
+    
+            with st.expander(f"Heat Spike · {heat.status} ({heat.score}/100)", expanded=True):
+                for signal in heat.signals:
+                    st.write(f"• {signal}")
+                context = []
+                if temp_850 is not None:
+                    context.append(f"850 hPa: {temp_850:.1f} °C")
+                if radiation is not None:
+                    context.append(f"Radiation: {radiation:.0f} W/m²")
+                if live_nowcast.wind_speed_kph is not None:
+                    wind = f"Wind: {live_nowcast.wind_speed_kph:.0f} km/h"
+                    if live_nowcast.wind_direction_deg is not None:
+                        wind += f" from {live_nowcast.wind_direction_deg:.0f}°"
+                    if live_nowcast.wind_source:
+                        wind += f" ({live_nowcast.wind_source})"
+                    context.append(wind)
+                if context:
+                    st.caption(" · ".join(context))
+                st.caption(
+                    f"Cautious nowcast adjustment: {heat.adjustment_c:+.1f} °C. "
+                    "The score will be calibrated per airport as observations accumulate."
+                )
+    
+            probs = pd.DataFrame(
+                [{"bucket": bucket, "probability": value} for bucket, value in probabilities.items()]
             )
-        st.dataframe(shown_probabilities, hide_index=True, width="stretch")
-        if day_status.is_locked:
-            st.success(
-                f"{day_status.label}: {day_status.explanation} Probabilities outside the final "
-                "range have been removed."
+            probs = probs[probs.probability >= 0.005]
+            if not latest_markets.empty and prior_probabilities:
+    
+                def previous_for_bucket(bucket: int) -> float | None:
+                    matches = latest_markets[
+                        (latest_markets.bucket_low_c.isna() | (latest_markets.bucket_low_c <= bucket))
+                        & (
+                            latest_markets.bucket_high_c.isna()
+                            | (latest_markets.bucket_high_c >= bucket)
+                        )
+                    ]
+                    if matches.empty:
+                        return None
+                    return prior_probabilities.get(str(matches.iloc[0].bucket_label))
+    
+                probs["change"] = probs.apply(
+                    lambda row: (
+                        row.probability - previous_for_bucket(int(row.bucket))
+                        if previous_for_bucket(int(row.bucket)) is not None
+                        else None
+                    ),
+                    axis=1,
+                )
+            st.subheader("Final bucket probabilities")
+            shown_probabilities = probs.assign(
+                probability=lambda frame: frame.probability.map(lambda value: f"{value:.1%}")
             )
-        elif day_status.minimum_bucket is not None:
-            st.caption(
-                f"Buckets below {day_status.minimum_bucket} °C are impossible because today's "
-                f"stored METAR maximum is already {observed_max:.0f} °C. Remaining "
-                "probabilities sum to 100%."
-            )
-            st.caption(day_status.explanation)
-        else:
-            st.caption(day_status.explanation)
-
+            if "change" in shown_probabilities:
+                shown_probabilities["change"] = shown_probabilities.change.map(
+                    lambda value: f"{value:+.1%}" if pd.notna(value) else "—"
+                )
+            st.dataframe(shown_probabilities, hide_index=True, width="stretch")
+            if day_status.is_locked:
+                st.success(
+                    f"{day_status.label}: {day_status.explanation} Probabilities outside the final "
+                    "range have been removed."
+                )
+            elif day_status.minimum_bucket is not None:
+                st.caption(
+                    f"Buckets below {day_status.minimum_bucket} °C are impossible because today's "
+                    f"stored METAR maximum is already {observed_max:.0f} °C. Remaining "
+                    "probabilities sum to 100%."
+                )
+                st.caption(day_status.explanation)
+            else:
+                st.caption(day_status.explanation)
+    
 with tab_market:
     st.subheader("Our probability versus the live Polymarket price")
     st.caption(

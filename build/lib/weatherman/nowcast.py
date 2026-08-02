@@ -26,6 +26,16 @@ from .taf import TafGuidance, build_taf_guidance
 
 
 @dataclass(frozen=True)
+class FutureOutlook:
+    status: str
+    summary: str
+    signals: tuple[str, ...]
+    post_rain_reheating_watch: bool
+    challenger_adjustment_c: float
+    challenger_spread_addition_c: float
+
+
+@dataclass(frozen=True)
 class LiveNowcast:
     current: pd.DataFrame
     model_freshness: pd.DataFrame
@@ -37,6 +47,7 @@ class LiveNowcast:
     heat: HeatSpikeAssessment
     day_status: DayStatus
     probabilities: dict[int, float]
+    current_observed_temp: float | None
     observed_max: float | None
     heating_rate: float | None
     expected_now: float | None
@@ -73,6 +84,7 @@ class LiveNowcast:
     metar_pending: bool
     metar_due_at: datetime | None
     challenger_variants: dict[str, dict[str, object]]
+    future_outlook: FutureOutlook
     regime_memory: object | None = None
 
 
@@ -255,6 +267,96 @@ def expected_peak_time(
         return None
     epoch = float(pd.Series(peak_timestamps).median())
     return datetime.fromtimestamp(epoch, tz=ZoneInfo("UTC"))
+
+
+def build_future_outlook(
+    *,
+    taf_guidance: TafGuidance | None,
+    remaining_rise_c: float | None,
+    future_radiation_max: float | None,
+    expected_peak_at: datetime | None,
+    hours_to_peak: float | None,
+    timezone_name: str,
+) -> FutureOutlook:
+    """Summarise forward-looking inputs and gate a shadow-only reheating hypothesis."""
+    signals: list[str] = []
+    if remaining_rise_c is not None:
+        signals.append(f"Anchored model paths allow up to {remaining_rise_c:.1f} °C more warming")
+    if future_radiation_max is not None:
+        signals.append(f"Future model radiation reaches {future_radiation_max:.0f} W/m²")
+    if expected_peak_at is not None:
+        local_peak = pd.Timestamp(expected_peak_at).tz_convert(timezone_name)
+        signals.append(f"Median model peak is near {local_peak:%H:%M} local")
+
+    transition_predicted = bool(
+        taf_guidance is not None and taf_guidance.post_rain_reheating_predicted
+    )
+    if transition_predicted and taf_guidance is not None:
+        if taf_guidance.precipitation_end_at is not None:
+            rain_end = pd.Timestamp(taf_guidance.precipitation_end_at).tz_convert(timezone_name)
+            signals.append(f"TAF precipitation ends near {rain_end:%H:%M} local")
+        if taf_guidance.clearing_at is not None:
+            clearing = pd.Timestamp(taf_guidance.clearing_at).tz_convert(timezone_name)
+            signals.append(f"TAF indicates clearing near {clearing:%H:%M} local")
+
+    reheating_watch = bool(
+        transition_predicted
+        and remaining_rise_c is not None
+        and remaining_rise_c >= 0.50
+        and future_radiation_max is not None
+        and future_radiation_max >= 300
+        and hours_to_peak is not None
+        and hours_to_peak >= 0.50
+    )
+    if reheating_watch:
+        adjustment = min(
+            0.35,
+            0.15
+            + 0.08 * max(0.0, float(remaining_rise_c) - 0.50)
+            + (0.05 if float(future_radiation_max) >= 600 else 0.0),
+        )
+        status = "POST-RAIN REHEATING WATCH"
+        summary = (
+            "TAF timing, anchored model warming and future radiation jointly support a "
+            "possible renewed temperature rise. This remains a shadow-only Challenger."
+        )
+        spread_addition = 0.10
+    elif transition_predicted:
+        adjustment = 0.0
+        status = "CLEARING SIGNAL · UNCONFIRMED"
+        summary = (
+            "TAF suggests rain will end and cloud will break, but model warming, radiation "
+            "or time-to-peak does not yet confirm a reheating Challenger."
+        )
+        spread_addition = 0.0
+    elif remaining_rise_c is not None and remaining_rise_c >= 0.50:
+        adjustment = 0.0
+        status = "MORE WARMING EXPECTED"
+        summary = (
+            "The future model path still contains material warming. It is already included "
+            "in the Champion and receives no additional temperature correction."
+        )
+        spread_addition = 0.0
+    elif hours_to_peak is not None and hours_to_peak <= 0:
+        adjustment = 0.0
+        status = "MODEL PEAK PASSED"
+        summary = "The median model peak time has passed; day-status safeguards now dominate."
+        spread_addition = 0.0
+    else:
+        adjustment = 0.0
+        status = "LIMITED FUTURE WARMING"
+        summary = (
+            "No separate future reheating pattern is confirmed beyond the existing model path."
+        )
+        spread_addition = 0.0
+    return FutureOutlook(
+        status=status,
+        summary=summary,
+        signals=tuple(signals),
+        post_rain_reheating_watch=reheating_watch,
+        challenger_adjustment_c=float(adjustment),
+        challenger_spread_addition_c=float(spread_addition),
+    )
 
 
 def probability_moments(probabilities: dict[int, float]) -> tuple[float, float]:
@@ -2094,6 +2196,14 @@ def build_live_nowcast(
     )
     metar_mean, metar_spread = probability_moments(metar_probabilities)
     final_mean, final_spread = probability_moments(probabilities)
+    future_outlook = build_future_outlook(
+        taf_guidance=taf_guidance,
+        remaining_rise_c=remaining_rise,
+        future_radiation_max=future_radiation,
+        expected_peak_at=peak_at,
+        hours_to_peak=hours_to_peak,
+        timezone_name=timezone_name,
+    )
     stage_probabilities = {
         "Raw model mean": raw_equal.probability_by_bucket,
         "Weighted raw ensemble": weighted_raw.probability_by_bucket,
@@ -2125,6 +2235,13 @@ def build_live_nowcast(
         "model_radiation_wm2": radiation,
         "future_radiation_max_wm2": future_radiation,
         "remaining_model_rise_c": remaining_rise,
+        "future_outlook_status": future_outlook.status,
+        "post_rain_reheating_watch": float(
+            future_outlook.post_rain_reheating_watch
+        ),
+        "post_rain_reheating_challenger_adjustment_c": (
+            future_outlook.challenger_adjustment_c
+        ),
         "hours_to_critical_window_end": hours_to_window_end,
         "model_ceiling_reached_early": float(model_ceiling_reached_early),
         "late_dry_mixing_active": float(late_dry_mixing > 0),
@@ -2346,6 +2463,36 @@ def build_live_nowcast(
                 "probabilities": challenger.probabilities,
                 "forecast_confidence": challenger.forecast_confidence,
             }
+        if future_outlook.post_rain_reheating_watch:
+            reheating_unconditioned = consensus(
+                (
+                    current.corrected_max
+                    + live_adjustment
+                    + taf_center_adjustment
+                    + future_outlook.challenger_adjustment_c
+                ).tolist(),
+                weights=current.model_weight.tolist(),
+                sigma_floor=(
+                    live_sigma_floor
+                    + taf_spread_addition
+                    + future_outlook.challenger_spread_addition_c
+                ),
+            )
+            reheating_probabilities = condition_probability_range(
+                reheating_unconditioned.probability_by_bucket,
+                day_status.minimum_bucket,
+                day_status.maximum_bucket,
+            )
+            reheating_mean, reheating_spread = probability_moments(
+                reheating_probabilities
+            )
+            challenger_variants["Post-Rain Reheating Challenger"] = {
+                "factor": "post_rain_reheating",
+                "forecast_mean_c": reheating_mean,
+                "spread_c": reheating_spread,
+                "probabilities": reheating_probabilities,
+                "forecast_confidence": int(max(0, min(100, forecast_confidence))),
+            }
 
     return LiveNowcast(
         current=current,
@@ -2358,6 +2505,7 @@ def build_live_nowcast(
         heat=heat,
         day_status=day_status,
         probabilities=probabilities,
+        current_observed_temp=current_observed_temp,
         observed_max=observed_max,
         heating_rate=heating_rate,
         expected_now=expected_now,
@@ -2394,4 +2542,5 @@ def build_live_nowcast(
         metar_pending=schedule.is_pending,
         metar_due_at=schedule.due_at,
         challenger_variants=challenger_variants,
+        future_outlook=future_outlook,
     )

@@ -235,6 +235,100 @@ def test_taf_conflict_broadens_and_cautiously_lowers_live_distribution():
     assert with_taf.forecast_confidence < without_taf.forecast_confidence
 
 
+def test_post_rain_reheating_is_forward_looking_and_shadow_only():
+    as_of = datetime(2026, 7, 21, 10, tzinfo=timezone.utc)
+    target = as_of.date()
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "EHAM",
+                "model": model,
+                "run_at": as_of - timedelta(minutes=20),
+                "target_date": target,
+                "max_temp_c": maximum,
+                "source": "open-meteo",
+                "horizon": "Live",
+            }
+            for model, maximum in [("ECMWF", 27.0), ("HARMONIE", 27.4)]
+        ]
+    )
+    hourly = pd.DataFrame(
+        [
+            {
+                "airport": "EHAM",
+                "model": model,
+                "run_at": as_of - timedelta(minutes=20),
+                "valid_at": valid_at,
+                "temp_c": temp_c,
+                "dewpoint_c": 14.0,
+                "cloud_cover": cloud,
+                "temp_850hpa_c": 13.0,
+                "radiation_wm2": radiation,
+                "wind_kph": 12.0,
+                "wind_direction": 240.0,
+            }
+            for model in ["ECMWF", "HARMONIE"]
+            for valid_at, temp_c, cloud, radiation in [
+                (as_of, 23.0, 90.0, 120.0),
+                (as_of + timedelta(hours=2), 24.0, 45.0, 420.0),
+                (as_of + timedelta(hours=4), 27.0, 20.0, 650.0),
+            ]
+        ]
+    )
+    tafs = pd.DataFrame(
+        [
+            {
+                "airport": "EHAM",
+                "issue_time": as_of - timedelta(hours=1),
+                "collected_at": as_of - timedelta(minutes=55),
+                "valid_from": datetime(2026, 7, 21, 0, tzinfo=timezone.utc),
+                "valid_to": datetime(2026, 7, 22, 6, tzinfo=timezone.utc),
+                "raw_taf": "TAF EHAM TEMPO SHRA BKN025 BECMG SCT040 TX27/2114Z",
+                "is_amended": False,
+                "is_corrected": False,
+                "max_temp_c": 27.0,
+                "max_temp_at": datetime(2026, 7, 21, 14, tzinfo=timezone.utc),
+                "periods_json": json.dumps(
+                    [
+                        {
+                            "time_from": "2026-07-21T09:00:00+00:00",
+                            "time_to": "2026-07-21T12:00:00+00:00",
+                            "change": "TEMPO",
+                            "weather": "SHRA",
+                            "clouds": [{"cover": "BKN", "base": 2500}],
+                        },
+                        {
+                            "time_from": "2026-07-21T12:00:00+00:00",
+                            "time_to": "2026-07-21T18:00:00+00:00",
+                            "change": "BECMG",
+                            "weather": None,
+                            "clouds": [{"cover": "SCT", "base": 4000}],
+                        },
+                    ]
+                ),
+            }
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=pd.DataFrame(),
+        hourly=hourly,
+        markets=pd.DataFrame(),
+        tafs=tafs,
+        timezone_name="Europe/Amsterdam",
+        target=target,
+        as_of=as_of,
+    )
+    assert result is not None
+    assert result.future_outlook.post_rain_reheating_watch
+    assert result.live_features["post_rain_reheating_watch"] == 1
+    assert "post_rain_reheating" not in result.adjustment_contributions
+    alternative = result.challenger_variants["Post-Rain Reheating Challenger"]
+    assert alternative["forecast_mean_c"] > result.final_forecast_mean
+    assert result.future_outlook.challenger_adjustment_c <= 0.35
+
+
 def test_evening_model_path_is_anchored_to_metar_and_observed_maximum():
     as_of = datetime(2026, 7, 21, 21, tzinfo=ZoneInfo("Europe/Madrid"))
     as_of_utc = as_of.astimezone(timezone.utc)

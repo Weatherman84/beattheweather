@@ -33,6 +33,9 @@ class TafGuidance:
     thunderstorm_risk: bool
     signals: tuple[str, ...]
     temperature_influence_active: bool
+    post_rain_reheating_predicted: bool
+    precipitation_end_at: datetime | None
+    clearing_at: datetime | None
     change_summary: str | None = None
 
 
@@ -216,6 +219,102 @@ def _peak_conditions(
     }
 
 
+def _future_post_rain_transition(
+    row: pd.Series,
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+) -> dict[str, object]:
+    """Find a future rain-to-clear sequence without treating it as a live adjustment."""
+    timezone = ZoneInfo(timezone_name)
+    peak_start = pd.Timestamp(datetime.combine(target, time(11), timezone)).tz_convert("UTC")
+    peak_end = pd.Timestamp(datetime.combine(target, time(19), timezone)).tz_convert("UTC")
+    as_of_utc = _utc(as_of)
+    assert as_of_utc is not None
+    active_start = max(peak_start, as_of_utc)
+    if active_start >= peak_end:
+        return {
+            "predicted": False,
+            "precipitation_end_at": None,
+            "clearing_at": None,
+            "signal": None,
+        }
+
+    states: list[dict[str, object]] = []
+    for period in _periods(row.get("periods_json")):
+        start = _utc(period.get("time_from"))
+        end = _utc(period.get("time_to"))
+        if start is None or end is None or start >= peak_end or end <= active_start:
+            continue
+        weather = str(period.get("weather") or "").upper()
+        precipitation = any(token in weather for token in ("RA", "DZ", "SN", "SH", "GR"))
+        covers = {
+            str(cloud.get("cover") or "").upper()
+            for cloud in (period.get("clouds") or [])
+        }
+        blocked = bool(covers.intersection({"BKN", "OVC"}))
+        clear = bool(covers.intersection({"NSC", "SKC", "CLR"})) or bool(
+            covers and not blocked and covers.issubset({"FEW", "SCT", "NSC", "SKC", "CLR"})
+        )
+        states.append(
+            {
+                "start": start,
+                "end": end,
+                "precipitation": precipitation,
+                "blocked": blocked,
+                "clear": clear,
+            }
+        )
+    if not states:
+        return {
+            "predicted": False,
+            "precipitation_end_at": None,
+            "clearing_at": None,
+            "signal": None,
+        }
+
+    rainy = sorted(
+        (state for state in states if state["precipitation"]),
+        key=lambda state: state["end"],
+    )
+    clear_states = sorted(
+        (state for state in states if state["clear"] and not state["precipitation"]),
+        key=lambda state: state["start"],
+    )
+    for rain in rainy:
+        rain_end = rain["end"]
+        assert isinstance(rain_end, pd.Timestamp)
+        if rain_end <= active_start or rain_end >= peak_end:
+            continue
+        for clear_state in clear_states:
+            clear_start = clear_state["start"]
+            clear_end = clear_state["end"]
+            assert isinstance(clear_start, pd.Timestamp)
+            assert isinstance(clear_end, pd.Timestamp)
+            if clear_end <= rain_end or clear_start >= peak_end:
+                continue
+            clearing_at = max(rain_end, clear_start)
+            if clearing_at >= peak_end:
+                continue
+            rain_local = rain_end.tz_convert(timezone_name)
+            clear_local = clearing_at.tz_convert(timezone_name)
+            return {
+                "predicted": True,
+                "precipitation_end_at": rain_end.to_pydatetime(),
+                "clearing_at": clearing_at.to_pydatetime(),
+                "signal": (
+                    f"TAF rain ends near {rain_local:%H:%M} and clearer conditions "
+                    f"follow near {clear_local:%H:%M} local"
+                ),
+            }
+    return {
+        "predicted": False,
+        "precipitation_end_at": None,
+        "clearing_at": None,
+        "signal": None,
+    }
+
+
 def _guidance_for_row(
     row: pd.Series,
     *,
@@ -267,6 +366,12 @@ def _guidance_for_row(
         confidence_score = max(20, confidence_score - 15)
         center_adjustment *= 0.5
     conditions = _peak_conditions(row, timezone_name, target, as_of, wind_profile)
+    future_transition = _future_post_rain_transition(
+        row,
+        timezone_name,
+        target,
+        as_of,
+    )
     if conditions["thunderstorm"] or conditions["precipitation"]:
         spread_addition = max(spread_addition, 0.25)
     maximum_at_utc = _utc(maximum_at)
@@ -282,6 +387,8 @@ def _guidance_for_row(
         agreement = f"{agreement} · TX passed"
     center_adjustment = max(-0.25, min(0.25, center_adjustment))
     signals = list(conditions["signals"])
+    if future_transition["signal"]:
+        signals.append(str(future_transition["signal"]))
     if maximum is not None:
         signals.insert(
             0,
@@ -317,6 +424,9 @@ def _guidance_for_row(
         thunderstorm_risk=bool(conditions["thunderstorm"]),
         signals=tuple(signals),
         temperature_influence_active=temperature_influence_active,
+        post_rain_reheating_predicted=bool(future_transition["predicted"]),
+        precipitation_end_at=future_transition["precipitation_end_at"],
+        clearing_at=future_transition["clearing_at"],
     )
 
 
