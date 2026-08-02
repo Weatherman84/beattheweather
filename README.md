@@ -622,6 +622,32 @@ Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grüne
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
 **Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
 
+### Neu in Version 10.4.1 · Safety Guards aus der Tagesanalyse
+
+- Workflow 5 sammelt die METARs aller Trading-Airports nach Ende des Tradingfensters
+  weiter bis **21:35 Uhr lokal**. Dieser METAR-only-Zweig lädt keine Marktpreise und
+  erzeugt keine neuen Trades; er aktualisiert jedoch das Tagesmaximum und den
+  aktuellen METAR-Actual-Stand.
+- Der **Pre-METAR Guard** beginnt nun sieben Minuten vor jedem konfigurierten
+  Routinebericht und bleibt aktiv, bis der Bericht tatsächlich eingetroffen ist.
+  Währenddessen sind BET und SHADOW BET hart gesperrt.
+- Schließt ein positiver Edge-Basket den wahrscheinlichsten Bucket oder einen
+  inneren Bucket aus, blockiert der **Basket Integrity Guard** nun auch sämtliche
+  zugehörigen Einzelwetten. Sie werden weiterhin für die Diagnose gespeichert,
+  aber ausdrücklich als `NO BET`.
+- München erhält einen **Cloud-Clearance Reheating Challenger** auch ohne vorherigen
+  Regen. BKN/OVC → Aufklaren muss mit verbleibender Modellerwärmung, Strahlung und
+  Peakzeit zusammenpassen. Der Challenger verändert den Champion nicht.
+- Amsterdam begrenzt die gemeinsame positive Wirkung überlappender Signale aus
+  klarem Himmel, Trockenheit, Strahlung und Late Dry Mixing auf **+0,35 °C**. Die
+  einzelnen Beiträge bleiben nachvollziehbar, werden aber proportional gedämpft.
+- Münchens **Phase vs. Amplitude** verändert das Forecastzentrum erst nach stärkerer
+  Bestätigung. Bei einem vorläufigen Phase-Fit bleiben Zentrum und Champion-Anker
+  erhalten; stattdessen steigen Spread und Unsicherheit und die Confidence sinkt.
+
+Kein Backfill erforderlich. Nach dem Upload den grünen Test abwarten, Workflow 2
+einmal manuell starten und Streamlit über **Manage app → Reboot app** neu starten.
+
 ### Neu in Version 10.4.0 · aufgeräumter Live Forecast
 
 - Der Live Forecast folgt nun drei klaren Ebenen: **Trading Cockpit**, **Forecast

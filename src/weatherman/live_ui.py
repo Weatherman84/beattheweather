@@ -234,7 +234,7 @@ def render_compact_live_forecast(
     elif day_status.is_locked:
         all_buckets["Status"] = "Day complete"
     elif nowcast.metar_pending:
-        all_buckets["Status"] = "METAR pending"
+        all_buckets["Status"] = "METAR guard"
     elif nowcast.forecast_data_stale:
         all_buckets["Status"] = "Models stale"
     relevant = all_buckets.head(5)
@@ -252,7 +252,11 @@ def render_compact_live_forecast(
     st.subheader("Forecast Drivers")
     st.dataframe(pd.DataFrame(driver_rows), hide_index=True, width="stretch")
     future = getattr(nowcast, "future_outlook")
-    if future.post_rain_reheating_watch:
+    if getattr(
+        future,
+        "reheating_watch",
+        getattr(future, "post_rain_reheating_watch", False),
+    ):
         st.warning(f"{future.status}: {future.summary}")
     else:
         st.caption(f"Future outlook · {future.status}: {future.summary}")

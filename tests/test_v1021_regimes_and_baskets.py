@@ -334,7 +334,7 @@ def test_ankara_edge_basket_blocks_gap_around_the_most_likely_bucket():
         forecast_confidence=85,
         day_status=active_day(),
     )
-    assert decision.status == "WATCH"
+    assert decision.status == "NO BET"
     assert decision.basket == basket
     assert any("Most likely bucket excluded" in blocker for blocker in decision.blockers)
 

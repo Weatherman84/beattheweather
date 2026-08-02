@@ -128,8 +128,9 @@ def metar_schedule_status(
     as_of: datetime,
     latest_observation_at: datetime | None,
     routine_minutes: list[int] | tuple[int, ...] | None,
+    guard_minutes: int = 7,
 ) -> MetarScheduleStatus:
-    """Flag the short interval in which a routine METAR is due but not yet available."""
+    """Block trading shortly before a routine METAR and until that report arrives."""
     minutes = sorted({int(value) % 60 for value in (routine_minutes or [])})
     if not minutes:
         return MetarScheduleStatus(False, None, "No routine METAR schedule is configured.")
@@ -140,9 +141,15 @@ def metar_schedule_status(
     for hour_offset in (-1, 0, 1):
         base = hour + timedelta(hours=hour_offset)
         candidates.extend(base + timedelta(minutes=minute) for minute in minutes)
-    # Protection starts one minute before the nominal issue minute. It remains
-    # active until an observation carrying that timestamp arrives.
-    eligible = [candidate for candidate in candidates if candidate <= now + timedelta(minutes=1)]
+    # A forecast can change materially on the next routine observation. Start
+    # protection before its nominal timestamp and keep it active until an
+    # observation carrying that timestamp has reached the feed.
+    lead = max(0, int(guard_minutes))
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate <= now + timedelta(minutes=lead)
+    ]
     due = max(eligible) if eligible else None
     if due is None:
         return MetarScheduleStatus(False, None, "No routine report is currently due.")
@@ -151,11 +158,17 @@ def metar_schedule_status(
         latest = pd.Timestamp(latest_observation_at)
         latest = latest.tz_localize("UTC") if latest.tzinfo is None else latest.tz_convert("UTC")
     pending = latest is None or latest < due
+    imminent = due > now
     return MetarScheduleStatus(
         pending,
         due.to_pydatetime(),
         (
-            "The next routine METAR is due but has not reached the official feed yet."
+            (
+                f"The next routine METAR is due within {lead} minutes; "
+                "trading is paused until it arrives."
+                if imminent
+                else "The routine METAR is due but has not reached the official feed yet."
+            )
             if pending
             else "The latest scheduled METAR has arrived."
         ),

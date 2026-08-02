@@ -738,6 +738,30 @@ def _known_regime_states(
                     )
                 )
 
+    if (
+        taf is not None
+        and bool(getattr(taf, "cloud_clearance_reheating_predicted", False))
+        and not bool(getattr(taf, "post_rain_reheating_predicted", False))
+    ):
+        states.append(
+            RegimeState(
+                name="Cloud-Clearance Reheating",
+                status="PREDICTED",
+                confidence=55,
+                source="candidate",
+                champion_effect="Challenger only",
+                supports=(
+                    "TAF predicts BKN/OVC giving way to clearer conditions",
+                    "future model warming and radiation are checked separately",
+                ),
+                contradictions=("renewed heating is not yet confirmed by METAR",),
+                explanation=(
+                    "A second heating window is plausible after cloud clearance. The "
+                    "candidate is stored without changing the Champion."
+                ),
+            )
+        )
+
     if len(recent) >= 3:
         raw_series = recent.get("raw", pd.Series(index=recent.index, dtype=object)).fillna("")
         cloud_series = pd.to_numeric(

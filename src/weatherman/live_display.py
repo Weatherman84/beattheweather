@@ -118,6 +118,9 @@ def forecast_driver_rows(nowcast: object) -> list[dict[str, str]]:
         sky_bits.append(f"temperature–dew point {float(dryness):.1f} °C")
     if getattr(nowcast, "radiation_wm2", None) is not None:
         sky_bits.append(f"radiation {float(nowcast.radiation_wm2):.0f} W/m²")
+    overlap_reduction = features.get("sky_overlap_reduction_c")
+    if overlap_reduction is not None and float(overlap_reduction) > 0:
+        sky_bits.append(f"overlap guard −{float(overlap_reduction):.2f} °C")
 
     wind_bits = []
     if getattr(nowcast, "wind_speed_kph", None) is not None:
@@ -150,7 +153,11 @@ def forecast_driver_rows(nowcast: object) -> list[dict[str, str]]:
         regime_effect = "No additional Champion effect"
 
     future = getattr(nowcast, "future_outlook")
-    if future.post_rain_reheating_watch:
+    if getattr(
+        future,
+        "reheating_watch",
+        getattr(future, "post_rain_reheating_watch", False),
+    ):
         future_effect = (
             f"Champion +0.00 °C · shadow {future.challenger_adjustment_c:+.2f} °C"
         )

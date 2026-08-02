@@ -161,7 +161,7 @@ def build_trade_decision(
     if day_status.is_locked:
         blockers.append("The daily maximum is already locked")
     if metar_pending:
-        blockers.append("A routine METAR is due but not yet available")
+        blockers.append("A routine METAR is imminent or due but not yet available")
     if market_model_conflict:
         blockers.append("A near-certain market price conflicts with the weather model")
     if forecast_stale:
@@ -224,6 +224,10 @@ def build_trade_decision(
         blockers.append(f"Bid-ask spread {spread:.1%} is wider than the {maximum_spread:.0%} limit")
     if basket is not None:
         blockers.extend(f"Basket warning: {warning}" for warning in basket.warnings)
+    basket_integrity_block = bool(
+        basket is not None
+        and (not basket.top_model_included or basket.middle_bucket_excluded)
+    )
 
     reasons = [
         (
@@ -249,6 +253,7 @@ def build_trade_decision(
         or metar_pending
         or market_model_conflict
         or forecast_stale
+        or basket_integrity_block
         or ("closed" in markets and markets.closed.fillna(False).astype(bool).all())
         or actionable.empty
     )

@@ -221,8 +221,9 @@ def provisional_metar_actuals(
     airport: dict,
     *,
     as_of: datetime | None = None,
+    include_current_day: bool = False,
 ) -> list[dict]:
-    """Create a next-day learning value from a sufficiently complete METAR day."""
+    """Create a learning value from a sufficiently complete METAR day."""
     if not rows:
         return []
     now = (as_of or datetime.now(timezone.utc)).astimezone(
@@ -233,7 +234,8 @@ def provisional_metar_actuals(
         return []
     frame["observed_at"] = pd.to_datetime(frame.observed_at, utc=True)
     frame["local_at"] = frame.observed_at.dt.tz_convert(airport["timezone"])
-    frame = frame[frame.local_at.dt.date < now.date()].copy()
+    latest_allowed = now.date() if include_current_day else now.date() - timedelta(days=1)
+    frame = frame[frame.local_at.dt.date <= latest_allowed].copy()
     if frame.empty:
         return []
     configured_end = str(airport.get("critical_window_local", ["", "18:00"])[-1])
@@ -360,12 +362,15 @@ def _build_nowcast_from_session(
         as_of=captured_at,
         wind_profile=airport.get("heat_wind_profile"),
         routine_metar_minutes=airport.get("metar_minutes"),
+        pre_metar_guard_minutes=airport.get("pre_metar_guard_minutes", 7),
         critical_window_local=airport.get("critical_window_local"),
         post_convective_profile=airport.get("post_convective_uncertainty"),
         heat_regime_profile=airport.get("heat_regime"),
         phase_amplitude_profile=airport.get("phase_vs_amplitude"),
         maritime_advection_profile=airport.get("maritime_advection"),
         maritime_low_range_profile=airport.get("maritime_low_range"),
+        live_adjustment_guardrails=airport.get("live_adjustment_guardrails"),
+        future_reheating_profile=airport.get("future_reheating"),
     )
     memory_config = dict(airport.get("regime_memory") or {})
     memory_config.setdefault(
@@ -720,7 +725,7 @@ def _record_signal_snapshots(
     if nowcast.day_status.is_locked:
         comparison["signal"] = "Day complete"
     elif nowcast.metar_pending:
-        comparison["signal"] = "METAR pending"
+        comparison["signal"] = "METAR guard"
     elif conflict.is_conflict:
         comparison["signal"] = "Market-model conflict"
     timing = _signal_timing(captured_at, target, airport["timezone"])
@@ -1460,12 +1465,35 @@ def in_forecast_refresh_window(airport: dict, now: datetime) -> bool:
     return current >= start or current <= end
 
 
+def in_final_metar_collection_window(airport: dict, now: datetime) -> bool:
+    """Continue METAR-only collection after trading through the evening report."""
+    local = _as_utc(now).astimezone(ZoneInfo(airport["timezone"]))
+    critical = airport.get("critical_window_local", ["11:30", "18:00"])
+    configured_start = (
+        critical[-1]
+        if isinstance(critical, (list, tuple)) and len(critical) == 2
+        else "18:00"
+    )
+    configured_end = airport.get("final_metar_collection_end_local", "21:35")
+
+    def minutes(value: object) -> int:
+        hour, minute = str(value).split(":", maxsplit=1)
+        return int(hour) * 60 + int(minute)
+
+    start = minutes(configured_start)
+    end = minutes(configured_end)
+    current = local.hour * 60 + local.minute
+    if start <= end:
+        return start <= current <= end
+    return current >= start or current <= end
+
+
 def collect_live_decision_checkpoints(
     airport_codes: list[str] | None = None,
     *,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Persist a fresh METAR-conditioned decision view only near airport peaks."""
+    """Persist live decisions near peaks and METAR maxima through local evening."""
     init_db()
     captured_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     catalog = trading_airports()
@@ -1475,6 +1503,13 @@ def collect_live_decision_checkpoints(
         for code in requested
         if code in catalog and in_critical_window(catalog[code], captured_at)
     ]
+    final_metar_codes = [
+        code
+        for code in requested
+        if code in catalog
+        and in_final_metar_collection_window(catalog[code], captured_at)
+    ]
+    metar_due_codes = list(dict.fromkeys([*due_codes, *final_metar_codes]))
     forecast_due_codes = [
         code
         for code in requested
@@ -1482,6 +1517,7 @@ def collect_live_decision_checkpoints(
     ]
     counts = {
         "airports_due": len(due_codes),
+        "final_metar_airports_due": len(final_metar_codes),
         "forecast_airports_due": len(forecast_due_codes),
         "forecasts": 0,
         "hourly_forecasts": 0,
@@ -1499,7 +1535,7 @@ def collect_live_decision_checkpoints(
         "basket_snapshots": 0,
         "provisional_actuals": 0,
     }
-    if not due_codes and not forecast_due_codes:
+    if not metar_due_codes and not forecast_due_codes:
         return counts
     fetched_tafs = []
     if due_codes:
@@ -1518,7 +1554,7 @@ def collect_live_decision_checkpoints(
             for key, value in provider_counts.items():
                 counts[key] += value
         session.commit()
-        for code in due_codes:
+        for code in metar_due_codes:
             airport = catalog[code]
             try:
                 metar_rows = recent_metars(
@@ -1542,6 +1578,7 @@ def collect_live_decision_checkpoints(
                 metar_rows,
                 airport,
                 as_of=captured_at,
+                include_current_day=code in final_metar_codes,
             )
             counts["provisional_actuals"] += _upsert_batch(
                 session,
@@ -1557,6 +1594,9 @@ def collect_live_decision_checkpoints(
                 },
                 f"{code}/live provisional METAR actuals",
             )
+            if code not in due_codes:
+                session.commit()
+                continue
             airport_tafs = [row for row in fetched_tafs if row["airport"] == code]
             counts["taf_reports"] += _upsert_batch(
                 session,

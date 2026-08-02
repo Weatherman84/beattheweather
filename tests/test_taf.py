@@ -146,6 +146,45 @@ def test_taf_exposes_future_rain_to_clear_timing_without_moving_center():
     assert guidance.center_adjustment_c == 0
 
 
+def test_taf_exposes_cloud_clearance_without_requiring_rain():
+    as_of = datetime(2026, 7, 21, 10, tzinfo=timezone.utc)
+    row = report(
+        issue=as_of - timedelta(hours=1),
+        maximum=31,
+        maximum_at=datetime(2026, 7, 21, 16, tzinfo=timezone.utc),
+    )
+    row["periods_json"] = json.dumps(
+        [
+            {
+                "time_from": "2026-07-21T09:00:00+00:00",
+                "time_to": "2026-07-21T12:00:00+00:00",
+                "change": "TEMPO",
+                "weather": None,
+                "clouds": [{"cover": "BKN", "base": 2500}],
+            },
+            {
+                "time_from": "2026-07-21T12:00:00+00:00",
+                "time_to": "2026-07-21T18:00:00+00:00",
+                "change": "BECMG",
+                "weather": None,
+                "clouds": [{"cover": "SCT", "base": 4000}],
+            },
+        ]
+    )
+    guidance = build_taf_guidance(
+        pd.DataFrame([row]),
+        timezone_name="Europe/Berlin",
+        target=date(2026, 7, 21),
+        as_of=as_of,
+        model_mean=30,
+    )
+    assert guidance is not None
+    assert guidance.cloud_clearance_reheating_predicted
+    assert not guidance.post_rain_reheating_predicted
+    assert guidance.clearing_at == datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+    assert any("broken/overcast" in signal for signal in guidance.signals)
+
+
 def test_taf_temperature_influence_expires_after_tx_when_metar_is_cooling():
     target = date(2026, 7, 21)
     tafs = pd.DataFrame(

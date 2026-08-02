@@ -39,4 +39,5 @@ tests/test_shadow.py
 tests/test_taf.py
 tests/test_v1021_regimes_and_baskets.py
 tests/test_v1030_regime_memory.py
+tests/test_v1041_safety_guards.py
 tests/test_workflows.py

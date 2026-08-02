@@ -224,7 +224,9 @@ def evaluate_shadow_markets(
         if day_status.is_locked:
             hard_blockers.append("The daily maximum is already locked")
         if metar_pending:
-            hard_blockers.append("A routine METAR is due but not yet available")
+            hard_blockers.append(
+                "A routine METAR is imminent or due but not yet available"
+            )
         if market_model_conflict:
             hard_blockers.append("A near-certain market price conflicts with the weather model")
         if forecast_stale:
@@ -316,6 +318,27 @@ def evaluate_shadow_markets(
                 "reasons_json": json.dumps(reasons, separators=(",", ":")),
             }
         )
+    provisional_basket = build_shadow_basket(
+        rows,
+        markets,
+        minimum_individual_net_edge=minimum_net_edge,
+    )
+    if provisional_basket is not None and (
+        not provisional_basket.top_model_included
+        or provisional_basket.middle_bucket_excluded
+    ):
+        warning = "Basket integrity guard: " + "; ".join(
+            provisional_basket.warnings
+        )
+        selected_ids = set(provisional_basket.market_ids)
+        for row in rows:
+            if str(row["market_id"]) not in selected_ids:
+                continue
+            blockers = json.loads(str(row["blockers_json"]) or "[]")
+            if warning not in blockers:
+                blockers.append(warning)
+            row["blockers_json"] = json.dumps(blockers, separators=(",", ":"))
+            row["status"] = "NO BET"
     return rows
 
 
@@ -329,12 +352,16 @@ def build_shadow_basket(
     if not rows or markets.empty:
         return None
     frame = pd.DataFrame(rows)
+    integrity_blocked = frame.get(
+        "blockers_json",
+        pd.Series("", index=frame.index, dtype=object),
+    ).fillna("").astype(str).str.contains("Basket integrity guard:", regex=False)
     candidates = frame[
         frame.fully_fillable.fillna(False).astype(bool)
         & frame.all_in_price.notna()
         & frame.net_edge.notna()
         & (frame.net_edge >= float(minimum_individual_net_edge))
-        & (frame.status == "SHADOW BET")
+        & ((frame.status == "SHADOW BET") | integrity_blocked)
     ].copy()
     if len(candidates) < 2:
         return None

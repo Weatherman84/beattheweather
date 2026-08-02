@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.4.0")
+discard_stale_weatherman_modules("10.4.1")
 
 import pandas as pd
 import plotly.express as px
@@ -441,6 +441,9 @@ with tab_live:
         as_of=live_as_of,
         wind_profile=catalog[airport].get("heat_wind_profile"),
         routine_metar_minutes=catalog[airport].get("metar_minutes"),
+        pre_metar_guard_minutes=catalog[airport].get(
+            "pre_metar_guard_minutes", 7
+        ),
         critical_window_local=catalog[airport].get("critical_window_local"),
         post_convective_profile=catalog[airport].get(
             "post_convective_uncertainty"
@@ -449,6 +452,10 @@ with tab_live:
         phase_amplitude_profile=catalog[airport].get("phase_vs_amplitude"),
         maritime_advection_profile=catalog[airport].get("maritime_advection"),
         maritime_low_range_profile=catalog[airport].get("maritime_low_range"),
+        live_adjustment_guardrails=catalog[airport].get(
+            "live_adjustment_guardrails"
+        ),
+        future_reheating_profile=catalog[airport].get("future_reheating"),
         maximum_model_age_minutes=settings.maximum_live_model_age_minutes,
     )
     memory_config = dict(catalog[airport].get("regime_memory") or {})
@@ -536,8 +543,8 @@ with tab_live:
             )
             due_text = f" for {due_local:%H:%M}" if due_local is not None else ""
             st.error(
-                f"METAR pending{due_text} – do not trade. The new routine report is due but "
-                "has not reached the official feed. Edge signals are temporarily blocked."
+                f"METAR guard{due_text} – do not trade. A routine report is imminent or "
+                "due and has not reached the official feed. Edge signals are blocked."
             )
 
         render_compact_live_forecast(
@@ -1110,8 +1117,8 @@ with tab_market:
                         "signals for this date."
                     )
                 elif metar_pending:
-                    status_label = "METAR pending"
-                    comparison["signal"] = "METAR pending"
+                    status_label = "METAR guard"
+                    comparison["signal"] = "METAR guard"
                     message = (
                         "A routine METAR is due but not yet available. Signals are blocked until "
                         "the official feed publishes it."
@@ -1182,7 +1189,8 @@ with tab_market:
                     "Watch": "Watch",
                     "No clear edge": "No clear edge",
                     "Day complete": "Day complete",
-                    "METAR pending": "METAR pending",
+                    "METAR guard": "METAR guard",
+                    "METAR pending": "METAR guard",
                     "Market-model conflict": "Market-model conflict",
                 }
             )

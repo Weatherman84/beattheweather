@@ -10,6 +10,7 @@ from weatherman.db import (
     Forecast,
     ForecastVariantSnapshot,
     RegimeMemorySnapshot,
+    ShadowEvaluation,
     SignalSnapshot,
     StrategySnapshot,
 )
@@ -23,6 +24,7 @@ from weatherman.service import (
     _upsert_batch,
     in_critical_window,
     in_forecast_refresh_window,
+    in_final_metar_collection_window,
     provisional_metar_actuals,
 )
 
@@ -162,6 +164,58 @@ def test_completed_metar_day_becomes_next_day_provisional_actual():
     )
     assert provisional == [
         {"target_date": date(2026, 7, 29), "max_temp_c": 34.0}
+    ]
+
+
+def test_final_metar_window_continues_until_after_21_local():
+    airport = {
+        "timezone": "Europe/Berlin",
+        "critical_window_local": ["12:00", "17:30"],
+        "final_metar_collection_end_local": "21:35",
+    }
+    assert in_final_metar_collection_window(
+        airport,
+        datetime(2026, 7, 30, 15, 31, tzinfo=timezone.utc),
+    )
+    assert in_final_metar_collection_window(
+        airport,
+        datetime(2026, 7, 30, 19, 35, tzinfo=timezone.utc),
+    )
+    assert not in_final_metar_collection_window(
+        airport,
+        datetime(2026, 7, 30, 19, 36, tzinfo=timezone.utc),
+    )
+
+
+def test_evening_metar_collection_updates_current_day_actual():
+    as_of = datetime(2026, 7, 30, 19, 30, tzinfo=timezone.utc)
+    rows = [
+        {
+            "observed_at": datetime(2026, 7, 30, hour, tzinfo=timezone.utc),
+            "temp_c": temperature,
+        }
+        for hour, temperature in [
+            (6, 18),
+            (8, 22),
+            (10, 27),
+            (12, 30),
+            (14, 31),
+            (16, 29),
+            (18, 25),
+            (19, 23),
+        ]
+    ]
+    actuals = provisional_metar_actuals(
+        rows,
+        {
+            "timezone": "Europe/Berlin",
+            "critical_window_local": ["12:00", "17:30"],
+        },
+        as_of=as_of,
+        include_current_day=True,
+    )
+    assert actuals == [
+        {"target_date": date(2026, 7, 30), "max_temp_c": 31.0}
     ]
 
 
@@ -420,12 +474,19 @@ def test_shadow_collection_journals_one_event_level_basket():
         )
         session.commit()
         basket = session.scalar(select(BasketSnapshot))
+        blocked_rows = session.scalars(
+            select(ShadowEvaluation).where(
+                ShadowEvaluation.market_id.in_(["m25", "m26", "m28"])
+            )
+        ).all()
         assert shadow_count == 5
         assert basket_count == 1
         assert basket is not None
         assert basket.status == "BASKET WATCH"
         assert not basket.top_model_included
         assert basket.middle_bucket_excluded
+        assert {row.status for row in blocked_rows} == {"NO BET"}
+        assert all("Basket integrity guard" in row.blockers_json for row in blocked_rows)
 
 
 def test_airport_specific_critical_window_uses_local_time():

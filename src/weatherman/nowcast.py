@@ -30,7 +30,11 @@ class FutureOutlook:
     status: str
     summary: str
     signals: tuple[str, ...]
+    reheating_watch: bool
     post_rain_reheating_watch: bool
+    cloud_clearance_reheating_watch: bool
+    challenger_name: str | None
+    challenger_factor: str | None
     challenger_adjustment_c: float
     challenger_spread_addition_c: float
 
@@ -277,8 +281,10 @@ def build_future_outlook(
     expected_peak_at: datetime | None,
     hours_to_peak: float | None,
     timezone_name: str,
+    profile: dict | None = None,
 ) -> FutureOutlook:
     """Summarise forward-looking inputs and gate a shadow-only reheating hypothesis."""
+    configured = profile or {}
     signals: list[str] = []
     if remaining_rise_c is not None:
         signals.append(f"Anchored model paths allow up to {remaining_rise_c:.1f} °C more warming")
@@ -288,9 +294,15 @@ def build_future_outlook(
         local_peak = pd.Timestamp(expected_peak_at).tz_convert(timezone_name)
         signals.append(f"Median model peak is near {local_peak:%H:%M} local")
 
-    transition_predicted = bool(
+    post_rain_predicted = bool(
         taf_guidance is not None and taf_guidance.post_rain_reheating_predicted
     )
+    cloud_clearance_predicted = bool(
+        configured.get("cloud_clearance_challenger", False)
+        and taf_guidance is not None
+        and getattr(taf_guidance, "cloud_clearance_reheating_predicted", False)
+    )
+    transition_predicted = post_rain_predicted or cloud_clearance_predicted
     if transition_predicted and taf_guidance is not None:
         if taf_guidance.precipitation_end_at is not None:
             rain_end = pd.Timestamp(taf_guidance.precipitation_end_at).tz_convert(timezone_name)
@@ -315,15 +327,28 @@ def build_future_outlook(
             + 0.08 * max(0.0, float(remaining_rise_c) - 0.50)
             + (0.05 if float(future_radiation_max) >= 600 else 0.0),
         )
-        status = "POST-RAIN REHEATING WATCH"
-        summary = (
-            "TAF timing, anchored model warming and future radiation jointly support a "
-            "possible renewed temperature rise. This remains a shadow-only Challenger."
-        )
+        if post_rain_predicted:
+            status = "POST-RAIN REHEATING WATCH"
+            challenger_name = "Post-Rain Reheating Challenger"
+            challenger_factor = "post_rain_reheating"
+            summary = (
+                "TAF timing, anchored model warming and future radiation jointly support a "
+                "possible renewed temperature rise. This remains a shadow-only Challenger."
+            )
+        else:
+            status = "CLOUD-CLEARANCE REHEATING WATCH"
+            challenger_name = "Cloud-Clearance Reheating Challenger"
+            challenger_factor = "cloud_clearance_reheating"
+            summary = (
+                "TAF cloud clearance, anchored model warming and future radiation jointly "
+                "support a second heating window. This remains a shadow-only Challenger."
+            )
         spread_addition = 0.10
     elif transition_predicted:
         adjustment = 0.0
         status = "CLEARING SIGNAL · UNCONFIRMED"
+        challenger_name = None
+        challenger_factor = None
         summary = (
             "TAF suggests rain will end and cloud will break, but model warming, radiation "
             "or time-to-peak does not yet confirm a reheating Challenger."
@@ -332,6 +357,8 @@ def build_future_outlook(
     elif remaining_rise_c is not None and remaining_rise_c >= 0.50:
         adjustment = 0.0
         status = "MORE WARMING EXPECTED"
+        challenger_name = None
+        challenger_factor = None
         summary = (
             "The future model path still contains material warming. It is already included "
             "in the Champion and receives no additional temperature correction."
@@ -340,11 +367,15 @@ def build_future_outlook(
     elif hours_to_peak is not None and hours_to_peak <= 0:
         adjustment = 0.0
         status = "MODEL PEAK PASSED"
+        challenger_name = None
+        challenger_factor = None
         summary = "The median model peak time has passed; day-status safeguards now dominate."
         spread_addition = 0.0
     else:
         adjustment = 0.0
         status = "LIMITED FUTURE WARMING"
+        challenger_name = None
+        challenger_factor = None
         summary = (
             "No separate future reheating pattern is confirmed beyond the existing model path."
         )
@@ -353,7 +384,13 @@ def build_future_outlook(
         status=status,
         summary=summary,
         signals=tuple(signals),
-        post_rain_reheating_watch=reheating_watch,
+        reheating_watch=reheating_watch,
+        post_rain_reheating_watch=bool(reheating_watch and post_rain_predicted),
+        cloud_clearance_reheating_watch=bool(
+            reheating_watch and cloud_clearance_predicted and not post_rain_predicted
+        ),
+        challenger_name=challenger_name,
+        challenger_factor=challenger_factor,
         challenger_adjustment_c=float(adjustment),
         challenger_spread_addition_c=float(spread_addition),
     )
@@ -849,6 +886,7 @@ def phase_vs_amplitude_regime(
     configured = profile or {}
     defaults: dict[str, float | bool | None | str] = {
         "active": False,
+        "center_active": False,
         "classification": "insufficient data",
         "phase_shift_hours": 0.0,
         "same_time_residual_c": None,
@@ -856,6 +894,8 @@ def phase_vs_amplitude_regime(
         "baseline_rmse_c": None,
         "phase_rmse_c": None,
         "anchor_blend": 0.0,
+        "spread_addition_c": 0.0,
+        "confidence_multiplier": 1.0,
     }
     if not configured.get("enabled", False) or len(observations) < 3:
         return defaults
@@ -929,8 +969,16 @@ def phase_vs_amplitude_regime(
             "baseline_rmse_c": baseline_rmse,
             "phase_rmse_c": best_rmse,
         }
+    center_active = bool(
+        len(frame) >= int(configured.get("center_minimum_reports", minimum_reports))
+        and baseline_rmse - best_rmse
+        >= float(configured.get("center_minimum_rmse_gain_c", minimum_gain))
+        and best_rmse
+        <= float(configured.get("center_maximum_phase_rmse_c", maximum_phase_rmse))
+    )
     return {
         "active": True,
+        "center_active": center_active,
         "classification": "phase-dominant",
         "phase_shift_hours": float(best_shift),
         "same_time_residual_c": same_time_residual,
@@ -940,6 +988,28 @@ def phase_vs_amplitude_regime(
         "anchor_blend": max(
             0.0,
             min(0.90, float(configured.get("phase_anchor_blend", 0.75))),
+        ) if center_active else 0.0,
+        "spread_addition_c": (
+            0.0
+            if center_active
+            else max(
+                0.0,
+                min(
+                    0.40,
+                    float(configured.get("unconfirmed_spread_addition_c", 0.15)),
+                ),
+            )
+        ),
+        "confidence_multiplier": (
+            1.0
+            if center_active
+            else max(
+                0.5,
+                min(
+                    1.0,
+                    float(configured.get("unconfirmed_confidence_multiplier", 0.92)),
+                ),
+            )
         ),
     }
 
@@ -1135,6 +1205,47 @@ def _damp_positive_contributions(
         name: value * bounded if value > 0 else value
         for name, value in contributions.items()
     }
+
+
+def _cap_overlapping_positive_sky_contributions(
+    contributions: dict[str, float],
+    profile: dict | None,
+) -> tuple[dict[str, float], float]:
+    """Cap overlapping clear/dry/radiative signals configured for one airport."""
+    configured = profile or {}
+    cap_value = configured.get("positive_sky_cap_c")
+    if cap_value is None:
+        return contributions, 0.0
+    names = tuple(
+        configured.get(
+            "overlapping_factors",
+            (
+                "dryness",
+                "dewpoint_trend",
+                "cloud",
+                "radiation",
+                "late_dry_mixing",
+                "failed_convection",
+                "clear_sky_override",
+            ),
+        )
+    )
+    positive = {
+        name: float(contributions.get(name, 0.0))
+        for name in names
+        if float(contributions.get(name, 0.0)) > 0
+    }
+    if len(positive) < 2:
+        return contributions, 0.0
+    total = sum(positive.values())
+    cap = max(0.0, float(cap_value))
+    if total <= cap or total <= 0:
+        return contributions, 0.0
+    scale = cap / total
+    adjusted = dict(contributions)
+    for name, value in positive.items():
+        adjusted[name] = value * scale
+    return adjusted, total - cap
 
 
 def dewpoint_trend(observations: pd.DataFrame) -> float | None:
@@ -1463,12 +1574,15 @@ def build_live_nowcast(
     as_of: datetime,
     wind_profile: dict | None = None,
     routine_metar_minutes: list[int] | tuple[int, ...] | None = None,
+    pre_metar_guard_minutes: int = 7,
     critical_window_local: list[str] | tuple[str, ...] | None = None,
     post_convective_profile: dict | None = None,
     heat_regime_profile: dict | None = None,
     phase_amplitude_profile: dict | None = None,
     maritime_advection_profile: dict | None = None,
     maritime_low_range_profile: dict | None = None,
+    live_adjustment_guardrails: dict | None = None,
+    future_reheating_profile: dict | None = None,
     maximum_model_age_minutes: int = 90,
     _disabled_factors: frozenset[str] = frozenset(),
     _build_challengers: bool = True,
@@ -1747,6 +1861,7 @@ def build_live_nowcast(
         as_of=as_of,
         latest_observation_at=latest_observation_at,
         routine_minutes=routine_metar_minutes,
+        guard_minutes=pre_metar_guard_minutes,
     )
     trend = model_run_trend(available, target, as_of)
     recent_baseline = None
@@ -2040,6 +2155,12 @@ def build_live_nowcast(
         ),
         "maritime_advection": 0.0,
     }
+    contributions, sky_overlap_reduction = (
+        _cap_overlapping_positive_sky_contributions(
+            contributions,
+            live_adjustment_guardrails,
+        )
+    )
     contributions = _protect_persistent_anchor(
         contributions,
         anchor_streak=temperature_anchor_streak,
@@ -2078,6 +2199,14 @@ def build_live_nowcast(
             *([clear_sky_signal] if clear_sky_signal else []),
             *(
                 [
+                    "Sky-signal overlap guard: clear sky, dry mixing and radiation "
+                    f"were capped to avoid double counting ({sky_overlap_reduction:.2f} °C removed)"
+                ]
+                if sky_overlap_reduction > 0
+                else []
+            ),
+            *(
+                [
                     "Rapid heat-ramp regime: positive historical warm-bias "
                     "corrections are reduced and bucket uncertainty is broadened"
                 ]
@@ -2102,8 +2231,13 @@ def build_live_nowcast(
             ),
             *(
                 [
-                    "Phase-dominant METAR path: the model curve is shifted in time "
-                    "instead of transferring the full morning residual to Tmax"
+                    (
+                        "Phase-dominant METAR path: strong confirmation shifts the model "
+                        "curve in time instead of transferring the full residual to Tmax"
+                        if phase_amplitude["center_active"]
+                        else "Phase-dominant METAR path is not strongly confirmed: center "
+                        "is retained while spread increases and confidence falls"
+                    )
                 ]
                 if phase_amplitude["active"]
                 else []
@@ -2145,6 +2279,13 @@ def build_live_nowcast(
         live_sigma_floor = max(
             live_sigma_floor,
             corrected.spread * float(post_convective["spread_multiplier"]),
+        )
+    if phase_amplitude["active"] and float(
+        phase_amplitude["spread_addition_c"]
+    ) > 0:
+        live_sigma_floor = max(
+            live_sigma_floor,
+            corrected.spread + float(phase_amplitude["spread_addition_c"]),
         )
     if maritime_low_range["active"] and not post_convective_active:
         live_sigma_floor = max(
@@ -2203,6 +2344,7 @@ def build_live_nowcast(
         expected_peak_at=peak_at,
         hours_to_peak=hours_to_peak,
         timezone_name=timezone_name,
+        profile=future_reheating_profile,
     )
     stage_probabilities = {
         "Raw model mean": raw_equal.probability_by_bucket,
@@ -2239,6 +2381,9 @@ def build_live_nowcast(
         "post_rain_reheating_watch": float(
             future_outlook.post_rain_reheating_watch
         ),
+        "cloud_clearance_reheating_watch": float(
+            future_outlook.cloud_clearance_reheating_watch
+        ),
         "post_rain_reheating_challenger_adjustment_c": (
             future_outlook.challenger_adjustment_c
         ),
@@ -2250,6 +2395,8 @@ def build_live_nowcast(
         "failed_convection_adjustment_c": failed_convection,
         "clear_sky_override_active": float(clear_sky_override > 0),
         "clear_sky_override_adjustment_c": clear_sky_override,
+        "sky_overlap_guard_active": float(sky_overlap_reduction > 0),
+        "sky_overlap_reduction_c": sky_overlap_reduction,
         "rapid_heat_ramp_active": float(bool(rapid_heat["active"])),
         "rapid_heat_ramp_forecast_vs_latest_c": rapid_heat[
             "forecast_vs_latest_c"
@@ -2293,6 +2440,9 @@ def build_live_nowcast(
             post_convective["spread_multiplier"]
         ),
         "phase_vs_amplitude_active": float(bool(phase_amplitude["active"])),
+        "phase_vs_amplitude_center_active": float(
+            bool(phase_amplitude["center_active"])
+        ),
         "phase_vs_amplitude_classification": phase_amplitude["classification"],
         "phase_shift_hours": float(phase_amplitude["phase_shift_hours"]),
         "phase_same_time_residual_c": phase_amplitude["same_time_residual_c"],
@@ -2303,6 +2453,12 @@ def build_live_nowcast(
         "phase_fit_rmse_c": phase_amplitude["phase_rmse_c"],
         "phase_anchor_blend": float(phase_amplitude["anchor_blend"]),
         "phase_anchor_delta_c": phase_anchor_delta,
+        "phase_spread_addition_c": float(
+            phase_amplitude["spread_addition_c"]
+        ),
+        "phase_confidence_multiplier": float(
+            phase_amplitude["confidence_multiplier"]
+        ),
         "maritime_advection_active": float(bool(maritime_advection["active"])),
         "maritime_advection_temperature_rate_cph": maritime_advection[
             "temperature_rate_cph"
@@ -2406,6 +2562,15 @@ def build_live_nowcast(
         forecast_confidence = round(
             forecast_confidence * float(maritime_low_range["confidence_multiplier"])
         )
+    if (
+        phase_amplitude["active"]
+        and not phase_amplitude["center_active"]
+        and not day_status.is_locked
+    ):
+        confidence_factors["phase_timing_uncertainty"] = 55.0
+        forecast_confidence = round(
+            forecast_confidence * float(phase_amplitude["confidence_multiplier"])
+        )
 
     challenger_variants: dict[str, dict[str, object]] = {}
     active_challengers = {
@@ -2444,12 +2609,15 @@ def build_live_nowcast(
                 as_of=as_of,
                 wind_profile=wind_profile,
                 routine_metar_minutes=routine_metar_minutes,
+                pre_metar_guard_minutes=pre_metar_guard_minutes,
                 critical_window_local=critical_window_local,
                 post_convective_profile=post_convective_profile,
                 heat_regime_profile=heat_regime_profile,
                 phase_amplitude_profile=phase_amplitude_profile,
                 maritime_advection_profile=maritime_advection_profile,
                 maritime_low_range_profile=maritime_low_range_profile,
+                live_adjustment_guardrails=live_adjustment_guardrails,
+                future_reheating_profile=future_reheating_profile,
                 maximum_model_age_minutes=maximum_model_age_minutes,
                 _disabled_factors=frozenset({*_disabled_factors, factor}),
                 _build_challengers=False,
@@ -2463,7 +2631,7 @@ def build_live_nowcast(
                 "probabilities": challenger.probabilities,
                 "forecast_confidence": challenger.forecast_confidence,
             }
-        if future_outlook.post_rain_reheating_watch:
+        if future_outlook.reheating_watch:
             reheating_unconditioned = consensus(
                 (
                     current.corrected_max
@@ -2486,8 +2654,8 @@ def build_live_nowcast(
             reheating_mean, reheating_spread = probability_moments(
                 reheating_probabilities
             )
-            challenger_variants["Post-Rain Reheating Challenger"] = {
-                "factor": "post_rain_reheating",
+            challenger_variants[str(future_outlook.challenger_name)] = {
+                "factor": future_outlook.challenger_factor,
                 "forecast_mean_c": reheating_mean,
                 "spread_c": reheating_spread,
                 "probabilities": reheating_probabilities,

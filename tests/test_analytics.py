@@ -69,14 +69,21 @@ def test_fixed_decision_snapshots_never_use_future_information():
     assert set(selected.checkpoint_gap_minutes) == {5.0}
 
 
-def test_metar_pending_starts_one_minute_before_routine_issue():
+def test_metar_guard_starts_seven_minutes_before_routine_issue():
     status = metar_schedule_status(
-        as_of=datetime(2026, 7, 21, 11, 59, tzinfo=ZoneInfo("UTC")),
+        as_of=datetime(2026, 7, 21, 11, 53, tzinfo=ZoneInfo("UTC")),
         latest_observation_at=datetime(2026, 7, 21, 11, 30, tzinfo=ZoneInfo("UTC")),
         routine_minutes=[0, 30],
     )
     assert status.is_pending
     assert status.due_at == datetime(2026, 7, 21, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+    outside_guard = metar_schedule_status(
+        as_of=datetime(2026, 7, 21, 11, 52, tzinfo=ZoneInfo("UTC")),
+        latest_observation_at=datetime(2026, 7, 21, 11, 30, tzinfo=ZoneInfo("UTC")),
+        routine_minutes=[0, 30],
+    )
+    assert not outside_guard.is_pending
 
 
 def test_near_certain_market_conflict_is_only_a_safety_flag():
