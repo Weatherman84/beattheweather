@@ -356,7 +356,7 @@ def test_market_range_probabilities_and_actionable_edge():
     )
     result = market_edges(probabilities, markets)
     assert round(result.iloc[0].edge, 2) == 0.09
-    assert result.iloc[0].signal == "Possible edge"
+    assert result.iloc[0].signal == "Uncalibrated disagreement"
 
 
 def test_closed_market_is_not_marked_as_an_edge_and_supplies_winner():
@@ -387,7 +387,7 @@ def test_closed_market_is_not_marked_as_an_edge_and_supplies_winner():
         ]
     )
     result = market_edges({35: 1.0}, markets)
-    assert set(result.signal) == {"No clear edge"}
+    assert set(result.signal) == {"No material disagreement"}
     assert resolved_market_range(markets) == (35.0, 35.0, "35°C")
 
     status = assess_day_status(

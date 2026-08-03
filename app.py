@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.4.1")
+discard_stale_weatherman_modules("10.5.0")
 
 import pandas as pd
 import plotly.express as px
@@ -455,6 +455,9 @@ with tab_live:
         live_adjustment_guardrails=catalog[airport].get(
             "live_adjustment_guardrails"
         ),
+        recent_warm_bias_profile=catalog[airport].get(
+            "recent_warm_bias_challenger"
+        ),
         future_reheating_profile=catalog[airport].get("future_reheating"),
         maximum_model_age_minutes=settings.maximum_live_model_age_minutes,
     )
@@ -520,6 +523,7 @@ with tab_live:
             forecast_stale=live_nowcast.forecast_data_stale,
             previous_probabilities=prior_probabilities,
             live_signals=strongest_live_signals,
+            recommendations_enabled=settings.edge_recommendations_enabled,
         )
 
         if live_nowcast.forecast_data_stale:
@@ -731,7 +735,7 @@ with tab_live:
                         {
                             "Date": analog.target_date,
                             "Similarity": f"{analog.similarity:.0%}",
-                            "Forecast": f"{analog.forecast_c:.1f} °C",
+                            "Historical Champion": f"{analog.forecast_c:.1f} °C",
                             "Actual": f"{analog.actual_c:.1f} °C",
                             "Residual": f"{analog.residual_c:+.1f} °C",
                             "Matched on": ", ".join(analog.matched_on),
@@ -1143,18 +1147,18 @@ with tab_market:
                 else:
                     st.warning(message)
             else:
-                m1.metric("Best model difference", f"{best.edge:+.1%}")
+                m1.metric("Largest uncalibrated gap", f"{best.edge:+.1%}")
                 m2.metric("Temperature range", best.bucket_label)
                 m3.metric("Market price sum", f"{market_sum:.1%}")
                 if pd.notna(best.best_ask) and best.edge >= 0.08:
                     st.info(
-                        f"Model signal: {best.bucket_label} is {best.edge:+.1%} above the current "
-                        "YES buy price. Check spread, liquidity and the resolution source before "
-                        "drawing any conclusion."
+                        f"Research signal: {best.bucket_label} is {best.edge:+.1%} above the "
+                        "current YES buy price. This is raw model-market disagreement, not a "
+                        "calibrated edge or trade recommendation."
                     )
                 else:
                     st.write(
-                        "There is currently no large positive difference of at least 8 points."
+                        "There is currently no raw positive difference of at least 8 points."
                     )
 
             if prior_probabilities:
@@ -1186,35 +1190,38 @@ with tab_market:
             shown["signal"] = shown.signal.map(
                 {
                     "Possible edge": "Possible edge",
-                    "Watch": "Watch",
-                    "No clear edge": "No clear edge",
+                    "Uncalibrated disagreement": "Uncalibrated disagreement",
+                    "Market-model conflict": "Market-model conflict",
+                    "Watch": "Watch only",
+                    "Watch only": "Watch only",
+                    "No clear edge": "No material disagreement",
+                    "No material disagreement": "No material disagreement",
                     "Day complete": "Day complete",
                     "METAR guard": "METAR guard",
                     "METAR pending": "METAR guard",
-                    "Market-model conflict": "Market-model conflict",
                 }
             )
             shown = shown.rename(
                 columns={
                     "bucket_label": "Range",
-                    "model_probability": "Our model",
+                    "model_probability": "Raw model",
                     "probability_change": "Change",
                     "yes_price": "Market",
                     "best_bid": "Best bid",
                     "best_ask": "Buy YES",
-                    "edge": "Model − buy price",
+                    "edge": "Uncalibrated gap",
                     "spread": "Spread",
                     "volume": "Volume $",
                     "signal": "Signal",
                 }
             )
             percent_columns = [
-                "Our model",
+                "Raw model",
                 "Change",
                 "Market",
                 "Best bid",
                 "Buy YES",
-                "Model − buy price",
+                "Uncalibrated gap",
                 "Spread",
             ]
             for column in percent_columns:
@@ -1363,13 +1370,13 @@ with tab_market:
             
 
 with tab_shadow:
-    st.subheader(f"{airport} · parallel shadow watcher")
+    st.subheader(f"{airport} · research-only market watcher")
     st.caption(
         "Workflow 5 evaluates the public CLOB order book during the critical "
         "window. It walks the available ask depth for a $10 all-in paper stake "
         "and subtracts estimated weather-market taker fees, slippage and a "
-        "two-percentage-point safety margin. No wallet is connected and no order "
-        "can be placed."
+        "two-percentage-point safety margin. Raw model probabilities are not calibrated; "
+        "the watcher is RESEARCH ONLY and cannot place an order."
     )
     target_shadow = (
         shadow_evaluations[
@@ -1403,17 +1410,19 @@ with tab_shadow:
         executable = latest_shadow[
             latest_shadow.status == "SHADOW BET"
         ]
-        best_net_edge = pd.to_numeric(
-            latest_shadow.net_edge,
-            errors="coerce",
-        ).max()
+        actionable_edges = pd.to_numeric(executable.net_edge, errors="coerce")
+        best_actionable_edge = actionable_edges.max() if not actionable_edges.empty else None
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("Stored checks", target_shadow.captured_at.nunique())
         s2.metric("Buckets checked now", len(latest_shadow))
-        s3.metric("Shadow bets now", len(executable))
+        s3.metric("Actionable paper bets", len(executable))
         s4.metric(
-            "Best net edge",
-            f"{best_net_edge:+.1%}" if pd.notna(best_net_edge) else "—",
+            "Best actionable edge",
+            (
+                f"{best_actionable_edge:+.1%}"
+                if best_actionable_edge is not None and pd.notna(best_actionable_edge)
+                else "No actionable edge"
+            ),
         )
         st.caption(
             f"Latest CLOB evaluation: "
@@ -1459,13 +1468,13 @@ with tab_shadow:
         shown = shown.rename(
             columns={
                 "bucket_label": "Range",
-                "fair_probability": "Fair probability",
+                "fair_probability": "Raw model probability",
                 "best_ask": "Best ask",
                 "average_fill_price": "Average fill",
                 "fee_per_share": "Fee/share",
                 "slippage": "Slippage",
                 "all_in_price": "All-in/share",
-                "net_edge": "Net edge",
+                "net_edge": "Uncalibrated net gap",
                 "depth_at_best_usdc": "Depth at best",
                 "available_depth_usdc": "Total ask depth",
                 "forecast_confidence": "Confidence",
@@ -1484,9 +1493,9 @@ with tab_shadow:
             st.subheader("Latest simultaneous event basket")
             b1, b2, b3, b4 = st.columns(4)
             b1.metric("Buckets", ", ".join(str(value) for value in labels))
-            b2.metric("Fair probability", f"{float(latest_basket.fair_probability):.1%}")
+            b2.metric("Raw combined probability", f"{float(latest_basket.fair_probability):.1%}")
             b3.metric("All-in basket cost", f"{float(latest_basket.total_cost):.1%}")
-            b4.metric("Net basket edge", f"{float(latest_basket.net_edge):+.1%}")
+            b4.metric("Uncalibrated basket gap", f"{float(latest_basket.net_edge):+.1%}")
             if warnings:
                 st.warning(
                     f"{latest_basket.status}: " + " · ".join(str(value) for value in warnings)

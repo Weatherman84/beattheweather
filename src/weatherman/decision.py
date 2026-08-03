@@ -154,8 +154,11 @@ def build_trade_decision(
     watch_edge: float = 0.04,
     minimum_confidence: int = 65,
     maximum_spread: float = 0.12,
+    minimum_buy_price: float = 0.05,
+    maximum_model_market_gap: float = 0.15,
+    recommendations_enabled: bool = False,
 ) -> TradeDecision:
-    """Turn the weather distribution and executable asks into one guarded decision."""
+    """Compare weather and market values without treating raw gaps as calibrated edge."""
     confidence = int(max(0, min(100, forecast_confidence)))
     blockers: list[str] = []
     if day_status.is_locked:
@@ -166,6 +169,10 @@ def build_trade_decision(
         blockers.append("A near-certain market price conflicts with the weather model")
     if forecast_stale:
         blockers.append("Fewer than two current weather models are available")
+    if not recommendations_enabled:
+        blockers.append(
+            "Empirical probability calibration has not passed; recommendations are research-only"
+        )
     if markets.empty:
         blockers.append("No matching Polymarket market is stored")
         return TradeDecision(
@@ -211,6 +218,11 @@ def build_trade_decision(
     else:
         best = actionable.sort_values("edge", ascending=False).iloc[0]
 
+    top_market_bucket = comparison.sort_values(
+        ["model_probability", "edge"],
+        ascending=False,
+    ).iloc[0]
+
     label = str(best.bucket_label)
     fair_probability = float(best.model_probability)
     buy_price = float(best.buy_price) if pd.notna(best.buy_price) else None
@@ -218,6 +230,19 @@ def build_trade_decision(
     prior = (previous_probabilities or {}).get(label)
     probability_change = fair_probability - float(prior) if prior is not None else None
     spread = float(best.spread) if "spread" in best and pd.notna(best.spread) else None
+    selected_is_top = str(best.market_id) == str(top_market_bucket.market_id)
+    if not selected_is_top:
+        blockers.append(
+            "The selected range is not Weatherman's most likely Polymarket bucket"
+        )
+    if buy_price is not None and buy_price <= float(minimum_buy_price):
+        blockers.append(
+            f"YES ask {buy_price:.1%} is at or below the {minimum_buy_price:.0%} cheap-tail floor"
+        )
+    if edge is not None and edge >= float(maximum_model_market_gap):
+        blockers.append(
+            f"Raw model-market gap {edge:.1%} is a conflict, not calibrated edge"
+        )
     if confidence < minimum_confidence:
         blockers.append(f"Forecast confidence {confidence}/100 is below {minimum_confidence}/100")
     if spread is not None and spread > maximum_spread:
@@ -231,11 +256,15 @@ def build_trade_decision(
 
     reasons = [
         (
-            f"{label} fair probability {fair_probability:.1%} versus YES ask {buy_price:.1%}"
+            f"{label} raw model probability {fair_probability:.1%} versus YES ask {buy_price:.1%}"
             if buy_price is not None
-            else f"{label} fair probability {fair_probability:.1%}"
+            else f"{label} raw model probability {fair_probability:.1%}"
         ),
-        f"Probability edge {edge:+.1%}" if edge is not None else "No executable edge",
+        (
+            f"Uncalibrated model-market gap {edge:+.1%}"
+            if edge is not None
+            else "No model-market comparison"
+        ),
         f"Forecast confidence {confidence}/100",
     ]
     if probability_change is not None:
@@ -256,9 +285,14 @@ def build_trade_decision(
         or basket_integrity_block
         or ("closed" in markets and markets.closed.fillna(False).astype(bool).all())
         or actionable.empty
+        or not selected_is_top
+        or (buy_price is not None and buy_price <= float(minimum_buy_price))
+        or (edge is not None and edge >= float(maximum_model_market_gap))
     )
     if hard_block or edge is None or edge < watch_edge:
         status = "NO BET"
+    elif not recommendations_enabled:
+        status = "RESEARCH ONLY"
     elif edge >= bet_edge and not blockers:
         status = "BET"
     else:

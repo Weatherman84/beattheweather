@@ -39,6 +39,7 @@
                 "enabled": true,
                 "minimum_latest_actual_c": 37.0,
                 "minimum_latest_anomaly_c": 3.0,
+                "maximum_actual_age_days": 1,
                 "maximum_forecast_drop_c": 2.5,
                 "minimum_recent_warm_error_c": 0.6,
                 "minimum_taf_gap_c": 1.0,
@@ -106,7 +107,8 @@
         ],
         "final_metar_collection_end_local": "21:35",
         "live_adjustment_guardrails": {
-            "positive_sky_cap_c": 0.35
+            "positive_sky_cap_c": 0.35,
+            "positive_total_cap_c": 0.6
         },
         "maritime_advection": {
             "enabled": true,
@@ -178,6 +180,9 @@
             "17:00"
         ],
         "final_metar_collection_end_local": "21:35",
+        "live_adjustment_guardrails": {
+            "positive_total_cap_c": 0.75
+        },
         "heat_wind_profile": {
             "warm_sectors": [
                 [
@@ -958,6 +963,21 @@
             "17:30"
         ],
         "final_metar_collection_end_local": "21:35",
+        "live_adjustment_guardrails": {
+            "positive_total_cap_c": 1.25
+        },
+        "recent_warm_bias_challenger": {
+            "enabled": true,
+            "lookback_days": 14,
+            "minimum_consecutive_days": 3,
+            "maximum_latest_age_days": 2,
+            "minimum_daily_residual_c": 0.25,
+            "minimum_residual_c": 0.8,
+            "minimum_temp_850_c": 18.0,
+            "minimum_radiation_wm2": 650.0,
+            "shrinkage": 1.0,
+            "maximum_adjustment_c": 1.5
+        },
         "future_reheating": {
             "cloud_clearance_challenger": true
         },

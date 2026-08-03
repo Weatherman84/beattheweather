@@ -52,9 +52,9 @@ def _bucket_table(
             [
                 {
                     "Bucket": f"{bucket} °C",
-                    "Weatherman": probability,
+                    "Raw model": probability,
                     "YES ask": None,
-                    "Edge": None,
+                    "Uncalibrated gap": None,
                     "Change": None,
                     "Status": "Forecast only",
                 }
@@ -66,9 +66,9 @@ def _bucket_table(
         result = pd.DataFrame(
             {
                 "Bucket": comparison.bucket_label.astype(str),
-                "Weatherman": comparison.model_probability,
+                "Raw model": comparison.model_probability,
                 "YES ask": comparison.buy_price,
-                "Edge": comparison.edge,
+                "Uncalibrated gap": comparison.edge,
                 "Change": comparison.apply(
                     lambda row: (
                         float(row.model_probability)
@@ -81,14 +81,52 @@ def _bucket_table(
                 "Status": comparison.signal,
             }
         )
-    return result.sort_values("Weatherman", ascending=False).reset_index(drop=True)
+    return result.sort_values("Raw model", ascending=False).reset_index(drop=True)
 
 
 def _format_bucket_table(frame: pd.DataFrame) -> pd.DataFrame:
     shown = frame.copy()
-    for column in ("Weatherman", "YES ask", "Edge", "Change"):
+    for column in ("Raw model", "YES ask", "Uncalibrated gap", "Change"):
         shown[column] = shown[column].map(_percent)
     return shown
+
+
+def _top_bucket_summary(
+    probabilities: dict[int, float],
+    markets: pd.DataFrame,
+) -> tuple[int, float, str, float, bool]:
+    """Separate the modal exact temperature from an aggregated market range."""
+    top_exact_bucket = max(probabilities, key=probabilities.get)
+    market_comparison = market_edges(probabilities, markets)
+    top_market_row = (
+        market_comparison.sort_values(
+            ["model_probability", "edge"],
+            ascending=False,
+        ).iloc[0]
+        if not market_comparison.empty
+        else None
+    )
+    if top_market_row is None:
+        return (
+            top_exact_bucket,
+            float(probabilities[top_exact_bucket]),
+            f"{top_exact_bucket} °C",
+            float(probabilities[top_exact_bucket]),
+            True,
+        )
+    market_is_exact = bool(
+        pd.notna(top_market_row.bucket_low_c)
+        and pd.notna(top_market_row.bucket_high_c)
+        and float(top_market_row.bucket_low_c) == top_exact_bucket
+        and float(top_market_row.bucket_high_c) == top_exact_bucket
+    )
+    return (
+        top_exact_bucket,
+        float(probabilities[top_exact_bucket]),
+        str(top_market_row.bucket_label),
+        float(top_market_row.model_probability),
+        market_is_exact,
+    )
 
 
 def _today_memory_start(
@@ -132,16 +170,16 @@ def render_compact_live_forecast(
         else trade_decision.status
     )
     if trade_decision.status == "BET":
-        st.success(f"Trading Cockpit · {decision_title}")
+        st.success(f"Research Cockpit · {decision_title}")
     elif trade_decision.status == "WATCH":
-        st.warning(f"Trading Cockpit · {decision_title}")
+        st.warning(f"Research Cockpit · {decision_title}")
     else:
-        st.info(f"Trading Cockpit · {decision_title}")
+        st.info(f"Research Cockpit · {decision_title}")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Weatherman probability", _percent(trade_decision.fair_probability))
+    c1.metric("Raw model probability", _percent(trade_decision.fair_probability))
     c2.metric("YES ask", _percent(trade_decision.buy_price))
-    c3.metric("Executable edge", _percent(trade_decision.edge))
+    c3.metric("Uncalibrated gap", _percent(trade_decision.edge))
     c4.metric("Forecast confidence", f"{trade_decision.confidence}/100")
 
     driver_rows = forecast_driver_rows(nowcast)
@@ -163,8 +201,8 @@ def render_compact_live_forecast(
                 "since the previous stored snapshot."
             )
         st.caption(
-            "BET requires at least eight percentage points of executable edge, confidence "
-            "of at least 65/100 and a bid-ask spread no wider than 12%."
+            "Raw model probability is not a calibrated fair probability. Recommendations "
+            "remain RESEARCH ONLY until an out-of-sample calibration gate is passed."
         )
 
     if trade_decision.basket is not None:
@@ -172,14 +210,23 @@ def render_compact_live_forecast(
         with st.expander("Event-level edge basket", expanded=trade_decision.status == "BET"):
             b1, b2, b3, b4 = st.columns(4)
             b1.metric("Buckets", ", ".join(basket.bucket_labels))
-            b2.metric("Fair probability", _percent(basket.fair_probability))
+            b2.metric("Raw combined probability", _percent(basket.fair_probability))
             b3.metric("Combined asks", _percent(basket.total_cost))
-            b4.metric("Combined edge", _percent(basket.edge))
+            b4.metric("Uncalibrated gap", _percent(basket.edge))
             if basket.warnings:
                 st.warning("Basket blocked: " + " · ".join(basket.warnings))
 
     st.subheader("Forecast and day status")
-    top_bucket = max(probabilities, key=probabilities.get)
+    (
+        top_exact_bucket,
+        top_exact_probability,
+        top_market_bucket,
+        top_market_probability,
+        top_market_is_exact,
+    ) = _top_bucket_summary(
+        probabilities,
+        latest_markets,
+    )
     peak_at = getattr(nowcast, "expected_peak_at", None)
     peak_label = (
         pd.Timestamp(peak_at).tz_convert(timezone_name).strftime("%H:%M local")
@@ -188,19 +235,32 @@ def render_compact_live_forecast(
     )
     f1, f2, f3, f4 = st.columns(4)
     f1.metric("Champion forecast", _temperature(nowcast.final_forecast_mean))
-    f2.metric("Most likely bucket", f"{top_bucket} °C", _percent(probabilities[top_bucket]))
-    f3.metric("Latest METAR", _temperature(nowcast.current_observed_temp))
-    f4.metric("METAR max so far", _temperature(nowcast.observed_max, digits=0))
+    f2.metric(
+        "Most likely exact temperature",
+        f"{top_exact_bucket} °C",
+        _percent(top_exact_probability),
+    )
+    f3.metric(
+        "Most likely Polymarket bucket",
+        top_market_bucket,
+        _percent(top_market_probability),
+    )
+    f4.metric("Latest METAR", _temperature(nowcast.current_observed_temp))
     f5, f6, f7, f8 = st.columns(4)
-    f5.metric("Temperature trend", (
+    f5.metric("METAR max so far", _temperature(nowcast.observed_max, digits=0))
+    f6.metric("Temperature trend", (
         f"{nowcast.heating_rate:+.1f} °C/h" if nowcast.heating_rate is not None else "—"
     ))
-    f6.metric("Model warming left", (
+    f7.metric("Model warming left", (
         f"≤ {nowcast.remaining_rise_c:.1f} °C" if nowcast.remaining_rise_c is not None else "—"
     ))
-    f7.metric("Expected model peak", peak_label)
     f8.metric("Day status", day_status.label)
-    st.caption(day_status.explanation)
+    st.caption(f"Expected model peak {peak_label}. {day_status.explanation}")
+    if not top_market_is_exact:
+        st.caption(
+            "The Polymarket leader can differ from the most likely exact temperature because "
+            "an open end bucket aggregates several integer outcomes."
+        )
 
     st.markdown("**Forecast chain**")
     st.dataframe(pd.DataFrame(forecast_chain_rows(nowcast)), hide_index=True, width="stretch")
@@ -353,7 +413,7 @@ def render_compact_live_forecast(
                             {
                                 "Date": analog.target_date,
                                 "Similarity": f"{analog.similarity:.0%}",
-                                "Forecast": f"{analog.forecast_c:.1f} °C",
+                                "Historical Champion": f"{analog.forecast_c:.1f} °C",
                                 "Actual": f"{analog.actual_c:.1f} °C",
                                 "Residual": f"{analog.residual_c:+.1f} °C",
                                 "Matched on": ", ".join(analog.matched_on),

@@ -54,22 +54,24 @@ def markets() -> pd.DataFrame:
 
 def test_decision_engine_requires_edge_confidence_and_execution_quality():
     decision = build_trade_decision(
-        probabilities={23: 0.25, 24: 0.42, 25: 0.33},
+        probabilities={23: 0.25, 24: 0.40, 25: 0.35},
         markets=markets(),
         forecast_confidence=78,
         day_status=active_day(),
         previous_probabilities={"24°C": 0.35},
+        recommendations_enabled=True,
     )
     assert decision.status == "BET"
     assert decision.bucket_label == "24°C"
-    assert round(decision.edge or 0, 2) == 0.16
-    assert round(decision.probability_change or 0, 2) == 0.07
+    assert round(decision.edge or 0, 2) == 0.14
+    assert round(decision.probability_change or 0, 2) == 0.05
 
     low_confidence = build_trade_decision(
-        probabilities={23: 0.25, 24: 0.42, 25: 0.33},
+        probabilities={23: 0.25, 24: 0.40, 25: 0.35},
         markets=markets(),
         forecast_confidence=55,
         day_status=active_day(),
+        recommendations_enabled=True,
     )
     assert low_confidence.status == "WATCH"
     assert any("confidence" in blocker.lower() for blocker in low_confidence.blockers)
@@ -97,6 +99,54 @@ def test_decision_engine_blocks_a_large_edge_when_models_are_stale():
     )
     assert decision.status == "NO BET"
     assert any("current weather models" in blocker for blocker in decision.blockers)
+
+
+def test_recommendations_default_to_research_only_until_calibrated():
+    decision = build_trade_decision(
+        probabilities={23: 0.25, 24: 0.40, 25: 0.35},
+        markets=markets(),
+        forecast_confidence=85,
+        day_status=active_day(),
+    )
+    assert decision.status == "RESEARCH ONLY"
+    assert any("calibration" in blocker.lower() for blocker in decision.blockers)
+
+
+def test_non_top_cheap_and_extreme_disagreements_are_hard_blocked():
+    non_top_markets = markets().copy()
+    non_top_markets.loc[non_top_markets.market_id == "23", "best_ask"] = 0.10
+    non_top_markets.loc[non_top_markets.market_id == "24", "best_ask"] = 0.45
+    non_top = build_trade_decision(
+        probabilities={23: 0.24, 24: 0.50, 25: 0.26},
+        markets=non_top_markets,
+        forecast_confidence=90,
+        day_status=active_day(),
+        recommendations_enabled=True,
+    )
+    assert non_top.status == "NO BET"
+    assert any("most likely" in blocker.lower() for blocker in non_top.blockers)
+
+    cheap_markets = markets().copy()
+    cheap_markets.loc[cheap_markets.market_id == "24", "best_ask"] = 0.05
+    cheap = build_trade_decision(
+        probabilities={23: 0.10, 24: 0.19, 25: 0.71},
+        markets=cheap_markets[cheap_markets.market_id == "24"],
+        forecast_confidence=90,
+        day_status=active_day(),
+        recommendations_enabled=True,
+    )
+    assert cheap.status == "NO BET"
+    assert any("cheap-tail" in blocker for blocker in cheap.blockers)
+
+    conflict = build_trade_decision(
+        probabilities={23: 0.10, 24: 0.60, 25: 0.30},
+        markets=markets()[markets().market_id == "24"],
+        forecast_confidence=90,
+        day_status=active_day(),
+        recommendations_enabled=True,
+    )
+    assert conflict.status == "NO BET"
+    assert any("conflict" in blocker.lower() for blocker in conflict.blockers)
 
 
 def test_latest_prior_probability_view_uses_latest_capture():

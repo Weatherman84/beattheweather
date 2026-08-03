@@ -622,6 +622,35 @@ Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grüne
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
 **Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
 
+### Neu in Version 10.5.0 · Kalibrierungsbremse und Tagesanalyse 3. August
+
+- Die Edge-Engine ist standardmäßig **RESEARCH ONLY**. `EDGE_RECOMMENDATIONS_ENABLED`
+  bleibt auf `false`, bis eine Out-of-sample-Kalibrierung der Modellwahrscheinlichkeiten
+  bestanden ist. Rohe Modellwahrscheinlichkeit und Modell–Markt-Abstand werden nicht mehr
+  als `fair probability` beziehungsweise `executable edge` bezeichnet.
+- Nicht wahrscheinlichste Polymarket-Buckets, YES-Asks bis einschließlich 5 Cent und
+  Modell–Markt-Abstände ab 15 Prozentpunkten sind hart blockiert. Große Abstände heißen
+  **Market-model conflict**, nicht „besonders attraktive Edge“.
+- `Best actionable edge` berücksichtigt nur tatsächlich freigegebene Zeilen. Sind alle
+  Zeilen blockiert oder Research-only, erscheint **No actionable edge**.
+- `Most likely exact temperature` und `Most likely Polymarket bucket` werden getrennt
+  angezeigt. Ein offener Rand-Bucket kann mehrere Einzeltemperaturen summieren und daher
+  wahrscheinlicher sein als der modalste einzelne Gradwert.
+- Im Historical Analog Challenger heißt `Forecast` nun **Historical Champion**.
+- Madrid verwendet `Persistent Hot` nur noch mit einem vollständigen, frischen Vortag.
+  Ein deutlich kühlerer neuer Modellkonsens ist eine Pflichtbremse. Fehlt `daily_actuals`,
+  rekonstruiert der Nowcast einen ausreichend vollständigen Vortageshöchstwert aus bereits
+  gespeicherten METARs. Eine langsame, aber modellkonforme Erwärmung wird nicht künstlich
+  abgestraft; eine echte Abweichung vom Stundenpfad bleibt maßgeblich.
+- Amsterdam, Warschau und München erhalten airport-spezifische Obergrenzen für positive
+  Live-Aufschläge. Negative Kühlungsinformationen bleiben dabei unverändert erhalten.
+- München erhält einen **Recent Warm-Bias Challenger**. Er benötigt mindestens drei warme
+  stationsspezifische Restfehler sowie klares TAF, warme 850-hPa-Luft, hohe Strahlung und
+  fehlende Konvektion. Er bleibt Research-only und verändert den Champion nicht.
+
+Kein Backfill erforderlich. Nach dem Upload den grünen Test abwarten, Workflow 2 einmal
+manuell starten und Streamlit über **Manage app → Reboot app** neu starten.
+
 ### Neu in Version 10.4.1 · Safety Guards aus der Tagesanalyse
 
 - Workflow 5 sammelt die METARs aller Trading-Airports nach Ende des Tradingfensters

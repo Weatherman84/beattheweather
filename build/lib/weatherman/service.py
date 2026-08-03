@@ -370,6 +370,7 @@ def _build_nowcast_from_session(
         maritime_advection_profile=airport.get("maritime_advection"),
         maritime_low_range_profile=airport.get("maritime_low_range"),
         live_adjustment_guardrails=airport.get("live_adjustment_guardrails"),
+        recent_warm_bias_profile=airport.get("recent_warm_bias_challenger"),
         future_reheating_profile=airport.get("future_reheating"),
     )
     memory_config = dict(airport.get("regime_memory") or {})
@@ -880,6 +881,7 @@ def _record_shadow_evaluations(
         metar_pending=nowcast.metar_pending,
         market_model_conflict=conflict.is_conflict,
         forecast_stale=nowcast.forecast_data_stale,
+        recommendations_enabled=settings.edge_recommendations_enabled,
     )
     shadow_count = _upsert_batch(
         session,

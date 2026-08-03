@@ -264,7 +264,7 @@ def test_collection_journals_model_probability_and_real_ask():
         assert signal is not None
         assert signal.buy_price == 0.20
         assert signal.model_probability > signal.buy_price
-        assert signal.signal == "Possible edge"
+        assert signal.signal == "Market-model conflict"
         assert signal.timing == "D-1 or earlier"
 
 
@@ -421,7 +421,7 @@ def test_collection_journals_explainable_regime_memory_snapshot():
         assert "heating rate" in row.analogs_json
 
 
-def test_shadow_collection_journals_one_event_level_basket():
+def test_shadow_collection_stays_research_only_without_an_actionable_basket():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(engine, expire_on_commit=False)
@@ -480,13 +480,10 @@ def test_shadow_collection_journals_one_event_level_basket():
             )
         ).all()
         assert shadow_count == 5
-        assert basket_count == 1
-        assert basket is not None
-        assert basket.status == "BASKET WATCH"
-        assert not basket.top_model_included
-        assert basket.middle_bucket_excluded
+        assert basket_count == 0
+        assert basket is None
         assert {row.status for row in blocked_rows} == {"NO BET"}
-        assert all("Basket integrity guard" in row.blockers_json for row in blocked_rows)
+        assert all(row.blockers_json != "[]" for row in blocked_rows)
 
 
 def test_airport_specific_critical_window_uses_local_time():

@@ -108,6 +108,95 @@ def local_observations(
     return result[result.local_at.dt.date == target].sort_values("observed_at")
 
 
+def complete_metar_actuals(
+    observations: pd.DataFrame,
+    *,
+    airport_code: str,
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+    critical_window_local: list[str] | tuple[str, ...] | None = None,
+) -> pd.DataFrame:
+    """Reconstruct complete prior-day station maxima when ``daily_actuals`` lags."""
+    columns = ["airport", "target_date", "max_temp_c", "source"]
+    if observations.empty or not {"observed_at", "temp_c"} <= set(observations.columns):
+        return pd.DataFrame(columns=columns)
+    frame = observations.dropna(subset=["observed_at", "temp_c"]).copy()
+    frame["observed_at"] = pd.to_datetime(frame.observed_at, utc=True, errors="coerce")
+    frame = frame[
+        frame.observed_at.notna()
+        & (frame.observed_at <= pd.Timestamp(as_of).tz_convert("UTC"))
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    frame["local_at"] = frame.observed_at.dt.tz_convert(timezone_name)
+    frame = frame[frame.local_at.dt.date < target]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    configured_end = (
+        critical_window_local[-1]
+        if isinstance(critical_window_local, (list, tuple))
+        and len(critical_window_local) == 2
+        else "18:00"
+    )
+    try:
+        end_hour, end_minute = (int(value) for value in str(configured_end).split(":", 1))
+        required_end_minutes = end_hour * 60 + end_minute
+    except (TypeError, ValueError):
+        required_end_minutes = 18 * 60
+    rows: list[dict[str, object]] = []
+    for local_date, day in frame.groupby(frame.local_at.dt.date):
+        day = day.sort_values("local_at")
+        span_hours = (day.local_at.iloc[-1] - day.local_at.iloc[0]).total_seconds() / 3600
+        latest_minutes = int(day.local_at.iloc[-1].hour) * 60 + int(
+            day.local_at.iloc[-1].minute
+        )
+        if len(day) < 8 or span_hours < 6 or latest_minutes < required_end_minutes:
+            continue
+        rows.append(
+            {
+                "airport": airport_code,
+                "target_date": local_date,
+                "max_temp_c": float(day.temp_c.max()),
+                "source": "stored-metar-fallback",
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def merge_complete_metar_actuals(
+    actuals: pd.DataFrame,
+    observations: pd.DataFrame,
+    *,
+    airport_code: str,
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+    critical_window_local: list[str] | tuple[str, ...] | None = None,
+) -> pd.DataFrame:
+    """Prefer complete stored METAR maxima without requiring a database write first."""
+    metar = complete_metar_actuals(
+        observations,
+        airport_code=airport_code,
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        critical_window_local=critical_window_local,
+    )
+    if metar.empty:
+        return actuals.copy()
+    base = actuals.copy()
+    if base.empty:
+        return metar
+    base["target_date"] = pd.to_datetime(base.target_date, errors="coerce").dt.date
+    if "airport" not in base:
+        base["airport"] = airport_code
+    if "source" not in base:
+        base["source"] = "daily-actual"
+    combined = pd.concat([base, metar], ignore_index=True, sort=False)
+    return combined.drop_duplicates(["airport", "target_date"], keep="last")
+
+
 def _hourly_for_target(
     frame: pd.DataFrame,
     timezone_name: str,
@@ -572,7 +661,11 @@ def persistent_hot_regime(
     if frame.empty:
         return defaults
     latest = frame.iloc[-1]
-    if (target - latest.target_date).days > 2:
+    maximum_actual_age_days = max(
+        1,
+        int(configured.get("maximum_actual_age_days", 1)),
+    )
+    if (target - latest.target_date).days > maximum_actual_age_days:
         return defaults
     latest_actual = float(latest.max_temp_c)
     baseline_values = frame.iloc[:-1].max_temp_c.astype(float).tail(14)
@@ -629,8 +722,10 @@ def persistent_hot_regime(
             bool(repeated_warm_error),
         ]
     )
-    active = hot_yesterday and confirmations >= int(
-        configured.get("minimum_confirmations", 2)
+    active = (
+        hot_yesterday
+        and forecast_still_hot
+        and confirmations >= int(configured.get("minimum_confirmations", 2))
     )
     result = {
         **defaults,
@@ -659,6 +754,109 @@ def persistent_hot_regime(
             0.5,
             min(1.0, float(configured.get("confidence_multiplier", 0.88))),
         ),
+    }
+
+
+def recent_warm_bias_challenger(
+    scored: pd.DataFrame,
+    *,
+    target: date,
+    taf_guidance: TafGuidance | None,
+    temp_850_c: float | None,
+    radiation_wm2: float | None,
+    post_convective_active: bool,
+    profile: dict | None = None,
+) -> dict[str, float | bool | int | None]:
+    """Build a shadow-only warm-bias alternative from repeated station residuals."""
+    configured = profile or {}
+    defaults: dict[str, float | bool | int | None] = {
+        "active": False,
+        "days": 0,
+        "residual_c": None,
+        "adjustment_c": 0.0,
+        "taf_clear": False,
+        "warm_aloft": False,
+        "strong_radiation": False,
+        "convection_clear": not post_convective_active,
+    }
+    if not configured.get("enabled", False) or scored.empty:
+        return defaults
+    frame = scored.copy()
+    if not {"target_date", "model", "error"} <= set(frame.columns):
+        return defaults
+    frame["target_date"] = pd.to_datetime(frame.target_date, errors="coerce").dt.date
+    frame["model_bias"] = frame.groupby("model").error.transform("mean")
+    frame["warm_residual"] = -(frame.error - frame.model_bias)
+    frame = frame[
+        frame.target_date.notna()
+        & (frame.target_date < target)
+        & (
+            frame.target_date
+            >= target - timedelta(days=int(configured.get("lookback_days", 14)))
+        )
+    ]
+    if frame.empty:
+        return defaults
+    daily = (
+        frame.groupby("target_date", as_index=False)
+        .warm_residual.median()
+        .sort_values("target_date")
+    )
+    required_days = max(2, int(configured.get("minimum_consecutive_days", 3)))
+    recent = daily.tail(required_days)
+    if len(recent) < required_days:
+        return {**defaults, "days": len(recent)}
+    latest_date = recent.target_date.iloc[-1]
+    if (target - latest_date).days > int(configured.get("maximum_latest_age_days", 2)):
+        return {**defaults, "days": len(recent)}
+    minimum_daily = float(configured.get("minimum_daily_residual_c", 0.25))
+    warm_streak = bool((recent.warm_residual >= minimum_daily).all())
+    weights = pd.Series(
+        [0.72**index for index in range(len(recent) - 1, -1, -1)],
+        dtype=float,
+    )
+    residual = float(
+        (recent.warm_residual.reset_index(drop=True) * weights).sum() / weights.sum()
+    )
+    taf_clear = bool(
+        taf_guidance is not None
+        and taf_guidance.cloud_risk == "No significant cloud near peak"
+        and not taf_guidance.precipitation_risk
+        and not taf_guidance.thunderstorm_risk
+    )
+    warm_aloft = bool(
+        temp_850_c is not None
+        and temp_850_c >= float(configured.get("minimum_temp_850_c", 18.0))
+    )
+    strong_radiation = bool(
+        radiation_wm2 is not None
+        and radiation_wm2 >= float(configured.get("minimum_radiation_wm2", 650.0))
+    )
+    active = bool(
+        warm_streak
+        and residual >= float(configured.get("minimum_residual_c", 0.8))
+        and taf_clear
+        and warm_aloft
+        and strong_radiation
+        and not post_convective_active
+    )
+    adjustment = (
+        min(
+            float(configured.get("maximum_adjustment_c", 1.5)),
+            residual * float(configured.get("shrinkage", 1.0)),
+        )
+        if active
+        else 0.0
+    )
+    return {
+        "active": active,
+        "days": len(recent),
+        "residual_c": residual,
+        "adjustment_c": adjustment,
+        "taf_clear": taf_clear,
+        "warm_aloft": warm_aloft,
+        "strong_radiation": strong_radiation,
+        "convection_clear": not post_convective_active,
     }
 
 
@@ -1248,6 +1446,31 @@ def _cap_overlapping_positive_sky_contributions(
     return adjusted, total - cap
 
 
+def _cap_positive_live_adjustment(
+    contributions: dict[str, float],
+    profile: dict | None,
+) -> tuple[dict[str, float], float]:
+    """Cap an airport's total warm live shift while preserving cooling evidence."""
+    configured = profile or {}
+    cap_value = configured.get("positive_total_cap_c")
+    if cap_value is None:
+        return contributions, 0.0
+    positive = {name: float(value) for name, value in contributions.items() if value > 0}
+    negative_total = sum(float(value) for value in contributions.values() if value < 0)
+    positive_total = sum(positive.values())
+    cap = max(0.0, float(cap_value))
+    raw_total = positive_total + negative_total
+    if raw_total <= cap or positive_total <= 0:
+        return contributions, 0.0
+    allowed_positive = max(0.0, cap - negative_total)
+    scale = min(1.0, allowed_positive / positive_total)
+    adjusted = {
+        name: float(value) * scale if float(value) > 0 else float(value)
+        for name, value in contributions.items()
+    }
+    return adjusted, raw_total - sum(adjusted.values())
+
+
 def dewpoint_trend(observations: pd.DataFrame) -> float | None:
     """Observed dewpoint change per hour over the latest usable two-hour window."""
     if observations.empty or "dewpoint_c" not in observations:
@@ -1582,6 +1805,7 @@ def build_live_nowcast(
     maritime_advection_profile: dict | None = None,
     maritime_low_range_profile: dict | None = None,
     live_adjustment_guardrails: dict | None = None,
+    recent_warm_bias_profile: dict | None = None,
     future_reheating_profile: dict | None = None,
     maximum_model_age_minutes: int = 90,
     _disabled_factors: frozenset[str] = frozenset(),
@@ -1636,7 +1860,21 @@ def build_live_nowcast(
     d1 = available[available.horizon == "D-1"].copy()
     if not d1.empty:
         d1 = d1[pd.to_datetime(d1.target_date).dt.date < target]
-    prior_actuals = actuals.copy()
+    airport_code = (
+        str(current.airport.iloc[0])
+        if "airport" in current and not current.airport.empty
+        else "UNKN"
+    )
+    effective_actuals = merge_complete_metar_actuals(
+        actuals,
+        observations,
+        airport_code=airport_code,
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        critical_window_local=critical_window_local,
+    )
+    prior_actuals = effective_actuals.copy()
     if not prior_actuals.empty:
         prior_actuals = prior_actuals[pd.to_datetime(prior_actuals.target_date).dt.date < target]
     d1_scored = score_frame(d1, prior_actuals)
@@ -2035,6 +2273,15 @@ def build_live_nowcast(
     post_convective_active = bool(
         post_convective["active"] and target == local_now.date()
     )
+    recent_warm_bias = recent_warm_bias_challenger(
+        d1_scored,
+        target=target,
+        taf_guidance=taf_guidance,
+        temp_850_c=temp_850,
+        radiation_wm2=radiation,
+        post_convective_active=post_convective_active,
+        profile=recent_warm_bias_profile,
+    )
     (
         late_dry_mixing,
         late_dry_mixing_signal,
@@ -2178,6 +2425,10 @@ def build_live_nowcast(
             contributions,
             float(maritime_low_range["positive_factor_multiplier"]),
         )
+    contributions, positive_total_reduction = _cap_positive_live_adjustment(
+        contributions,
+        live_adjustment_guardrails,
+    )
     adjustments = _scaled_live_adjustments(contributions)
     live_adjustment = adjustments["total"]
     heat = HeatSpikeAssessment(
@@ -2203,6 +2454,14 @@ def build_live_nowcast(
                     f"were capped to avoid double counting ({sky_overlap_reduction:.2f} °C removed)"
                 ]
                 if sky_overlap_reduction > 0
+                else []
+            ),
+            *(
+                [
+                    "Airport live-adjustment guard: the combined warm shift was "
+                    f"capped ({positive_total_reduction:.2f} °C removed)"
+                ]
+                if positive_total_reduction > 0
                 else []
             ),
             *(
@@ -2397,6 +2656,20 @@ def build_live_nowcast(
         "clear_sky_override_adjustment_c": clear_sky_override,
         "sky_overlap_guard_active": float(sky_overlap_reduction > 0),
         "sky_overlap_reduction_c": sky_overlap_reduction,
+        "positive_live_cap_active": float(positive_total_reduction > 0),
+        "positive_live_cap_reduction_c": positive_total_reduction,
+        "recent_warm_bias_challenger_active": float(bool(recent_warm_bias["active"])),
+        "recent_warm_bias_days": float(recent_warm_bias["days"]),
+        "recent_warm_bias_residual_c": recent_warm_bias["residual_c"],
+        "recent_warm_bias_adjustment_c": recent_warm_bias["adjustment_c"],
+        "recent_warm_bias_taf_clear": float(bool(recent_warm_bias["taf_clear"])),
+        "recent_warm_bias_warm_aloft": float(bool(recent_warm_bias["warm_aloft"])),
+        "recent_warm_bias_strong_radiation": float(
+            bool(recent_warm_bias["strong_radiation"])
+        ),
+        "recent_warm_bias_convection_clear": float(
+            bool(recent_warm_bias["convection_clear"])
+        ),
         "rapid_heat_ramp_active": float(bool(rapid_heat["active"])),
         "rapid_heat_ramp_forecast_vs_latest_c": rapid_heat[
             "forecast_vs_latest_c"
@@ -2617,6 +2890,7 @@ def build_live_nowcast(
                 maritime_advection_profile=maritime_advection_profile,
                 maritime_low_range_profile=maritime_low_range_profile,
                 live_adjustment_guardrails=live_adjustment_guardrails,
+                recent_warm_bias_profile=recent_warm_bias_profile,
                 future_reheating_profile=future_reheating_profile,
                 maximum_model_age_minutes=maximum_model_age_minutes,
                 _disabled_factors=frozenset({*_disabled_factors, factor}),
@@ -2630,6 +2904,32 @@ def build_live_nowcast(
                 "spread_c": challenger.final_forecast_spread,
                 "probabilities": challenger.probabilities,
                 "forecast_confidence": challenger.forecast_confidence,
+            }
+        if recent_warm_bias["active"]:
+            warm_bias_unconditioned = consensus(
+                (
+                    current.corrected_max
+                    + live_adjustment
+                    + taf_center_adjustment
+                    + float(recent_warm_bias["adjustment_c"])
+                ).tolist(),
+                weights=current.model_weight.tolist(),
+                sigma_floor=live_sigma_floor + taf_spread_addition + 0.15,
+            )
+            warm_bias_probabilities = condition_probability_range(
+                warm_bias_unconditioned.probability_by_bucket,
+                day_status.minimum_bucket,
+                day_status.maximum_bucket,
+            )
+            warm_bias_mean, warm_bias_spread = probability_moments(
+                warm_bias_probabilities
+            )
+            challenger_variants["Recent Warm-Bias Challenger"] = {
+                "factor": "recent_warm_bias",
+                "forecast_mean_c": warm_bias_mean,
+                "spread_c": warm_bias_spread,
+                "probabilities": warm_bias_probabilities,
+                "forecast_confidence": min(forecast_confidence, 55),
             }
         if future_outlook.reheating_watch:
             reheating_unconditioned = consensus(

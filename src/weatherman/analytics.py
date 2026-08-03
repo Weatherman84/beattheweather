@@ -360,12 +360,19 @@ def market_edges(probabilities: dict[int, float], markets: pd.DataFrame) -> pd.D
         float
     )
     result["edge"] = result.model_probability - result.buy_price
-    result["signal"] = "No clear edge"
+    result["signal"] = "No material disagreement"
     actionable = result.best_ask.notna()
     if "closed" in result:
         actionable &= ~result.closed.fillna(False).astype(bool)
-    result.loc[actionable & (result.edge >= 0.04), "signal"] = "Watch"
-    result.loc[actionable & (result.edge >= 0.08), "signal"] = "Possible edge"
+    result.loc[actionable & (result.edge >= 0.04), "signal"] = "Watch only"
+    result.loc[
+        actionable & (result.edge >= 0.08),
+        "signal",
+    ] = "Uncalibrated disagreement"
+    result.loc[
+        actionable & (result.edge >= 0.15),
+        "signal",
+    ] = "Market-model conflict"
     return result.sort_values("edge", ascending=False)
 
 
@@ -1433,7 +1440,7 @@ def settled_signal_performance(
     markets: pd.DataFrame,
     stake: float = 1.0,
 ) -> pd.DataFrame:
-    """Settle the first recorded Possible-edge entry for each market range."""
+    """Settle the first recorded legacy edge or research-disagreement entry."""
     columns = [
         "airport",
         "target_date",
@@ -1450,7 +1457,15 @@ def settled_signal_performance(
     ]
     if signals.empty or markets.empty:
         return pd.DataFrame(columns=columns)
-    candidates = signals[signals.signal == "Possible edge"].copy()
+    candidates = signals[
+        signals.signal.isin(
+            [
+                "Possible edge",
+                "Uncalibrated disagreement",
+                "Market-model conflict",
+            ]
+        )
+    ].copy()
     candidates["buy_price"] = pd.to_numeric(candidates.buy_price, errors="coerce")
     candidates = candidates[(candidates.buy_price > 0) & (candidates.buy_price < 1)]
     if candidates.empty:

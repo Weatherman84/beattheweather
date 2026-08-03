@@ -159,6 +159,9 @@ def evaluate_shadow_markets(
     minimum_confidence: int = 65,
     maximum_spread: float = 0.12,
     maximum_book_age_seconds: float = 180.0,
+    minimum_buy_price: float = 0.05,
+    maximum_model_market_gap: float = 0.15,
+    recommendations_enabled: bool = False,
 ) -> list[dict]:
     """Evaluate every bucket as a paper trade using actual CLOB depth.
 
@@ -174,6 +177,11 @@ def evaluate_shadow_markets(
     comparison = market_edges(probabilities, market_frame)
     if comparison.empty:
         return []
+    top_market = comparison.sort_values(
+        ["model_probability", "edge"],
+        ascending=False,
+    ).iloc[0]
+    top_market_id = str(top_market.market_id)
     captured_at = captured_at.astimezone(timezone.utc)
     rows: list[dict] = []
     for market in comparison.itertuples():
@@ -231,6 +239,10 @@ def evaluate_shadow_markets(
             hard_blockers.append("A near-certain market price conflicts with the weather model")
         if forecast_stale:
             hard_blockers.append("Fewer than two current weather models are available")
+        if str(market.market_id) != top_market_id:
+            hard_blockers.append(
+                "The range is not Weatherman's most likely Polymarket bucket"
+            )
         if bool(getattr(market, "closed", False)):
             hard_blockers.append("The market is closed")
         if token_id is None or not book:
@@ -245,6 +257,18 @@ def evaluate_shadow_markets(
             hard_blockers.append("The estimated fill is below the market minimum order size")
         if book_age is not None and book_age > maximum_book_age_seconds:
             hard_blockers.append("The CLOB order book is stale")
+        if fill.best_ask is not None and fill.best_ask <= float(minimum_buy_price):
+            hard_blockers.append(
+                f"YES ask is at or below the {minimum_buy_price:.0%} cheap-tail floor"
+            )
+        if gross_edge is not None and gross_edge >= float(maximum_model_market_gap):
+            hard_blockers.append(
+                f"Raw model-market gap {gross_edge:.1%} is a conflict, not calibrated edge"
+            )
+        if not recommendations_enabled:
+            soft_blockers.append(
+                "Empirical probability calibration has not passed; research only"
+            )
         if int(forecast_confidence) < minimum_confidence:
             soft_blockers.append(
                 f"Forecast confidence {int(forecast_confidence)}/100 is below "
@@ -258,12 +282,14 @@ def evaluate_shadow_markets(
         blockers = [*hard_blockers, *soft_blockers]
         if hard_blockers or net_edge is None or net_edge < 0:
             status = "NO BET"
+        elif not recommendations_enabled:
+            status = "RESEARCH ONLY"
         elif net_edge >= minimum_net_edge and not soft_blockers:
             status = "SHADOW BET"
         else:
             status = "WATCH"
         reasons = [
-            f"Fair probability {float(market.model_probability):.1%}",
+            f"Raw model probability {float(market.model_probability):.1%}",
             (
                 f"Average executable fill {fill.average_fill_price:.1%}"
                 if fill.average_fill_price is not None
@@ -275,7 +301,7 @@ def evaluate_shadow_markets(
                 else "Taker fee unavailable"
             ),
             (
-                f"Net edge after fee, slippage and safety margin {net_edge:+.1%}"
+                f"Uncalibrated gap after fee, slippage and safety margin {net_edge:+.1%}"
                 if net_edge is not None
                 else "Net edge unavailable"
             ),

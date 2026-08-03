@@ -32,6 +32,10 @@ class Settings:
     maximum_live_model_age_minutes: int = int(
         os.getenv("MAXIMUM_LIVE_MODEL_AGE_MINUTES", "90")
     )
+    edge_recommendations_enabled: bool = os.getenv(
+        "EDGE_RECOMMENDATIONS_ENABLED",
+        "false",
+    ).strip().casefold() in {"1", "true", "yes", "on"}
     regime_memory_allow_promoted: bool = os.getenv(
         "REGIME_MEMORY_ALLOW_PROMOTED",
         "false",
