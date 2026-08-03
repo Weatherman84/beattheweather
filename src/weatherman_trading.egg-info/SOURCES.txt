@@ -9,6 +9,7 @@ src/weatherman/db.py
 src/weatherman/decision.py
 src/weatherman/live_display.py
 src/weatherman/live_ui.py
+src/weatherman/maintenance.py
 src/weatherman/navigation.py
 src/weatherman/nowcast.py
 src/weatherman/providers.py
@@ -28,6 +29,7 @@ src/weatherman_trading.egg-info/top_level.txt
 tests/test_analytics.py
 tests/test_decision.py
 tests/test_live_display.py
+tests/test_maintenance.py
 tests/test_navigation.py
 tests/test_nowcast.py
 tests/test_providers.py

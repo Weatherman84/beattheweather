@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: weatherman-trading
-Version: 10.5.0
+Version: 10.5.1
 Summary: Model consensus, nowcast and backtesting for daily maximum-temperature markets
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown

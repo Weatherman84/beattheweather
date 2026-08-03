@@ -29,7 +29,11 @@ def test_database_retry_helper_reruns_instead_of_merging_sqlite() -> None:
     assert "git fetch origin main" in helper
     assert "git switch -C main origin/main" in helper
     assert "run_job" in helper
+    assert "maintain-database --hourly-days 7" in helper
+    assert "database_size_limit_bytes" in helper
     assert "git push origin HEAD:main" in helper
+    assert "git merge-base --is-ancestor origin/main HEAD" in helper
+    assert "This is not a race; refusing to rerun the collector." in helper
     assert "git pull" not in helper
 
 

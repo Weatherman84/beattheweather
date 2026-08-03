@@ -10,6 +10,7 @@ from .service import (
     collect_research_checkpoints,
     sync_airport_universe,
 )
+from .maintenance import maintain_sqlite_database
 
 
 def main() -> None:
@@ -31,6 +32,8 @@ def main() -> None:
     decision_cmd.add_argument("--airports", nargs="*")
     universe_cmd = subs.add_parser("sync-airport-universe")
     universe_cmd.add_argument("--include-closed", action="store_true")
+    maintenance_cmd = subs.add_parser("maintain-database")
+    maintenance_cmd.add_argument("--hourly-days", type=int, default=7)
     args = parser.parse_args()
     if args.command == "collect":
         result = collect(args.airports, args.days)
@@ -42,6 +45,8 @@ def main() -> None:
         result = collect_live_decision_checkpoints(args.airports)
     elif args.command == "sync-airport-universe":
         result = sync_airport_universe(include_closed=args.include_closed)
+    elif args.command == "maintain-database":
+        result = maintain_sqlite_database(hourly_retention_days=args.hourly_days)
     else:
         result = backfill(args.days, args.airports)
     print(result)

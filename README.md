@@ -622,6 +622,25 @@ Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grüne
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
 **Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
 
+### Korrektur in Version 10.5.1 · GitHub-Datenbanklimit
+
+- Rohe stündliche Modellpfade werden rollierend auf die letzten sieben UTC-Lauftage
+  begrenzt. Historische Tagesforecasts, Actuals, METARs, Marktpreise, Signal- und
+  Strategy-Historie sowie Forecast-/Challenger-Snapshots bleiben vollständig erhalten.
+- Vier redundante Einzelindizes der Stundenprognosen werden entfernt. Der vorhandene
+  zusammengesetzte Unique-Index deckt die tatsächlich verwendeten Airport-Abfragen und
+  Upserts bereits ab.
+- Nach einer notwendigen Bereinigung wird SQLite mit `VACUUM` kompakt geschrieben.
+- Vor jedem Datenbank-Commit greift eine 95-MiB-Sicherheitsgrenze, damit GitHub keinen
+  unpushbaren Commit über seinem harten 100-MiB-Limit erhält.
+- Ein Push-Fehler wird nur noch dann als Race behandelt, wenn `main` wirklich parallel
+  weitergelaufen ist. Größen-, Netzwerk- oder Berechtigungsfehler starten den teuren
+  Collector nicht mehr fälschlich ein zweites Mal.
+
+Für das Update den gesamten Inhalt hochladen. Danach **2 - Collect current forecasts**
+einmal manuell starten; dieser erste Lauf bereinigt und verkleinert die bestehende
+Datenbank automatisch. Ein neuer Backfill ist nicht nötig.
+
 ### Neu in Version 10.5.0 · Kalibrierungsbremse und Tagesanalyse 3. August
 
 - Die Edge-Engine ist standardmäßig **RESEARCH ONLY**. `EDGE_RECOMMENDATIONS_ENABLED`

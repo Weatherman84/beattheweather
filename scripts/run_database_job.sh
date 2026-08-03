@@ -10,6 +10,8 @@ commit_message="$1"
 shift
 job_arguments=("$@")
 maximum_attempts=3
+database_path="data/weatherman.db"
+database_size_limit_bytes=$((95 * 1024 * 1024))
 
 run_job() {
   local segment=()
@@ -45,7 +47,14 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
   fi
 
   run_job
-  git add -f data/weatherman.db
+  env PYTHONPATH=src python -m weatherman.cli maintain-database --hourly-days 7
+  database_size_bytes=$(wc -c < "$database_path")
+  if ((database_size_bytes >= database_size_limit_bytes)); then
+    echo "Database is still too large after maintenance: ${database_size_bytes} bytes." >&2
+    echo "Refusing to create an unpushable commit; GitHub's hard limit is 100 MiB." >&2
+    exit 1
+  fi
+  git add -f "$database_path"
   if git diff --cached --quiet; then
     echo "Database collector produced no new snapshot."
     exit 0
@@ -54,6 +63,12 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
   git restore --worktree -- .
   if git push origin HEAD:main; then
     exit 0
+  fi
+  git fetch origin main
+  if git merge-base --is-ancestor origin/main HEAD; then
+    echo "Database push failed, but remote main did not advance." >&2
+    echo "This is not a race; refusing to rerun the collector." >&2
+    exit 1
   fi
   if [[ $attempt -eq maximum_attempts ]]; then
     echo "Database push still raced after $maximum_attempts attempts." >&2

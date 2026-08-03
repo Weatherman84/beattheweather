@@ -47,10 +47,13 @@ class HourlyForecast(Base):
     __tablename__ = "hourly_forecasts"
     __table_args__ = (UniqueConstraint("airport", "model", "run_at", "valid_at"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    airport: Mapped[str] = mapped_column(String(4), index=True)
-    model: Mapped[str] = mapped_column(String(80), index=True)
-    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    valid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # The four-column unique index already serves the airport-first reads and
+    # upserts used by Weatherman. Separate one-column indexes consumed about
+    # 17 MiB without improving any application query.
+    airport: Mapped[str] = mapped_column(String(4))
+    model: Mapped[str] = mapped_column(String(80))
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     temp_c: Mapped[float] = mapped_column(Float)
     dewpoint_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_cover: Mapped[float | None] = mapped_column(Float, nullable=True)
