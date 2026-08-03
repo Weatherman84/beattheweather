@@ -40,6 +40,10 @@ class Settings:
         "REGIME_MEMORY_ALLOW_PROMOTED",
         "false",
     ).strip().casefold() in {"1", "true", "yes", "on"}
+    regime_memory_auto_promotion_enabled: bool = os.getenv(
+        "REGIME_MEMORY_AUTO_PROMOTION",
+        "true",
+    ).strip().casefold() in {"1", "true", "yes", "on"}
     regime_memory_minimum_oos_days: int = int(
         os.getenv("REGIME_MEMORY_MINIMUM_OOS_DAYS", "30")
     )

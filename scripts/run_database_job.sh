@@ -11,6 +11,7 @@ shift
 job_arguments=("$@")
 maximum_attempts=3
 database_path="data/weatherman.db"
+hourly_archive_path="data/hourly_archive"
 database_size_limit_bytes=$((95 * 1024 * 1024))
 
 run_job() {
@@ -54,7 +55,15 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
     echo "Refusing to create an unpushable commit; GitHub's hard limit is 100 MiB." >&2
     exit 1
   fi
+  oversized_archive=$(find "$hourly_archive_path" -type f -size +95M -print -quit 2>/dev/null || true)
+  if [[ -n "$oversized_archive" ]]; then
+    echo "Hourly archive file exceeds the 95-MiB safety limit: $oversized_archive" >&2
+    exit 1
+  fi
   git add -f "$database_path"
+  if [[ -d "$hourly_archive_path" ]]; then
+    git add -f "$hourly_archive_path"
+  fi
   if git diff --cached --quiet; then
     echo "Database collector produced no new snapshot."
     exit 0

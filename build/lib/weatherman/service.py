@@ -376,7 +376,8 @@ def _build_nowcast_from_session(
     memory_config = dict(airport.get("regime_memory") or {})
     memory_config.setdefault(
         "allow_promoted",
-        settings.regime_memory_allow_promoted,
+        settings.regime_memory_auto_promotion_enabled
+        or settings.regime_memory_allow_promoted,
     )
     memory_config.setdefault(
         "minimum_oos_days",

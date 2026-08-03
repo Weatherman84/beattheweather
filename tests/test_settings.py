@@ -1,5 +1,5 @@
 from weatherman.catalog import market_city_index, research_airports, trading_airports
-from weatherman.settings import airports
+from weatherman.settings import airports, settings
 
 
 def test_packaged_airports_are_available():
@@ -35,3 +35,4 @@ def test_packaged_airports_are_available():
     assert catalog["EHAM"]["heat_wind_profile"]["cool_sectors"] == [[220, 340]]
     assert market_city_index()["nyc"][0] == "KNYC"
     assert market_city_index()["new-york-city"][0] == "KNYC"
+    assert settings.regime_memory_auto_promotion_enabled is True

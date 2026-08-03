@@ -457,6 +457,16 @@ def evaluate_promotion_gate(
     champion_bias = float(champion_error.mean())
     challenger_bias = float(challenger_error.mean())
     days = int(paired.target_date.nunique())
+    recent_count = min(10, len(paired))
+    recent_champion_error = champion_error.tail(recent_count)
+    recent_challenger_error = challenger_error.tail(recent_count)
+    recent_mae_gain = float(
+        recent_champion_error.abs().mean() - recent_challenger_error.abs().mean()
+    )
+    recent_bias_guard = bool(
+        abs(float(recent_challenger_error.mean()))
+        <= abs(float(recent_champion_error.mean())) + 0.15
+    )
     enough_days = days >= minimum_oos_days
     quality_pass = bool(
         mae_gain >= minimum_mae_gain_c
@@ -464,14 +474,17 @@ def evaluate_promotion_gate(
         and brier_gain >= minimum_brier_gain
         and exact_gain >= -0.02
         and abs(challenger_bias) <= abs(champion_bias) + 0.15
+        and recent_mae_gain >= 0.0
+        and recent_bias_guard
     )
     eligible = enough_days and quality_pass
     if eligible:
-        status = "ELIGIBLE FOR REVIEW"
+        status = "AUTO-PROMOTION ELIGIBLE"
         explanation = (
             f"{days} settled OOS days; the analog Challenger improves MAE by "
-            f"{mae_gain:.2f} °C and Brier by {brier_gain:.3f}. Promotion is permitted "
-            "but still requires the explicit configuration switch."
+            f"{mae_gain:.2f} °C and Brier by {brier_gain:.3f}. Its last {recent_count} "
+            f"days remain stable ({recent_mae_gain:+.2f} °C MAE gain), so guarded "
+            "automatic promotion is permitted."
         )
     elif not enough_days:
         status = "SHADOW"
@@ -483,7 +496,8 @@ def evaluate_promotion_gate(
         status = "NOT ELIGIBLE"
         explanation = (
             f"{days} settled OOS days, but the accuracy safeguards are not all met. "
-            "The learned pattern remains Challenger-only."
+            f"The last {recent_count} days show {recent_mae_gain:+.2f} °C MAE gain. "
+            "The learned pattern remains Challenger-only or is rolled back automatically."
         )
     return PromotionGate(
         status=status,

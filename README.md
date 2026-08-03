@@ -622,6 +622,32 @@ Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grüne
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
 **Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
 
+### Korrektur in Version 10.5.2 · verlustfreies Stundenarchiv
+
+- Die durch den ersten v10.5.1-Lauf entfernten Stundenpfade wurden aus der letzten
+  vollständigen Git-Version wiederhergestellt: 144.215 Zeilen vom 19. Juli bis
+  3. August 2026, verteilt auf 16 deduplizierte Tagesarchive.
+- Die Archive enthalten Temperatur, Taupunkt, Bewölkung, Windgeschwindigkeit und
+  -richtung, Strahlung sowie 850-hPa-Temperatur für jeden gespeicherten Modellpfad.
+- Vor jeder künftigen 7-Tage-Bereinigung werden auslaufende Live-Zeilen atomar in
+  `data/hourly_archive` geschrieben, erneut eingelesen und geprüft. Erst danach darf
+  SQLite sie löschen. Ein beschädigtes Archiv stoppt die Bereinigung.
+- `load_hourly_history` verbindet Archiv und Live-Datenbank automatisch und entfernt
+  Überschneidungen über Airport, Modell, Lauf- und Gültigkeitszeit. Die Nowcast-Forschung
+  sieht dadurch eine durchgehende Historie, während SQLite klein bleibt.
+- Ein deterministisches Manifest protokolliert je Tagesdatei Zeilenzahl, Zeitraum,
+  Dateigröße und SHA-256-Prüfsumme. Jeder Datenbank-Workflow validiert es automatisch.
+- Der bestehende Analog-Memory-Challenger darf nach mindestens 30 echten OOS-Tagen
+  automatisch zum Forecast-Champion beitragen, aber nur wenn MAE, Brier Score, exakter
+  Bucket und Bias die Gates bestehen und auch die letzten zehn Tage stabil bleiben.
+  Verschlechtert sich dieses jüngste Fenster, erfolgt der Rollback automatisch.
+- Die Edge-Engine bleibt davon vollständig getrennt und weiterhin standardmäßig
+  `RESEARCH ONLY`; eine Forecast-Promotion aktiviert keine Wetten.
+
+Für dieses Update ist weder ein Backfill noch eine manuelle Wiederherstellung oder
+Promotion nötig. Den gesamten Inhalt hochladen, den grünen Test abwarten, Workflow 2
+einmal starten und danach die Streamlit-App neu booten.
+
 ### Korrektur in Version 10.5.1 · GitHub-Datenbanklimit
 
 - Rohe stündliche Modellpfade werden rollierend auf die letzten sieben UTC-Lauftage

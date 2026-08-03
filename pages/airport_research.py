@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.5.1")
+discard_stale_weatherman_modules("10.5.2")
 
 import pandas as pd
 import plotly.express as px
