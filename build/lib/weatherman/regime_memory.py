@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from .analytics import condition_probability_range, consensus
+from .nowcast import merge_complete_metar_actuals
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,23 @@ class PromotionGate:
     exact_hit_gain: float | None
     champion_bias: float | None
     challenger_bias: float | None
+    explanation: str
+
+
+@dataclass(frozen=True)
+class AnchorTransferAssessment:
+    status: str
+    hours_bucket: str
+    history_days: int
+    prior_gain: float
+    learned_gain: float
+    current_residual_c: float | None
+    current_adjustment_c: float
+    suggested_adjustment_c: float
+    forecast_delta_c: float
+    ready: bool
+    applied_to_champion: bool
+    promotion: PromotionGate
     explanation: str
 
 
@@ -92,12 +110,12 @@ FEATURE_SPECS: dict[str, tuple[float, float, bool]] = {
     "hours_to_peak": (2.0, 1.0, False),
     "taf_adjustment_c": (0.25, 0.4, False),
     "final_spread_c": (0.8, 0.5, False),
-    "persistent_hot_active": (1.0, 0.7, False),
-    "rapid_heat_ramp_active": (1.0, 0.6, False),
-    "maritime_advection_active": (1.0, 0.8, False),
-    "maritime_low_range_active": (1.0, 0.8, False),
-    "phase_vs_amplitude_active": (1.0, 0.6, False),
-    "post_convective_uncertainty_active": (1.0, 0.6, False),
+    "persistent_hot_strength": (0.40, 0.7, False),
+    "rapid_heat_ramp_strength": (0.40, 0.6, False),
+    "maritime_advection_strength": (0.40, 0.8, False),
+    "maritime_low_range_strength": (0.40, 0.8, False),
+    "phase_vs_amplitude_strength": (0.40, 0.6, False),
+    "post_convective_uncertainty_strength": (0.40, 0.6, False),
 }
 
 
@@ -116,12 +134,12 @@ FEATURE_LABELS = {
     "hours_to_peak": "time to peak",
     "taf_adjustment_c": "TAF influence",
     "final_spread_c": "forecast spread",
-    "persistent_hot_active": "persistent-hot state",
-    "rapid_heat_ramp_active": "heat-ramp state",
-    "maritime_advection_active": "maritime-advection state",
-    "maritime_low_range_active": "maritime low-range state",
-    "phase_vs_amplitude_active": "phase/amplitude state",
-    "post_convective_uncertainty_active": "convective state",
+    "persistent_hot_strength": "persistent-hot evidence",
+    "rapid_heat_ramp_strength": "heat-ramp evidence",
+    "maritime_advection_strength": "maritime-advection evidence",
+    "maritime_low_range_strength": "maritime low-range evidence",
+    "phase_vs_amplitude_strength": "phase/amplitude evidence",
+    "post_convective_uncertainty_strength": "convective evidence",
 }
 
 
@@ -347,6 +365,8 @@ def evaluate_promotion_gate(
     actuals: pd.DataFrame,
     *,
     timing_group: str,
+    factor: str = "regime_memory_analog",
+    challenger_label: str = "analog Challenger",
     minimum_oos_days: int = 30,
     minimum_mae_gain_c: float = 0.12,
     minimum_brier_gain: float = 0.003,
@@ -388,7 +408,7 @@ def evaluate_promotion_gate(
     frame["captured_at"] = pd.to_datetime(frame.captured_at, utc=True, errors="coerce")
     frame = frame[frame.timing.map(_timing_group) == timing_group]
     champion = frame[frame.variant == "Champion"]
-    challenger = frame[frame.factor == "regime_memory_analog"]
+    challenger = frame[frame.factor == factor]
     if champion.empty or challenger.empty:
         return empty
     paired = challenger.merge(
@@ -481,7 +501,7 @@ def evaluate_promotion_gate(
     if eligible:
         status = "AUTO-PROMOTION ELIGIBLE"
         explanation = (
-            f"{days} settled OOS days; the analog Challenger improves MAE by "
+            f"{days} settled OOS days; the {challenger_label} improves MAE by "
             f"{mae_gain:.2f} °C and Brier by {brier_gain:.3f}. Its last {recent_count} "
             f"days remain stable ({recent_mae_gain:+.2f} °C MAE gain), so guarded "
             "automatic promotion is permitted."
@@ -512,6 +532,344 @@ def evaluate_promotion_gate(
         champion_bias=champion_bias,
         challenger_bias=challenger_bias,
         explanation=explanation,
+    )
+
+
+def _anchor_hours_bucket(hours_to_peak: float | None) -> str:
+    if hours_to_peak is None or not math.isfinite(float(hours_to_peak)):
+        return "peak unknown"
+    hours = float(hours_to_peak)
+    if hours > 6:
+        return ">6 h to peak"
+    if hours > 4:
+        return "4–6 h to peak"
+    if hours > 2:
+        return "2–4 h to peak"
+    if hours > 0:
+        return "0–2 h to peak"
+    return "after modelled peak"
+
+
+def assess_anchor_transfer(
+    nowcast: object,
+    snapshots: pd.DataFrame,
+    actuals: pd.DataFrame,
+    observations: pd.DataFrame,
+    variants: pd.DataFrame,
+    *,
+    airport_profile: dict[str, object],
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+    config: dict[str, object] | None = None,
+) -> AnchorTransferAssessment:
+    """Learn how much a same-time METAR residual survives until airport Tmax.
+
+    Every training row predates ``target`` and one comparable checkpoint per settled
+    airport-day is used. The learned coefficient is shrunk toward the conservative
+    peak-aware Champion coefficient; it therefore starts as a no-op and earns influence
+    only through independent airport-days.
+    """
+    configured = config or {}
+    features = dict(getattr(nowcast, "live_features", {}) or {})
+    residual = _number(features.get("effective_temperature_residual_c"))
+    prior_gain = _number(features.get("temperature_anchor_gain")) or 0.0
+    current_hours = _number(getattr(nowcast, "hours_to_peak", None))
+    current_streak = _number(features.get("temperature_anchor_streak")) or 0.0
+    current_adjustment = _number(
+        dict(getattr(nowcast, "adjustment_contributions", {}) or {}).get(
+            "temperature_anchor"
+        )
+    ) or 0.0
+    timing = (
+        "D-1"
+        if as_of.astimezone(ZoneInfo(timezone_name)).date() < target
+        else "D0 morning"
+        if as_of.astimezone(ZoneInfo(timezone_name)).hour < 12
+        else "D0 live"
+    )
+    promotion = evaluate_promotion_gate(
+        variants,
+        actuals,
+        timing_group=timing,
+        factor="airport_anchor_transfer",
+        challenger_label="airport Anchor Transfer Challenger",
+        minimum_oos_days=int(configured.get("anchor_minimum_oos_days", 30)),
+        minimum_mae_gain_c=float(configured.get("anchor_minimum_mae_gain_c", 0.10)),
+        minimum_brier_gain=float(configured.get("anchor_minimum_brier_gain", 0.002)),
+    )
+    bucket = _anchor_hours_bucket(current_hours)
+    empty_reason = (
+        "No current METAR/model path residual is available; the airport-specific "
+        "Anchor Challenger is not created at this checkpoint."
+    )
+    if residual is None or abs(residual) < float(
+        configured.get("anchor_minimum_current_residual_c", 0.25)
+    ):
+        return AnchorTransferAssessment(
+            status="NO CURRENT SIGNAL",
+            hours_bucket=bucket,
+            history_days=0,
+            prior_gain=prior_gain,
+            learned_gain=prior_gain,
+            current_residual_c=residual,
+            current_adjustment_c=current_adjustment,
+            suggested_adjustment_c=current_adjustment,
+            forecast_delta_c=0.0,
+            ready=False,
+            applied_to_champion=False,
+            promotion=promotion,
+            explanation=empty_reason,
+        )
+    required = {
+        "target_date",
+        "captured_at",
+        "final_forecast_c",
+        "temp_anchor_adjustment_c",
+        "features_json",
+    }
+    if snapshots.empty or not required.issubset(snapshots.columns):
+        return AnchorTransferAssessment(
+            status="BUILDING HISTORY",
+            hours_bucket=bucket,
+            history_days=0,
+            prior_gain=prior_gain,
+            learned_gain=prior_gain,
+            current_residual_c=residual,
+            current_adjustment_c=current_adjustment,
+            suggested_adjustment_c=current_adjustment,
+            forecast_delta_c=0.0,
+            ready=False,
+            applied_to_champion=False,
+            promotion=promotion,
+            explanation="No earlier settled Anchor checkpoints are stored yet.",
+        )
+
+    airport_code = "UNKN"
+    current = getattr(nowcast, "current", pd.DataFrame())
+    if isinstance(current, pd.DataFrame) and not current.empty and "airport" in current:
+        airport_code = str(current.airport.iloc[0])
+    effective_actuals = merge_complete_metar_actuals(
+        actuals,
+        observations,
+        airport_code=airport_code,
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        critical_window_local=airport_profile.get("critical_window_local"),
+    )
+    actual_by_day = _actual_map(effective_actuals, target)
+    frame = snapshots.copy()
+    frame["target_date"] = pd.to_datetime(frame.target_date, errors="coerce").dt.date
+    frame["captured_at"] = pd.to_datetime(frame.captured_at, utc=True, errors="coerce")
+    frame = frame[
+        frame.target_date.notna()
+        & (frame.target_date < target)
+        & frame.target_date.isin(actual_by_day)
+    ]
+    candidates: list[dict[str, float | date]] = []
+    minimum_history_residual = float(
+        configured.get("anchor_minimum_history_residual_c", 0.30)
+    )
+    for row in frame.itertuples():
+        historic_features = _json_dict(getattr(row, "features_json", "{}"))
+        historic_residual = _number(
+            historic_features.get("effective_temperature_residual_c")
+        )
+        historic_hours = _number(getattr(row, "hours_to_peak", None))
+        if historic_hours is None:
+            historic_hours = _number(historic_features.get("hours_to_peak"))
+        historic_streak = _number(historic_features.get("temperature_anchor_streak")) or 0.0
+        final_forecast = _number(getattr(row, "final_forecast_c", None))
+        historic_anchor = _number(getattr(row, "temp_anchor_adjustment_c", None)) or 0.0
+        actual = actual_by_day.get(row.target_date)
+        if (
+            historic_residual is None
+            or abs(historic_residual) < minimum_history_residual
+            or final_forecast is None
+            or actual is None
+        ):
+            continue
+        distance = (
+            abs(historic_hours - current_hours)
+            if historic_hours is not None and current_hours is not None
+            else 3.0
+        )
+        time_weight = math.exp(-distance / float(configured.get("anchor_hour_scale", 3.0)))
+        same_persistence = (historic_streak >= 2) == (current_streak >= 2)
+        candidates.append(
+            {
+                "target_date": row.target_date,
+                "distance": distance,
+                "weight": time_weight * (1.0 if same_persistence else 0.70),
+                "residual": historic_residual,
+                "required": max(
+                    -2.0,
+                    min(2.0, float(actual) - (final_forecast - historic_anchor)),
+                ),
+            }
+        )
+    if candidates:
+        candidate_frame = pd.DataFrame(candidates)
+        candidate_frame = candidate_frame.sort_values(
+            ["target_date", "distance", "weight"],
+            ascending=[True, True, False],
+        ).drop_duplicates("target_date", keep="first")
+        lookback_days = int(configured.get("anchor_lookback_days", 90))
+        candidate_frame = candidate_frame[
+            candidate_frame.target_date >= target - timedelta(days=lookback_days)
+        ]
+    else:
+        candidate_frame = pd.DataFrame()
+    history_days = int(candidate_frame.target_date.nunique()) if not candidate_frame.empty else 0
+    minimum_days = int(configured.get("anchor_minimum_training_days", 5))
+    if history_days:
+        numerator = float(
+            (
+                candidate_frame.weight
+                * candidate_frame.residual
+                * candidate_frame.required
+            ).sum()
+        )
+        denominator = float(
+            (candidate_frame.weight * candidate_frame.residual**2).sum()
+        )
+        raw_gain = max(0.0, min(1.0, numerator / denominator)) if denominator > 1e-9 else prior_gain
+        shrinkage_days = float(configured.get("anchor_shrinkage_days", 12.0))
+        reliability = history_days / (history_days + max(1.0, shrinkage_days))
+        learned_gain = (1.0 - reliability) * prior_gain + reliability * raw_gain
+    else:
+        learned_gain = prior_gain
+    suggested_adjustment = max(-1.40, min(1.40, residual * learned_gain))
+    current_total = _number(
+        dict(getattr(nowcast, "adjustment_contributions", {}) or {}).get("total")
+    ) or 0.0
+    suggested_total = max(
+        -2.0,
+        min(2.0, current_total - current_adjustment + suggested_adjustment),
+    )
+    delta = suggested_total - current_total
+    ready = history_days >= minimum_days and abs(delta) >= float(
+        configured.get("anchor_minimum_challenger_delta_c", 0.03)
+    )
+    allow_promoted = bool(configured.get("allow_promoted", False))
+    applied = bool(ready and allow_promoted and promotion.eligible)
+    status = "PROMOTED" if applied else "SHADOW" if ready else "BUILDING HISTORY"
+    explanation = (
+        f"{history_days}/{minimum_days} comparable settled airport-days in {bucket}. "
+        f"The peak-aware prior gain is {prior_gain:.0%}; the shrunk airport estimate is "
+        f"{learned_gain:.0%}, implying {delta:+.2f} °C versus the current Champion. "
+        f"{promotion.explanation}"
+    )
+    return AnchorTransferAssessment(
+        status=status,
+        hours_bucket=bucket,
+        history_days=history_days,
+        prior_gain=prior_gain,
+        learned_gain=learned_gain,
+        current_residual_c=residual,
+        current_adjustment_c=current_adjustment,
+        suggested_adjustment_c=suggested_adjustment,
+        forecast_delta_c=delta if ready else 0.0,
+        ready=ready,
+        applied_to_champion=applied,
+        promotion=promotion,
+        explanation=explanation,
+    )
+
+
+def _enrich_with_anchor_transfer(
+    nowcast: object,
+    snapshots: pd.DataFrame,
+    actuals: pd.DataFrame,
+    observations: pd.DataFrame,
+    variants: pd.DataFrame,
+    *,
+    airport_profile: dict[str, object],
+    timezone_name: str,
+    target: date,
+    as_of: datetime,
+    config: dict[str, object] | None,
+) -> object:
+    assessment = assess_anchor_transfer(
+        nowcast,
+        snapshots,
+        actuals,
+        observations,
+        variants,
+        airport_profile=airport_profile,
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        config=config,
+    )
+    live_features = dict(getattr(nowcast, "live_features", {}) or {})
+    live_features.update(
+        {
+            "anchor_transfer_status": assessment.status,
+            "anchor_transfer_hours_bucket": assessment.hours_bucket,
+            "anchor_transfer_history_days": float(assessment.history_days),
+            "anchor_transfer_prior_gain": assessment.prior_gain,
+            "anchor_transfer_learned_gain": assessment.learned_gain,
+            "anchor_transfer_forecast_delta_c": assessment.forecast_delta_c,
+            "anchor_transfer_oos_days": float(assessment.promotion.oos_days),
+            "anchor_transfer_promotion_eligible": float(
+                assessment.promotion.eligible
+            ),
+            "anchor_transfer_explanation": assessment.explanation,
+        }
+    )
+    if not assessment.ready:
+        return replace(nowcast, live_features=live_features)
+    champion_mean = float(getattr(nowcast, "final_forecast_mean"))
+    champion_spread = float(getattr(nowcast, "final_forecast_spread"))
+    alternative_mean = champion_mean + assessment.forecast_delta_c
+    alternative_unconditioned = consensus(
+        [alternative_mean],
+        sigma_floor=max(0.65, champion_spread),
+    )
+    day_status = getattr(nowcast, "day_status")
+    alternative_probabilities = condition_probability_range(
+        alternative_unconditioned.probability_by_bucket,
+        day_status.minimum_bucket,
+        day_status.maximum_bucket,
+    )
+    original_variant = {
+        "factor": "airport_anchor_transfer",
+        "forecast_mean_c": champion_mean,
+        "spread_c": champion_spread,
+        "probabilities": dict(getattr(nowcast, "probabilities")),
+        "forecast_confidence": int(getattr(nowcast, "forecast_confidence")),
+    }
+    alternative_variant = {
+        "factor": "airport_anchor_transfer",
+        "forecast_mean_c": alternative_mean,
+        "spread_c": champion_spread,
+        "probabilities": alternative_probabilities,
+        "forecast_confidence": int(getattr(nowcast, "forecast_confidence")),
+    }
+    challengers = dict(getattr(nowcast, "challenger_variants", {}) or {})
+    if not assessment.applied_to_champion:
+        challengers["Airport Anchor Transfer Challenger"] = alternative_variant
+        return replace(
+            nowcast,
+            challenger_variants=challengers,
+            live_features=live_features,
+        )
+    challengers["Without Promoted Airport Anchor Transfer"] = original_variant
+    contributions = dict(getattr(nowcast, "adjustment_contributions", {}) or {})
+    contributions["temperature_anchor"] = assessment.suggested_adjustment_c
+    contributions["total"] = float(contributions.get("total", 0.0)) + assessment.forecast_delta_c
+    stages = dict(getattr(nowcast, "stage_probabilities", {}) or {})
+    stages["Final incl. promoted Airport Anchor Transfer"] = alternative_probabilities
+    return replace(
+        nowcast,
+        probabilities=alternative_probabilities,
+        final_forecast_mean=alternative_mean,
+        stage_probabilities=stages,
+        adjustment_contributions=contributions,
+        challenger_variants=challengers,
+        live_features=live_features,
     )
 
 
@@ -548,6 +906,14 @@ def _known_regime_states(
     )
     if persistent_profile:
         active = bool(_number(features.get("persistent_hot_active")) or 0)
+        evidence = max(
+            0.0,
+            min(1.0, _number(features.get("persistent_hot_evidence_score")) or 0.0),
+        )
+        intensity = max(
+            0.0,
+            min(1.0, _number(features.get("persistent_hot_intensity")) or 0.0),
+        )
         anomaly = _number(features.get("persistent_hot_latest_anomaly_c"))
         taf_support = bool(_number(features.get("persistent_hot_taf_support")) or 0)
         clear_support = bool(_number(features.get("persistent_hot_clear_support")) or 0)
@@ -560,22 +926,35 @@ def _known_regime_states(
             supports.append("TAF maximum supports the hot continuation")
         if clear_support:
             supports.append("TAF keeps the peak window clear and dry")
-        status = "CONFIRMED" if active else "WATCH" if supports else "REJECTED"
-        confidence = 82 if active else min(68, 35 + 14 * len(supports))
+        status = (
+            "CONFIRMED"
+            if intensity >= 0.67
+            else "PREDICTED"
+            if active
+            else "WATCH"
+            if supports
+            else "REJECTED"
+        )
+        confidence = round(30 + 65 * evidence) if supports or active else 0
         states.append(
             RegimeState(
                 name="Persistent Hot",
                 status=status,
                 confidence=confidence,
                 source="configured",
-                champion_effect="active factor" if active else "none until confirmed",
+                champion_effect=(
+                    f"gradual factor at {intensity:.0%} strength"
+                    if active
+                    else "none until evidence clears the gradual gate"
+                ),
                 supports=tuple(supports),
                 contradictions=() if supports else ("no hot-continuation evidence",),
                 explanation=(
-                    "Established heat is confirmed by prior outcomes plus independent "
-                    "forecast/TAF evidence."
+                    "Prior heat and independent forecast evidence are blended continuously; "
+                    "the Champion effect grows with evidence instead of switching on at one "
+                    "checkpoint."
                     if active
-                    else "Hot-continuation evidence is being monitored before activation."
+                    else "Hot-continuation evidence is being monitored before gradual activation."
                 ),
             )
         )
@@ -1044,6 +1423,18 @@ def enrich_nowcast_with_regime_memory(
 ) -> object | None:
     if nowcast is None:
         return None
+    nowcast = _enrich_with_anchor_transfer(
+        nowcast,
+        snapshots,
+        actuals,
+        observations,
+        variants,
+        airport_profile=airport_profile,
+        timezone_name=timezone_name,
+        target=target,
+        as_of=as_of,
+        config=config,
+    )
     assessment = assess_regime_memory(
         nowcast,
         snapshots,

@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.5.2")
+discard_stale_weatherman_modules("10.7.0")
 
 import pandas as pd
 import plotly.express as px
@@ -28,6 +28,7 @@ from weatherman.analytics import (
     historical_d1_ladder,
     market_edges,
     model_metrics,
+    paired_d1_d0_reliability,
     preferred_station_actuals,
     score_frame,
 )
@@ -57,6 +58,7 @@ from weatherman.decision import (
 )
 from weatherman.nowcast import build_live_nowcast
 from weatherman.regime_memory import enrich_nowcast_with_regime_memory
+from weatherman.regime_profiles import continuous_regime_profiles
 from weatherman.navigation import render_app_navigation
 from weatherman.live_ui import render_compact_live_forecast
 from weatherman.research import filter_target_window, market_timing_metrics
@@ -166,6 +168,26 @@ def cached_airport_timing_metrics(
             market_timing_metrics(live_scored, airport_catalog),
         ],
         ignore_index=True,
+    )
+
+
+@st.cache_data(show_spinner=False, ttl=900)
+def cached_paired_d1_d0_reliability(
+    actual_frame: pd.DataFrame,
+    observation_frame: pd.DataFrame,
+    snapshot_frame: pd.DataFrame,
+    airport_code: str,
+    timezone_name: str,
+) -> pd.DataFrame:
+    station_actuals = preferred_station_actuals(
+        observation_frame,
+        actual_frame,
+        {airport_code: timezone_name},
+    )
+    return paired_d1_d0_reliability(
+        snapshot_frame,
+        station_actuals,
+        {airport_code: timezone_name},
     )
 
 
@@ -429,6 +451,7 @@ trade_decision = None
 prior_probabilities: dict[str, float] = {}
 with tab_live:
     live_as_of = datetime.now(ZoneInfo("UTC"))
+    regime_profiles = continuous_regime_profiles(catalog[airport])
     live_nowcast = build_live_nowcast(
         forecasts=forecasts,
         actuals=actuals,
@@ -445,13 +468,11 @@ with tab_live:
             "pre_metar_guard_minutes", 7
         ),
         critical_window_local=catalog[airport].get("critical_window_local"),
-        post_convective_profile=catalog[airport].get(
-            "post_convective_uncertainty"
-        ),
-        heat_regime_profile=catalog[airport].get("heat_regime"),
-        phase_amplitude_profile=catalog[airport].get("phase_vs_amplitude"),
-        maritime_advection_profile=catalog[airport].get("maritime_advection"),
-        maritime_low_range_profile=catalog[airport].get("maritime_low_range"),
+        post_convective_profile=regime_profiles["post_convective"],
+        heat_regime_profile=regime_profiles["heat"],
+        phase_amplitude_profile=regime_profiles["phase"],
+        maritime_advection_profile=regime_profiles["maritime_advection"],
+        maritime_low_range_profile=regime_profiles["maritime_low_range"],
         live_adjustment_guardrails=catalog[airport].get(
             "live_adjustment_guardrails"
         ),
@@ -464,7 +485,8 @@ with tab_live:
     memory_config = dict(catalog[airport].get("regime_memory") or {})
     memory_config.setdefault(
         "allow_promoted",
-        settings.regime_memory_allow_promoted,
+        settings.regime_memory_auto_promotion_enabled
+        or settings.regime_memory_allow_promoted,
     )
     memory_config.setdefault(
         "minimum_oos_days",
@@ -1599,6 +1621,64 @@ with tab_accuracy:
                 title=f"{airport} · {timing} · MAE by forecast stage",
                 labels={"stage": "Forecast stage", "mae": "MAE °C"},
             ),
+            width="stretch",
+        )
+    paired_reliability = cached_paired_d1_d0_reliability(
+        actuals,
+        observations,
+        all_forecast_snapshots,
+        airport,
+        timezone_name,
+    )
+    st.subheader("Paired D-1 → D0 reliability check")
+    st.caption(
+        "Every row uses exactly the same settled airport-days. This isolates whether the "
+        "10:00 update, the Temperature Anchor or the remaining Nowcast factors improve or "
+        "damage the prior evening's forecast."
+    )
+    if paired_reliability.empty:
+        st.info(
+            "The paired table needs both the 20:00 D-1 and 10:00 D0 checkpoint for a "
+            "settled station day. It will populate automatically."
+        )
+    else:
+        paired_table = paired_reliability[
+            [
+                "stage",
+                "n_days",
+                "bias",
+                "mae",
+                "exact_hit",
+                "within_1c",
+                "mae_change_vs_d1",
+                "mae_change_vs_d0_no_live",
+            ]
+        ].copy()
+        for column in ["bias", "mae_change_vs_d1", "mae_change_vs_d0_no_live"]:
+            paired_table[column] = paired_table[column].map(
+                lambda value: f"{float(value):+.2f} °C" if pd.notna(value) else "—"
+            )
+        paired_table["mae"] = paired_table.mae.map(
+            lambda value: f"{float(value):.2f} °C" if pd.notna(value) else "—"
+        )
+        for column in ["exact_hit", "within_1c"]:
+            paired_table[column] = paired_table[column].map(
+                lambda value: f"{float(value):.1%}" if pd.notna(value) else "—"
+            )
+        st.dataframe(
+            paired_table.rename(
+                columns={
+                    "stage": "Same-day stage",
+                    "n_days": "Paired days",
+                    "bias": "Bias",
+                    "mae": "MAE",
+                    "exact_hit": "Exact bucket",
+                    "within_1c": "Within ±1 °C",
+                    "mae_change_vs_d1": "MAE change vs D-1",
+                    "mae_change_vs_d0_no_live": "MAE change vs D0 before live",
+                }
+            ),
+            hide_index=True,
             width="stretch",
         )
     with st.expander("Exact timing definitions"):

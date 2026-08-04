@@ -29,8 +29,9 @@ from .db import (
     TafReport,
     init_db,
 )
-from .nowcast import build_live_nowcast
+from .nowcast import build_live_nowcast, complete_metar_actuals
 from .regime_memory import enrich_nowcast_with_regime_memory
+from .regime_profiles import continuous_regime_profiles
 from .providers import (
     discover_polymarket_temperature_events,
     historical_actuals,
@@ -78,6 +79,88 @@ def _upsert_batch(
         print(f"WARN {label} storage rolled back: {type(exc).__name__}: {exc}")
         return 0
     return len(items)
+
+
+def _station_actual_source(source: object) -> bool:
+    return any(token in str(source or "").lower() for token in ("metar", "station"))
+
+
+def _store_reanalysis_actuals(
+    session,
+    airport_code: str,
+    rows: Iterable[dict],
+) -> int:
+    """Store gridded fallback actuals without overwriting station truth."""
+    count = 0
+    for item in rows:
+        keys = {"airport": airport_code, "target_date": item["target_date"]}
+        existing = session.scalar(select(DailyActual).filter_by(**keys))
+        if existing is not None and _station_actual_source(existing.source):
+            continue
+        _upsert(
+            session,
+            DailyActual,
+            keys,
+            {
+                "max_temp_c": item["max_temp_c"],
+                "source": "open-meteo-archive",
+            },
+        )
+        count += 1
+    return count
+
+
+def _restore_stored_station_actuals(
+    session,
+    airport_code: str,
+    airport: dict,
+    *,
+    as_of: datetime,
+) -> int:
+    """Rebuild every complete stored METAR day before lower-quality data can win."""
+    session.flush()
+    observations = list(
+        session.scalars(
+            select(Observation)
+            .where(Observation.airport == airport_code)
+            .order_by(Observation.observed_at)
+        )
+    )
+    if not observations:
+        return 0
+    frame = pd.DataFrame(
+        [
+            {
+                "airport": row.airport,
+                "observed_at": row.observed_at,
+                "temp_c": row.temp_c,
+            }
+            for row in observations
+        ]
+    )
+    local_target = as_of.astimezone(ZoneInfo(airport["timezone"])).date() + timedelta(days=1)
+    rows = complete_metar_actuals(
+        frame,
+        airport_code=airport_code,
+        timezone_name=airport["timezone"],
+        target=local_target,
+        as_of=as_of,
+        critical_window_local=airport.get("critical_window_local"),
+    ).to_dict("records")
+    return _upsert_batch(
+        session,
+        DailyActual,
+        rows,
+        lambda item: {
+            "airport": item["airport"],
+            "target_date": item["target_date"],
+        },
+        lambda item: {
+            "max_temp_c": item["max_temp_c"],
+            "source": "stored-metar-station",
+        },
+        f"{airport_code}/stored station actuals",
+    )
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -350,6 +433,7 @@ def _build_nowcast_from_session(
         ),
         connection,
     )
+    regime_profiles = continuous_regime_profiles(airport)
     nowcast = build_live_nowcast(
         forecasts=forecasts,
         actuals=actuals,
@@ -364,11 +448,11 @@ def _build_nowcast_from_session(
         routine_metar_minutes=airport.get("metar_minutes"),
         pre_metar_guard_minutes=airport.get("pre_metar_guard_minutes", 7),
         critical_window_local=airport.get("critical_window_local"),
-        post_convective_profile=airport.get("post_convective_uncertainty"),
-        heat_regime_profile=airport.get("heat_regime"),
-        phase_amplitude_profile=airport.get("phase_vs_amplitude"),
-        maritime_advection_profile=airport.get("maritime_advection"),
-        maritime_low_range_profile=airport.get("maritime_low_range"),
+        post_convective_profile=regime_profiles["post_convective"],
+        heat_regime_profile=regime_profiles["heat"],
+        phase_amplitude_profile=regime_profiles["phase"],
+        maritime_advection_profile=regime_profiles["maritime_advection"],
+        maritime_low_range_profile=regime_profiles["maritime_low_range"],
         live_adjustment_guardrails=airport.get("live_adjustment_guardrails"),
         recent_warm_bias_profile=airport.get("recent_warm_bias_challenger"),
         future_reheating_profile=airport.get("future_reheating"),
@@ -1087,17 +1171,19 @@ def collect(airport_codes: list[str] | None = None, days: int = 3) -> dict[str, 
             except Exception as exc:
                 print(f"WARN {code}/recent actuals: {exc}")
             else:
-                counts["actuals"] += _upsert_batch(
+                counts["actuals"] += _store_reanalysis_actuals(
                     session,
-                    DailyActual,
+                    code,
                     actual_rows,
-                    lambda item: {"airport": code, "target_date": item["target_date"]},
-                    lambda item: {
-                        "max_temp_c": item["max_temp_c"],
-                        "source": "open-meteo-archive",
-                    },
-                    f"{code}/recent actuals",
                 )
+            restored = _restore_stored_station_actuals(
+                session,
+                code,
+                airport,
+                as_of=datetime.now(timezone.utc),
+            )
+            counts["actuals"] += restored
+            counts["provisional_actuals"] += restored
             local_today = datetime.now(ZoneInfo(airport["timezone"])).date()
             for offset in range(-2, days):
                 market_target = local_today + timedelta(days=offset)
@@ -1186,11 +1272,11 @@ def collect_research_checkpoints(
     now: datetime | None = None,
     window_minutes: int = 30,
 ) -> dict[str, int]:
-    """Collect lightweight model snapshots just before 20:00 D-1 and 10:00 D0.
+    """Collect model snapshots at 20:00 D-1 plus 06:00/10:00 D0.
 
-    The workflow may run every 30 minutes, but only airports whose exact local
-    checkpoint is imminent are fetched. Full METAR/TAF/Meteoblue collection remains
-    limited to the Trading Desk airport tier.
+    The 06:00 snapshot is an early regime-evidence checkpoint; the standardized
+    D0 accuracy checkpoint remains 10:00. Full METAR/TAF/Meteoblue collection
+    remains limited to the Trading Desk airport tier.
     """
     init_db()
     current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -1241,6 +1327,13 @@ def collect_research_checkpoints(
             due: list[tuple[date, datetime]] = []
             for target in targets or set():
                 checkpoints = (
+                    datetime(
+                        target.year,
+                        target.month,
+                        target.day,
+                        6,
+                        tzinfo=zone,
+                    ),
                     datetime(
                         target.year,
                         target.month,
@@ -1314,19 +1407,10 @@ def collect_research_checkpoints(
             except Exception as exc:
                 print(f"WARN {code}/research actuals: {exc}")
             else:
-                counts["actuals"] += _upsert_batch(
+                counts["actuals"] += _store_reanalysis_actuals(
                     session,
-                    DailyActual,
+                    code,
                     actual_rows,
-                    lambda item: {
-                        "airport": code,
-                        "target_date": item["target_date"],
-                    },
-                    lambda item: {
-                        "max_temp_c": item["max_temp_c"],
-                        "source": "open-meteo-archive",
-                    },
-                    f"{code}/research actuals",
                 )
             captured_at = max(
                 (item.get("fetched_at", item["run_at"]) for item in batches),
@@ -1731,16 +1815,10 @@ def backfill(days: int = 365, airport_codes: list[str] | None = None) -> dict[st
             airport = catalog[code]
             try:
                 actual_rows = historical_actuals(airport, start, end)
-                airport_actuals = _upsert_batch(
+                airport_actuals = _store_reanalysis_actuals(
                     session,
-                    DailyActual,
+                    code,
                     actual_rows,
-                    lambda item: {"airport": code, "target_date": item["target_date"]},
-                    lambda item: {
-                        "max_temp_c": item["max_temp_c"],
-                        "source": "open-meteo-archive",
-                    },
-                    f"{code}/historical actuals",
                 )
                 counts["actuals"] += airport_actuals
                 print(f"OK {code}/actuals: {airport_actuals} days")

@@ -7,8 +7,10 @@ from sqlalchemy.orm import sessionmaker
 from weatherman.db import (
     Base,
     BasketSnapshot,
+    DailyActual,
     Forecast,
     ForecastVariantSnapshot,
+    Observation,
     RegimeMemorySnapshot,
     ShadowEvaluation,
     SignalSnapshot,
@@ -21,12 +23,92 @@ from weatherman.service import (
     _record_signal_snapshots,
     _record_strategy_snapshots,
     _source_refresh_due,
+    _restore_stored_station_actuals,
+    _store_reanalysis_actuals,
     _upsert_batch,
     in_critical_window,
     in_forecast_refresh_window,
     in_final_metar_collection_window,
     provisional_metar_actuals,
 )
+
+
+def test_reanalysis_actual_never_overwrites_station_truth():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine)
+    target = date(2026, 7, 29)
+    with session_factory() as session:
+        session.add(
+            DailyActual(
+                airport="LEMD",
+                target_date=target,
+                max_temp_c=35.0,
+                source="stored-metar-station",
+            )
+        )
+        session.flush()
+        stored = _store_reanalysis_actuals(
+            session,
+            "LEMD",
+            [{"target_date": target, "max_temp_c": 33.8}],
+        )
+        session.commit()
+        actual = session.scalar(select(DailyActual))
+        assert stored == 0
+        assert actual is not None
+        assert actual.max_temp_c == 35.0
+        assert actual.source == "stored-metar-station"
+
+
+def test_complete_stored_metar_day_restores_station_actual():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine)
+    target = date(2026, 7, 29)
+    with session_factory() as session:
+        session.add(
+            DailyActual(
+                airport="LEMD",
+                target_date=target,
+                max_temp_c=33.8,
+                source="open-meteo-archive",
+            )
+        )
+        session.add_all(
+            [
+                Observation(
+                    airport="LEMD",
+                    observed_at=datetime(2026, 7, 29, hour, tzinfo=timezone.utc),
+                    temp_c=temperature,
+                )
+                for hour, temperature in [
+                    (7, 22.0),
+                    (8, 24.0),
+                    (9, 26.0),
+                    (10, 28.0),
+                    (12, 32.0),
+                    (15, 35.0),
+                    (17, 33.0),
+                    (19, 29.0),
+                ]
+            ]
+        )
+        restored = _restore_stored_station_actuals(
+            session,
+            "LEMD",
+            {
+                "timezone": "Europe/Madrid",
+                "critical_window_local": ["12:00", "17:30"],
+            },
+            as_of=datetime(2026, 7, 30, 8, tzinfo=timezone.utc),
+        )
+        session.commit()
+        actual = session.scalar(select(DailyActual))
+        assert restored == 1
+        assert actual is not None
+        assert actual.max_temp_c == 35.0
+        assert actual.source == "stored-metar-station"
 
 
 def test_failed_batch_does_not_poison_following_database_work():

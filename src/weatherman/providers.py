@@ -13,6 +13,7 @@ import httpx
 from .settings import settings
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_METADATA_URL = "https://api.open-meteo.com/data/{model}/static/meta.json"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
@@ -37,6 +38,21 @@ MONTH_SLUGS = (
     "december",
 )
 
+# Forecast API model names are not always identical to the storage identifiers
+# used by Open-Meteo's authoritative model-update metadata endpoint.
+OPEN_METEO_METADATA_MODELS = {
+    "ecmwf_ifs025": "ecmwf_ifs025",
+    "gfs_global": "ncep_gfs025",
+    "icon_global": "dwd_icon",
+    "icon_eu": "dwd_icon_eu",
+    "ukmo_global_deterministic_10km": "ukmo_global_deterministic_10km",
+    "meteofrance_arpege_europe": "meteofrance_arpege_europe",
+    "meteofrance_arome_france": "meteofrance_arome_france0025",
+    "meteofrance_arome_france_hd": "meteofrance_arome_france_hd",
+    "knmi_harmonie_arome_europe": "knmi_harmonie_arome_europe",
+    "knmi_harmonie_arome_netherlands": "knmi_harmonie_arome_netherlands",
+}
+
 
 def _get(
     url: str,
@@ -49,7 +65,7 @@ def _get(
     with httpx.Client(
         timeout=settings.timeout if timeout is None else timeout,
         follow_redirects=True,
-        headers={"User-Agent": "Weatherman/10.5.2 temperature-market research"},
+        headers={"User-Agent": "Weatherman/10.7.0 temperature-market research"},
     ) as client:
         for attempt in range(attempts):
             try:
@@ -89,7 +105,7 @@ def _post(
     with httpx.Client(
         timeout=settings.timeout if timeout is None else timeout,
         follow_redirects=True,
-        headers={"User-Agent": "Weatherman/10.5.2 temperature-market research"},
+        headers={"User-Agent": "Weatherman/10.7.0 temperature-market research"},
     ) as client:
         for attempt in range(attempts):
             try:
@@ -115,6 +131,53 @@ def _post(
     raise RuntimeError("CLOB API request failed without a response")
 
 
+def _unix_datetime(value: object) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def open_meteo_model_metadata(model: str) -> dict[str, object]:
+    """Return authoritative initialization and API-availability metadata."""
+    storage_model = OPEN_METEO_METADATA_MODELS.get(model)
+    if storage_model is None:
+        return {
+            "model_run_at": None,
+            "available_at": None,
+            "provenance_status": "No Open-Meteo metadata mapping",
+        }
+    try:
+        payload = _get(
+            OPEN_METEO_METADATA_URL.format(model=storage_model),
+            attempts=2,
+            timeout=8,
+        )
+    except Exception:
+        return {
+            "model_run_at": None,
+            "available_at": None,
+            "provenance_status": "Open-Meteo model metadata temporarily unavailable",
+        }
+    if not isinstance(payload, dict):
+        return {
+            "model_run_at": None,
+            "available_at": None,
+            "provenance_status": "Invalid Open-Meteo model metadata",
+        }
+    model_run_at = _unix_datetime(payload.get("last_run_initialisation_time"))
+    available_at = _unix_datetime(payload.get("last_run_availability_time"))
+    return {
+        "model_run_at": model_run_at,
+        "available_at": available_at,
+        "provenance_status": (
+            "Open-Meteo authoritative model metadata"
+            if model_run_at is not None and available_at is not None
+            else "Open-Meteo metadata missing run timestamps"
+        ),
+    }
+
+
 def open_meteo_forecast(airport: dict, model: str, days: int = 3) -> list[dict]:
     payload = _get(
         FORECAST_URL,
@@ -129,11 +192,15 @@ def open_meteo_forecast(airport: dict, model: str, days: int = 3) -> list[dict]:
     )
     daily = payload.get("daily", {})
     fetched_at = datetime.now(timezone.utc)
-    # The regular Forecast response does not currently identify the underlying
-    # NWP initialization. Preserve that fact instead of labelling fetch time as
-    # the model run time.
-    model_run_at = _api_datetime(payload.get("modelrun_utc"))
-    available_at = _api_datetime(payload.get("modelrun_updatetime_utc"))
+    metadata = open_meteo_model_metadata(model)
+    model_run_at = metadata["model_run_at"]
+    available_at = metadata["available_at"]
+    provenance_status = str(metadata["provenance_status"])
+    if (
+        isinstance(available_at, datetime)
+        and fetched_at - available_at < timedelta(minutes=10)
+    ):
+        provenance_status += " · propagation window under 10 minutes"
     return [
         {
             "model": model,
@@ -147,11 +214,7 @@ def open_meteo_forecast(airport: dict, model: str, days: int = 3) -> list[dict]:
             "model_run_at": model_run_at,
             "available_at": available_at,
             "fetched_at": fetched_at,
-            "provenance_status": (
-                "Model run supplied by provider"
-                if model_run_at is not None
-                else "Model run not exposed in forecast response"
-            ),
+            "provenance_status": provenance_status,
         }
         for day, value in zip(daily.get("time", []), daily.get("temperature_2m_max", []))
         if value is not None

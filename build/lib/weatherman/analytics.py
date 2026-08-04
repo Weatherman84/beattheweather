@@ -541,11 +541,24 @@ def forecast_ladder_frame(
     merged["lead_bucket"] = merged.apply(
         lambda row: _lead_bucket(str(row.timing), row.get("hours_to_peak")), axis=1
     )
+    if {"final_forecast_c", "live_adjustment_c"}.issubset(merged.columns):
+        merged["d0_before_live_c"] = (
+            pd.to_numeric(merged.final_forecast_c, errors="coerce")
+            - pd.to_numeric(merged.live_adjustment_c, errors="coerce").fillna(0.0)
+        )
+        anchor_values = (
+            pd.to_numeric(merged.temp_anchor_adjustment_c, errors="coerce").fillna(0.0)
+            if "temp_anchor_adjustment_c" in merged
+            else pd.Series(0.0, index=merged.index)
+        )
+        merged["d0_anchor_only_c"] = merged.d0_before_live_c + anchor_values
     stage_columns = {
         "Raw model mean": "raw_model_mean_c",
         "Weighted raw ensemble": "weighted_raw_c",
         "Bias corrected · equal weight": "bias_corrected_equal_c",
         "Bias corrected · performance weighted": "bias_corrected_c",
+        "D0 before live factors": "d0_before_live_c",
+        "D0 with Anchor only": "d0_anchor_only_c",
         "METAR conditioned": "metar_conditioned_c",
         "Final incl. TAF": "final_forecast_c",
     }
@@ -554,6 +567,10 @@ def forecast_ladder_frame(
         if column not in merged:
             continue
         selected = merged[merged[column].notna()].copy()
+        if stage.startswith("D0 "):
+            selected = selected[
+                ~selected.timing.astype(str).str.startswith("D-1", na=False)
+            ]
         if selected.empty:
             continue
         selected["stage"] = stage
@@ -602,13 +619,114 @@ def forecast_ladder_metrics(scored: pd.DataFrame) -> pd.DataFrame:
         "Weighted raw ensemble": 1,
         "Bias corrected · equal weight": 2,
         "Bias corrected · performance weighted": 3,
-        "METAR conditioned": 4,
-        "Final incl. TAF": 5,
+        "D0 before live factors": 4,
+        "D0 with Anchor only": 5,
+        "METAR conditioned": 6,
+        "Final incl. TAF": 7,
     }
     result["stage_order"] = result.stage.map(order)
     return result.sort_values(["airport", "timing", "lead_bucket", "stage_order"]).drop(
         columns="stage_order"
     )
+
+
+def paired_d1_d0_reliability(
+    snapshots: pd.DataFrame,
+    actuals: pd.DataFrame,
+    timezone_by_airport: dict[str, str],
+) -> pd.DataFrame:
+    """Compare D-1 and D0 transformations on exactly the same settled airport-days."""
+    fixed = fixed_decision_snapshots(snapshots, timezone_by_airport)
+    if fixed.empty or actuals.empty:
+        return pd.DataFrame()
+    frame = fixed.copy()
+    frame["target_date"] = pd.to_datetime(frame.target_date, errors="coerce").dt.date
+    actual = actuals[["airport", "target_date", "max_temp_c"]].copy()
+    actual["target_date"] = pd.to_datetime(actual.target_date, errors="coerce").dt.date
+    actual["max_temp_c"] = pd.to_numeric(actual.max_temp_c, errors="coerce")
+    actual = actual.dropna(subset=["target_date", "max_temp_c"]).drop_duplicates(
+        ["airport", "target_date"], keep="last"
+    )
+    rows: list[dict[str, object]] = []
+    for keys, day in frame.groupby(["airport", "target_date"]):
+        airport, target_day = keys
+        d1 = day[day.timing == "D-1 Evening · 20:00"]
+        d0 = day[day.timing == "D0 Morning · 10:00"]
+        truth = actual[
+            (actual.airport == airport) & (actual.target_date == target_day)
+        ]
+        if d1.empty or d0.empty or truth.empty:
+            continue
+        d1_row = d1.sort_values("captured_at").iloc[-1]
+        d0_row = d0.sort_values("captured_at").iloc[-1]
+        d1_forecast = pd.to_numeric(
+            pd.Series([d1_row.get("final_forecast_c")]), errors="coerce"
+        ).iloc[0]
+        d0_final = pd.to_numeric(
+            pd.Series([d0_row.get("final_forecast_c")]), errors="coerce"
+        ).iloc[0]
+        if pd.isna(d1_forecast) or pd.isna(d0_final):
+            continue
+        live_adjustment = float(d0_row.get("live_adjustment_c", 0.0) or 0.0)
+        anchor_adjustment = float(d0_row.get("temp_anchor_adjustment_c", 0.0) or 0.0)
+        d0_without_live = float(d0_final) - live_adjustment
+        predictions = (
+            ("D-1 @20 Champion", float(d1_forecast)),
+            ("D0 @10 before live factors", d0_without_live),
+            ("D0 @10 with Anchor only", d0_without_live + anchor_adjustment),
+            ("D0 @10 complete Nowcast", float(d0_final)),
+        )
+        actual_value = float(truth.max_temp_c.iloc[-1])
+        for stage, forecast in predictions:
+            error = forecast - actual_value
+            rows.append(
+                {
+                    "airport": airport,
+                    "target_date": target_day,
+                    "stage": stage,
+                    "forecast_c": forecast,
+                    "actual_c": actual_value,
+                    "error": error,
+                    "abs_error": abs(error),
+                }
+            )
+    if not rows:
+        return pd.DataFrame()
+    scored = pd.DataFrame(rows)
+    summary_rows = []
+    for (airport, stage), group in scored.groupby(["airport", "stage"], sort=False):
+        summary_rows.append(
+            {
+                "airport": airport,
+                "stage": stage,
+                "n_days": int(group.target_date.nunique()),
+                "bias": float(group.error.mean()),
+                "mae": float(group.abs_error.mean()),
+                "rmse": float(math.sqrt((group.error**2).mean())),
+                "exact_hit": float((group.abs_error < 0.5).mean()),
+                "within_1c": float((group.abs_error <= 1.0).mean()),
+            }
+        )
+    summary = pd.DataFrame(summary_rows)
+    d1_mae = summary[summary.stage == "D-1 @20 Champion"][["airport", "mae"]].rename(
+        columns={"mae": "d1_mae"}
+    )
+    no_live_mae = summary[
+        summary.stage == "D0 @10 before live factors"
+    ][["airport", "mae"]].rename(columns={"mae": "d0_no_live_mae"})
+    summary = summary.merge(d1_mae, on="airport", how="left").merge(
+        no_live_mae, on="airport", how="left"
+    )
+    summary["mae_change_vs_d1"] = summary.mae - summary.d1_mae
+    summary["mae_change_vs_d0_no_live"] = summary.mae - summary.d0_no_live_mae
+    order = {
+        "D-1 @20 Champion": 0,
+        "D0 @10 before live factors": 1,
+        "D0 @10 with Anchor only": 2,
+        "D0 @10 complete Nowcast": 3,
+    }
+    summary["stage_order"] = summary.stage.map(order)
+    return summary.sort_values(["airport", "stage_order"]).drop(columns="stage_order")
 
 
 def _rolling_biases_and_weights(

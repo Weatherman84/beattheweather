@@ -488,7 +488,7 @@ def test_live_conditioning_records_all_observed_weather_contributions():
     }
 
 
-def test_v10_persistent_warm_metars_reanchor_more_strongly_than_v954():
+def test_v1060_persistent_morning_metars_update_tmax_gradually():
     as_of = datetime(2026, 7, 26, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
     now_utc = as_of.astimezone(timezone.utc)
     forecasts = pd.DataFrame(
@@ -558,7 +558,7 @@ def test_v10_persistent_warm_metars_reanchor_more_strongly_than_v954():
     )
     assert result is not None
     assert result.live_features["temperature_anchor_streak"] == 3
-    assert result.adjustment_contributions["temperature_anchor"] >= 0.50
+    assert 0.20 <= result.adjustment_contributions["temperature_anchor"] <= 0.40
     assert result.current.loc[result.current.model == "UKMO", "outlier_multiplier"].iloc[0] < 1
     assert result.adjustment_contributions["total"] > 0
 

@@ -75,6 +75,46 @@ def challenger_rows(nowcast: object) -> list[dict[str, str]]:
     return rows
 
 
+def regime_strength_rows(nowcast: object) -> list[dict[str, str]]:
+    """Expose continuous regime evidence, including zero and not-applicable states."""
+    features = dict(getattr(nowcast, "live_features", {}) or {})
+    specs = (
+        ("Rapid Heat Ramp", "rapid_heat_ramp", "Bias relaxation and spread"),
+        ("Persistent Hot", "persistent_hot", "Bias, spread and regional weights"),
+        ("Phase vs Amplitude", "phase_vs_amplitude", "Anchor phase guard and spread"),
+        ("Maritime Advection", "maritime_advection", "Cooling center and heating cap"),
+        ("Maritime Low Range", "maritime_low_range", "Warm-factor damping and spread"),
+        (
+            "Post-Convective Uncertainty",
+            "post_convective_uncertainty",
+            "Spread and confidence only",
+        ),
+    )
+    rows: list[dict[str, str]] = []
+    for label, key, role in specs:
+        applicable = bool(_number(features.get(f"{key}_applicable")))
+        strength = max(0.0, min(1.0, _number(features.get(f"{key}_strength"))))
+        active = bool(_number(features.get(f"{key}_active")))
+        if not applicable:
+            status = "Not applicable"
+        elif strength <= 0:
+            status = "Evaluated · no evidence"
+        elif active:
+            status = "Gradual influence"
+        else:
+            status = "Watch only"
+        rows.append(
+            {
+                "Regime": label,
+                "Applicability": "Yes" if applicable else "No",
+                "Evidence": f"{strength:.0%}" if applicable else "—",
+                "State": status,
+                "Possible role": role,
+            }
+        )
+    return rows
+
+
 def forecast_driver_rows(nowcast: object) -> list[dict[str, str]]:
     features = dict(getattr(nowcast, "live_features", {}) or {})
     corrected = getattr(nowcast, "corrected")

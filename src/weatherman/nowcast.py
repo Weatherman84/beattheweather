@@ -523,6 +523,63 @@ def model_run_trend(
     return float(pd.Series(changes).median()) if changes else None
 
 
+def fixed_d1_training_sample(
+    forecasts: pd.DataFrame,
+    timezone_name: str,
+    *,
+    checkpoint_hour: int = 20,
+) -> pd.DataFrame:
+    """Select one leakage-safe, comparable D-1 checkpoint per model and day."""
+    if forecasts.empty:
+        return forecasts.copy()
+    frame = forecasts[forecasts.horizon == "D-1"].copy()
+    if frame.empty:
+        return frame
+    frame["run_at"] = pd.to_datetime(frame.run_at, utc=True, errors="coerce")
+    frame["target_date"] = pd.to_datetime(frame.target_date, errors="coerce").dt.date
+    frame = frame.dropna(subset=["run_at", "target_date", "model"])
+    zone = ZoneInfo(timezone_name)
+
+    def cutoff_utc(target_day: date) -> pd.Timestamp:
+        local = datetime(
+            target_day.year,
+            target_day.month,
+            target_day.day,
+            checkpoint_hour,
+            tzinfo=zone,
+        ) - timedelta(days=1)
+        return pd.Timestamp(local).tz_convert("UTC")
+
+    frame["d1_checkpoint_at"] = frame.target_date.map(cutoff_utc)
+    frame = frame[frame.run_at <= frame.d1_checkpoint_at]
+    if frame.empty:
+        return frame.drop(columns=["d1_checkpoint_at"])
+    keys = [column for column in ["airport", "model", "target_date"] if column in frame]
+    return (
+        frame.sort_values("run_at")
+        .drop_duplicates(keys, keep="last")
+        .drop(columns=["d1_checkpoint_at"])
+    )
+
+
+def station_calibration_sample(
+    scored: pd.DataFrame,
+    *,
+    minimum_station_days: int = 5,
+) -> tuple[pd.DataFrame, bool]:
+    """Prefer settlement-grade station maxima over gridded reanalysis targets."""
+    if scored.empty or "source_actual" not in scored:
+        return scored.copy(), False
+    source = scored.source_actual.fillna("").astype(str).str.lower()
+    station = scored[source.str.contains("metar|station", regex=True)].copy()
+    station_days = (
+        station.target_date.nunique() if "target_date" in station else 0
+    )
+    if station_days >= max(1, int(minimum_station_days)):
+        return station, True
+    return scored.copy(), False
+
+
 def recent_station_residual(scored: pd.DataFrame) -> float | None:
     """Recent error left after each model's longer-run bias, newest days weighted most."""
     if scored.empty:
@@ -545,6 +602,26 @@ def recent_station_residual(scored: pd.DataFrame) -> float | None:
     return float((daily.station_residual.reset_index(drop=True) * weights).sum() / weights.sum())
 
 
+def _evidence_ramp(value: float | None, start: float, full: float) -> float:
+    """Map a noisy signal to 0..1 without an activation jump."""
+    if value is None or not math.isfinite(float(value)):
+        return 0.0
+    lower, upper = sorted((float(start), float(full)))
+    if upper - lower <= 1e-9:
+        return float(float(value) >= upper)
+    return max(0.0, min(1.0, (float(value) - lower) / (upper - lower)))
+
+
+def _inverse_evidence_ramp(value: float | None, full: float, gone: float) -> float:
+    """Return full evidence at/below ``full`` and fade it to zero by ``gone``."""
+    if value is None or not math.isfinite(float(value)):
+        return 0.0
+    lower, upper = sorted((float(full), float(gone)))
+    if upper - lower <= 1e-9:
+        return float(float(value) <= lower)
+    return max(0.0, min(1.0, (upper - float(value)) / (upper - lower)))
+
+
 def rapid_heat_ramp_regime(
     actuals: pd.DataFrame,
     *,
@@ -555,7 +632,9 @@ def rapid_heat_ramp_regime(
     """Identify a fast warm-regime transition without adding a fixed temperature."""
     configured = profile or {}
     defaults: dict[str, float | bool | None] = {
+        "applicable": True,
         "active": False,
+        "strength": 0.0,
         "forecast_vs_latest_c": None,
         "latest_actual_change_c": None,
         "forecast_vs_two_back_c": None,
@@ -585,18 +664,38 @@ def rapid_heat_ramp_regime(
         previous = frame.iloc[-2]
         previous_change = float(latest.max_temp_c) - float(previous.max_temp_c)
         forecast_vs_two_back = float(forecast_mean) - float(previous.max_temp_c)
-    active = bool(
-        forecast_vs_latest >= float(configured.get("one_day_threshold_c", 3.0))
-        or (
-            previous_change is not None
-            and previous_change >= float(configured.get("prior_jump_threshold_c", 3.0))
-            and forecast_vs_latest >= float(configured.get("continuation_threshold_c", 1.5))
-        )
-        or (
-            forecast_vs_two_back is not None
-            and forecast_vs_two_back >= float(configured.get("two_day_threshold_c", 5.0))
-        )
+    start_fraction = max(
+        0.0,
+        min(0.95, float(configured.get("gradual_start_fraction", 0.50))),
     )
+    one_day_threshold = float(configured.get("one_day_threshold_c", 3.0))
+    prior_jump_threshold = float(configured.get("prior_jump_threshold_c", 3.0))
+    continuation_threshold = float(configured.get("continuation_threshold_c", 1.5))
+    two_day_threshold = float(configured.get("two_day_threshold_c", 5.0))
+    one_day_strength = _evidence_ramp(
+        forecast_vs_latest,
+        one_day_threshold * start_fraction,
+        one_day_threshold,
+    )
+    continuation_strength = min(
+        _evidence_ramp(
+            previous_change,
+            prior_jump_threshold * start_fraction,
+            prior_jump_threshold,
+        ),
+        _evidence_ramp(
+            forecast_vs_latest,
+            continuation_threshold * start_fraction,
+            continuation_threshold,
+        ),
+    )
+    two_day_strength = _evidence_ramp(
+        forecast_vs_two_back,
+        two_day_threshold * start_fraction,
+        two_day_threshold,
+    )
+    strength = max(one_day_strength, continuation_strength, two_day_strength)
+    active = strength > 0.0
     if not active:
         return {
             **defaults,
@@ -606,20 +705,34 @@ def rapid_heat_ramp_regime(
         }
     return {
         "active": True,
+        "applicable": True,
+        "strength": strength,
         "forecast_vs_latest_c": forecast_vs_latest,
         "latest_actual_change_c": previous_change,
         "forecast_vs_two_back_c": forecast_vs_two_back,
-        "bias_multiplier": max(
-            0.0,
-            min(1.0, float(configured.get("positive_bias_multiplier", 0.45))),
+        "bias_multiplier": 1.0
+        - strength
+        * (
+            1.0
+            - max(
+                0.0,
+                min(1.0, float(configured.get("positive_bias_multiplier", 0.45))),
+            )
         ),
-        "spread_multiplier": max(
-            1.0,
-            min(1.5, float(configured.get("spread_multiplier", 1.25))),
+        "spread_multiplier": 1.0
+        + strength
+        * (
+            max(1.0, min(1.5, float(configured.get("spread_multiplier", 1.25))))
+            - 1.0
         ),
-        "confidence_multiplier": max(
-            0.5,
-            min(1.0, float(configured.get("confidence_multiplier", 0.90))),
+        "confidence_multiplier": 1.0
+        - strength
+        * (
+            1.0
+            - max(
+                0.5,
+                min(1.0, float(configured.get("confidence_multiplier", 0.90))),
+            )
         ),
     }
 
@@ -636,7 +749,9 @@ def persistent_hot_regime(
     """Detect continuation of established heat even when models no longer rise day-on-day."""
     configured = (profile or {}).get("persistent_hot") or {}
     defaults: dict[str, float | bool | None] = {
+        "applicable": bool(configured.get("enabled", False)),
         "active": False,
+        "strength": 0.0,
         "latest_actual_c": None,
         "recent_baseline_c": None,
         "latest_anomaly_c": None,
@@ -644,6 +759,8 @@ def persistent_hot_regime(
         "recent_warm_error_c": None,
         "taf_support": False,
         "clear_support": False,
+        "evidence_score": 0.0,
+        "intensity": 0.0,
         "bias_multiplier": 1.0,
         "spread_multiplier": 1.0,
         "confidence_multiplier": 1.0,
@@ -703,33 +820,55 @@ def persistent_hot_regime(
         and not taf_guidance.precipitation_risk
         and not taf_guidance.thunderstorm_risk
     )
-    hot_yesterday = bool(
-        latest_actual >= float(configured.get("minimum_latest_actual_c", 37.0))
-        or anomaly >= float(configured.get("minimum_latest_anomaly_c", 3.0))
+    anomaly_threshold = float(configured.get("minimum_latest_anomaly_c", 3.0))
+    anomaly_strength = _evidence_ramp(
+        anomaly,
+        float(configured.get("gradual_anomaly_start_c", anomaly_threshold * 0.50)),
+        anomaly_threshold,
     )
-    forecast_still_hot = forecast_vs_latest >= -float(
-        configured.get("maximum_forecast_drop_c", 2.5)
+    absolute_threshold = configured.get("minimum_latest_actual_c")
+    absolute_strength = (
+        _evidence_ramp(
+            latest_actual,
+            float(configured.get("gradual_absolute_start_c", float(absolute_threshold) - 2.0)),
+            float(absolute_threshold),
+        )
+        if absolute_threshold is not None
+        else 0.0
     )
-    repeated_warm_error = bool(
-        recent_warm_error is not None
-        and recent_warm_error <= -float(configured.get("minimum_recent_warm_error_c", 0.6))
+    hot_strength = max(anomaly_strength, absolute_strength)
+    maximum_drop = float(configured.get("maximum_forecast_drop_c", 2.5))
+    forecast_strength = _inverse_evidence_ramp(
+        max(0.0, -forecast_vs_latest),
+        float(configured.get("gradual_forecast_drop_start_c", maximum_drop * 0.80)),
+        maximum_drop,
     )
-    confirmations = sum(
-        [
-            bool(forecast_still_hot),
-            bool(taf_support),
-            bool(clear_support),
-            bool(repeated_warm_error),
-        ]
+    warm_error_threshold = float(configured.get("minimum_recent_warm_error_c", 0.6))
+    warm_error_strength = _evidence_ramp(
+        -recent_warm_error if recent_warm_error is not None else None,
+        float(configured.get("gradual_warm_error_start_c", warm_error_threshold * 0.50)),
+        warm_error_threshold,
     )
-    active = (
-        hot_yesterday
-        and forecast_still_hot
-        and confirmations >= int(configured.get("minimum_confirmations", 2))
+    evidence_score = (
+        0.35 * hot_strength
+        + 0.20 * forecast_strength
+        + 0.20 * warm_error_strength
+        + 0.15 * float(taf_support)
+        + 0.10 * float(clear_support)
     )
+    start_score = float(configured.get("gradual_start_score", 0.45))
+    full_score = max(
+        start_score + 0.05,
+        float(configured.get("gradual_full_score", 0.85)),
+    )
+    intensity = _evidence_ramp(evidence_score, start_score, full_score)
+    intensity *= math.sqrt(max(0.0, hot_strength * forecast_strength))
+    active = intensity > 0
     result = {
         **defaults,
         "active": active,
+        "applicable": True,
+        "strength": intensity,
         "latest_actual_c": latest_actual,
         "recent_baseline_c": recent_baseline,
         "latest_anomaly_c": anomaly,
@@ -737,23 +876,29 @@ def persistent_hot_regime(
         "recent_warm_error_c": recent_warm_error,
         "taf_support": taf_support,
         "clear_support": clear_support,
+        "evidence_score": evidence_score,
+        "intensity": intensity,
     }
     if not active:
         return result
+    target_bias_multiplier = max(
+        0.0,
+        min(1.0, float(configured.get("positive_bias_multiplier", 0.20))),
+    )
+    target_spread_multiplier = max(
+        1.0,
+        min(1.6, float(configured.get("spread_multiplier", 1.30))),
+    )
+    target_confidence_multiplier = max(
+        0.5,
+        min(1.0, float(configured.get("confidence_multiplier", 0.88))),
+    )
     return {
         **result,
-        "bias_multiplier": max(
-            0.0,
-            min(1.0, float(configured.get("positive_bias_multiplier", 0.20))),
-        ),
-        "spread_multiplier": max(
-            1.0,
-            min(1.6, float(configured.get("spread_multiplier", 1.30))),
-        ),
-        "confidence_multiplier": max(
-            0.5,
-            min(1.0, float(configured.get("confidence_multiplier", 0.88))),
-        ),
+        "bias_multiplier": 1.0 - intensity * (1.0 - target_bias_multiplier),
+        "spread_multiplier": 1.0 + intensity * (target_spread_multiplier - 1.0),
+        "confidence_multiplier": 1.0
+        - intensity * (1.0 - target_confidence_multiplier),
     }
 
 
@@ -865,7 +1010,9 @@ def regional_heat_cluster(
     *,
     profile: dict | None,
     heat_regime_active: bool,
+    heat_regime_strength: float,
     persistent_hot_active: bool,
+    persistent_hot_intensity: float = 0.0,
     taf_clear: bool,
 ) -> dict[str, float | bool | None | pd.Series]:
     """Protect a coherent warm regional-model cluster during an active heat regime."""
@@ -910,6 +1057,13 @@ def regional_heat_cluster(
         if persistent_hot_active
         else profile.get("regional_weight_multiplier", 1.35)
     )
+    intensity = (
+        float(persistent_hot_intensity)
+        if persistent_hot_active
+        else float(heat_regime_strength)
+    )
+    intensity = max(0.0, min(1.0, intensity))
+    multiplier = 1.0 + intensity * (multiplier - 1.0)
     if not taf_clear:
         multiplier = min(multiplier, float(profile.get("unconfirmed_multiplier", 1.20)))
     return {
@@ -992,7 +1146,7 @@ def temperature_anchor_profile(
     fallback_anomaly: float | None,
     hours_to_peak: float | None,
 ) -> tuple[float | None, float, int, float | None]:
-    """Return effective path residual, adaptive gain, streak length and recent median."""
+    """Return a peak-aware, persistence-gated transfer from path error to Tmax."""
     if residuals.empty:
         effective = fallback_anomaly
         recent_median = fallback_anomaly
@@ -1011,18 +1165,25 @@ def temperature_anchor_profile(
                     break
                 streak += 1
 
+    # A morning level error is often a timing/phase error that the model can
+    # recover before Tmax. Transfer only a small part until repeated METARs and
+    # proximity to the modelled peak make an amplitude error more plausible.
     if hours_to_peak is None:
-        gain = 0.45
+        time_gain = 0.25
+    elif hours_to_peak > 6:
+        time_gain = 0.12
     elif hours_to_peak > 4:
-        gain = 0.50
+        time_gain = 0.20
     elif hours_to_peak > 2:
-        gain = 0.60
+        time_gain = 0.38
     elif hours_to_peak > 0:
-        gain = 0.72
+        time_gain = 0.62
     else:
-        gain = 0.82
-    if streak >= 3 and recent_median is not None and abs(recent_median) >= 0.40:
-        gain = min(0.88, gain + 0.15)
+        time_gain = 0.82
+    persistence_gain = {0: 0.25, 1: 0.45, 2: 0.70}.get(streak, 1.0)
+    gain = time_gain * persistence_gain
+    if streak >= 3 and recent_median is not None and abs(recent_median) >= 1.50:
+        gain = min(0.86, gain + 0.05)
     return effective, gain, streak, recent_median
 
 
@@ -1083,7 +1244,9 @@ def phase_vs_amplitude_regime(
     """Separate an early/late model curve from a persistent vertical level error."""
     configured = profile or {}
     defaults: dict[str, float | bool | None | str] = {
+        "applicable": bool(configured.get("enabled", False)),
         "active": False,
+        "strength": 0.0,
         "center_active": False,
         "classification": "insufficient data",
         "phase_shift_hours": 0.0,
@@ -1153,11 +1316,24 @@ def phase_vs_amplitude_regime(
     minimum_shift = float(configured.get("minimum_phase_shift_hours", 0.75))
     minimum_gain = float(configured.get("minimum_rmse_gain_c", 0.30))
     maximum_phase_rmse = float(configured.get("maximum_phase_rmse_c", 1.0))
-    active = bool(
-        abs(best_shift) >= minimum_shift
-        and baseline_rmse - best_rmse >= minimum_gain
-        and best_rmse <= maximum_phase_rmse
+    shift_strength = _evidence_ramp(
+        abs(best_shift),
+        float(configured.get("gradual_phase_shift_start_hours", minimum_shift * 0.50)),
+        minimum_shift,
     )
+    gain_strength = _evidence_ramp(
+        baseline_rmse - best_rmse,
+        float(configured.get("gradual_rmse_gain_start_c", minimum_gain * 0.50)),
+        minimum_gain,
+    )
+    fit_strength = _inverse_evidence_ramp(
+        best_rmse,
+        maximum_phase_rmse,
+        float(configured.get("gradual_maximum_phase_rmse_c", maximum_phase_rmse * 1.50)),
+    )
+    report_strength = min(1.0, len(frame) / max(1, minimum_reports))
+    strength = min(shift_strength, gain_strength, fit_strength, report_strength)
+    active = strength > 0.0
     if not active:
         return {
             **defaults,
@@ -1175,7 +1351,9 @@ def phase_vs_amplitude_regime(
         <= float(configured.get("center_maximum_phase_rmse_c", maximum_phase_rmse))
     )
     return {
+        "applicable": True,
         "active": True,
+        "strength": strength,
         "center_active": center_active,
         "classification": "phase-dominant",
         "phase_shift_hours": float(best_shift),
@@ -1183,30 +1361,38 @@ def phase_vs_amplitude_regime(
         "level_residual_after_shift_c": level_after_shift,
         "baseline_rmse_c": baseline_rmse,
         "phase_rmse_c": best_rmse,
-        "anchor_blend": max(
-            0.0,
-            min(0.90, float(configured.get("phase_anchor_blend", 0.75))),
-        ) if center_active else 0.0,
+        "anchor_blend": (
+            strength
+            * max(
+                0.0,
+                min(0.90, float(configured.get("phase_anchor_blend", 0.75))),
+            )
+            if center_active
+            else 0.0
+        ),
         "spread_addition_c": (
             0.0
             if center_active
-            else max(
+            else strength
+            * max(
                 0.0,
-                min(
-                    0.40,
-                    float(configured.get("unconfirmed_spread_addition_c", 0.15)),
-                ),
+                min(0.40, float(configured.get("unconfirmed_spread_addition_c", 0.15))),
             )
         ),
         "confidence_multiplier": (
             1.0
             if center_active
-            else max(
-                0.5,
-                min(
-                    1.0,
-                    float(configured.get("unconfirmed_confidence_multiplier", 0.92)),
-                ),
+            else 1.0
+            - strength
+            * (
+                1.0
+                - max(
+                    0.5,
+                    min(
+                        1.0,
+                        float(configured.get("unconfirmed_confidence_multiplier", 0.92)),
+                    ),
+                )
             )
         ),
     }
@@ -1231,7 +1417,11 @@ def maritime_advection_regime(
     """Detect an early North-Sea-type cooling intrusion from observed wind changes."""
     configured = profile or {}
     defaults: dict[str, float | bool | None] = {
+        "applicable": bool(
+            configured.get("enabled", False) and configured.get("maritime_sectors")
+        ),
         "active": False,
+        "strength": 0.0,
         "temperature_rate_cph": None,
         "wind_speed_kph": None,
         "wind_speed_change_kph": None,
@@ -1262,21 +1452,43 @@ def maritime_advection_regime(
     speed_change = latest_speed - float(usable.wind_kph.iloc[0])
     rate = _recent_temperature_rate(frame)
     entered_sector = bool(not in_sector.iloc[0] and in_sector.iloc[-1])
-    plateau = rate is not None and rate <= float(
-        configured.get("maximum_temperature_rate_cph", 0.20)
+    minimum_fraction = float(configured.get("minimum_maritime_fraction", 2 / 3))
+    maximum_rate = float(configured.get("maximum_temperature_rate_cph", 0.20))
+    minimum_wind = float(configured.get("minimum_wind_kph", 14.0))
+    minimum_increase = float(configured.get("minimum_wind_increase_kph", 2.0))
+    strong_wind = float(configured.get("strong_wind_kph", 18.0))
+    sector_strength = _evidence_ramp(
+        recent_fraction,
+        float(configured.get("gradual_maritime_fraction_start", minimum_fraction * 0.70)),
+        minimum_fraction,
     )
-    enough_wind = latest_speed >= float(configured.get("minimum_wind_kph", 14.0))
-    strengthened = speed_change >= float(configured.get("minimum_wind_increase_kph", 2.0))
-    strong = latest_speed >= float(configured.get("strong_wind_kph", 18.0))
-    active = bool(
-        recent_fraction >= float(configured.get("minimum_maritime_fraction", 2 / 3))
-        and plateau
-        and enough_wind
-        and (entered_sector or strengthened or strong)
+    plateau_strength = _inverse_evidence_ramp(
+        rate,
+        maximum_rate,
+        float(configured.get("gradual_maximum_temperature_rate_cph", maximum_rate + 0.45)),
     )
+    wind_strength = _evidence_ramp(
+        latest_speed,
+        float(configured.get("gradual_wind_start_kph", minimum_wind * 0.70)),
+        minimum_wind,
+    )
+    transition_strength = max(
+        float(entered_sector),
+        _evidence_ramp(speed_change, minimum_increase * 0.50, minimum_increase),
+        _evidence_ramp(latest_speed, strong_wind * 0.85, strong_wind),
+    )
+    strength = min(
+        sector_strength,
+        plateau_strength,
+        wind_strength,
+        transition_strength,
+    )
+    active = strength > 0.0
     result = {
         **defaults,
         "active": active,
+        "applicable": True,
+        "strength": strength,
         "temperature_rate_cph": rate,
         "wind_speed_kph": latest_speed,
         "wind_speed_change_kph": speed_change,
@@ -1286,27 +1498,32 @@ def maritime_advection_regime(
     if not active:
         return result
     cooling_strength = max(0.0, -(rate or 0.0))
-    adjustment = min(
+    full_adjustment = min(
         float(configured.get("maximum_cooling_adjustment_c", 0.65)),
         float(configured.get("base_cooling_adjustment_c", 0.30))
         + 0.15 * cooling_strength
         + 0.015 * max(0.0, latest_speed - float(configured.get("minimum_wind_kph", 14.0))),
     )
+    adjustment = strength * full_adjustment
+    target_positive_multiplier = max(
+        0.0,
+        min(1.0, float(configured.get("positive_factor_multiplier", 0.25))),
+    )
+    target_confidence_multiplier = max(
+        0.5,
+        min(1.0, float(configured.get("confidence_multiplier", 0.90))),
+    )
     return {
         **result,
         "center_adjustment_c": -adjustment,
-        "positive_factor_multiplier": max(
-            0.0,
-            min(1.0, float(configured.get("positive_factor_multiplier", 0.25))),
-        ),
+        "positive_factor_multiplier": 1.0
+        - strength * (1.0 - target_positive_multiplier),
         "remaining_rise_cap_c": max(
             0.0,
             float(configured.get("remaining_rise_cap_c", 0.40)),
         ),
-        "confidence_multiplier": max(
-            0.5,
-            min(1.0, float(configured.get("confidence_multiplier", 0.90))),
-        ),
+        "confidence_multiplier": 1.0
+        - strength * (1.0 - target_confidence_multiplier),
     }
 
 
@@ -1319,7 +1536,11 @@ def maritime_low_range_regime(
     """Detect a stable strong sea-wind day whose daily temperature range is capped."""
     configured = profile or {}
     defaults: dict[str, float | bool | None] = {
+        "applicable": bool(
+            configured.get("enabled", False) and configured.get("sea_wind_sectors")
+        ),
         "active": False,
+        "strength": 0.0,
         "temperature_rate_cph": None,
         "recent_range_c": None,
         "daily_range_c": None,
@@ -1354,17 +1575,49 @@ def maritime_low_range_regime(
     recent_range = float(recent.temp_c.max() - recent.temp_c.min())
     daily_range = float(frame.temp_c.max() - frame.temp_c.min())
     rate = _recent_temperature_rate(recent)
-    active = bool(
-        fraction >= float(configured.get("minimum_sea_wind_fraction", 0.80))
-        and median_wind >= float(configured.get("minimum_wind_kph", 28.0))
-        and recent_range <= float(configured.get("maximum_recent_range_c", 1.5))
-        and daily_range <= float(configured.get("maximum_daily_range_c", 4.5))
-        and rate is not None
-        and abs(rate) <= float(configured.get("maximum_abs_temperature_rate_cph", 0.30))
+    minimum_fraction = float(configured.get("minimum_sea_wind_fraction", 0.80))
+    minimum_wind = float(configured.get("minimum_wind_kph", 28.0))
+    maximum_recent_range = float(configured.get("maximum_recent_range_c", 1.5))
+    maximum_daily_range = float(configured.get("maximum_daily_range_c", 4.5))
+    maximum_rate = float(configured.get("maximum_abs_temperature_rate_cph", 0.30))
+    fraction_strength = _evidence_ramp(
+        fraction,
+        float(configured.get("gradual_sea_wind_fraction_start", minimum_fraction * 0.75)),
+        minimum_fraction,
     )
+    wind_strength = _evidence_ramp(
+        median_wind,
+        float(configured.get("gradual_wind_start_kph", minimum_wind * 0.75)),
+        minimum_wind,
+    )
+    recent_range_strength = _inverse_evidence_ramp(
+        recent_range,
+        maximum_recent_range,
+        float(configured.get("gradual_maximum_recent_range_c", maximum_recent_range * 1.50)),
+    )
+    daily_range_strength = _inverse_evidence_ramp(
+        daily_range,
+        maximum_daily_range,
+        float(configured.get("gradual_maximum_daily_range_c", maximum_daily_range * 1.35)),
+    )
+    rate_strength = _inverse_evidence_ramp(
+        abs(rate) if rate is not None else None,
+        maximum_rate,
+        float(configured.get("gradual_maximum_abs_rate_cph", maximum_rate * 2.0)),
+    )
+    strength = min(
+        fraction_strength,
+        wind_strength,
+        recent_range_strength,
+        daily_range_strength,
+        rate_strength,
+    )
+    active = strength > 0.0
     result = {
         **defaults,
         "active": active,
+        "applicable": True,
+        "strength": strength,
         "temperature_rate_cph": rate,
         "recent_range_c": recent_range,
         "daily_range_c": daily_range,
@@ -1373,23 +1626,38 @@ def maritime_low_range_regime(
     }
     if not active:
         return result
+    target_positive_multiplier = max(
+        0.0,
+        min(1.0, float(configured.get("positive_factor_multiplier", 0.15))),
+    )
+    target_spread_multiplier = max(
+        0.70,
+        min(1.0, float(configured.get("spread_multiplier", 0.85))),
+    )
+    target_confidence_multiplier = max(
+        0.5,
+        min(1.0, float(configured.get("confidence_multiplier", 0.95))),
+    )
     return {
         **result,
-        "positive_factor_multiplier": max(
-            0.0,
-            min(1.0, float(configured.get("positive_factor_multiplier", 0.15))),
+        "positive_factor_multiplier": (
+            target_positive_multiplier
+            if strength >= 1.0
+            else 1.0 - strength * (1.0 - target_positive_multiplier)
         ),
-        "spread_multiplier": max(
-            0.70,
-            min(1.0, float(configured.get("spread_multiplier", 0.85))),
+        "spread_multiplier": (
+            target_spread_multiplier
+            if strength >= 1.0
+            else 1.0 - strength * (1.0 - target_spread_multiplier)
         ),
         "remaining_rise_cap_c": max(
             0.0,
             float(configured.get("remaining_rise_cap_c", 0.40)),
         ),
-        "confidence_multiplier": max(
-            0.5,
-            min(1.0, float(configured.get("confidence_multiplier", 0.95))),
+        "confidence_multiplier": (
+            target_confidence_multiplier
+            if strength >= 1.0
+            else 1.0 - strength * (1.0 - target_confidence_multiplier)
         ),
     }
 
@@ -1519,21 +1787,24 @@ def post_convective_uncertainty(
     profile: dict | None,
 ) -> dict[str, float | bool | None]:
     """Detect recent observed convection without imposing a directional bias."""
+    configured = profile or {}
     defaults: dict[str, float | bool | None] = {
+        "applicable": bool(configured.get("enabled", False)),
         "active": False,
+        "strength": 0.0,
         "reports": 0.0,
         "hours_since_latest": None,
         "spread_multiplier": 1.0,
         "confidence_multiplier": 1.0,
     }
-    if not profile or not profile.get("enabled") or observations.empty:
+    if not configured.get("enabled") or observations.empty:
         return defaults
     if "raw" not in observations or "observed_at" not in observations:
         return defaults
     frame = observations.dropna(subset=["observed_at"]).copy()
     frame["observed_at"] = pd.to_datetime(frame.observed_at, utc=True)
     as_of_utc = pd.Timestamp(as_of).tz_convert("UTC")
-    window_hours = max(1.0, float(profile.get("window_hours", 48)))
+    window_hours = max(1.0, float(configured.get("window_hours", 48)))
     frame = frame[
         (frame.observed_at <= as_of_utc)
         & (frame.observed_at >= as_of_utc - timedelta(hours=window_hours))
@@ -1546,23 +1817,36 @@ def post_convective_uncertainty(
         regex=True,
     )
     reports = int(convective.sum())
-    minimum_reports = max(1, int(profile.get("minimum_reports", 2)))
-    if reports < minimum_reports:
-        return {**defaults, "reports": float(reports)}
+    minimum_reports = max(1, int(configured.get("minimum_reports", 2)))
+    if reports <= 0:
+        return {**defaults, "reports": 0.0}
     latest = pd.Timestamp(frame.loc[convective, "observed_at"].max())
     hours_since_latest = max(0.0, (as_of_utc - latest).total_seconds() / 3600)
+    report_strength = min(1.0, reports / minimum_reports)
+    recency_strength = _inverse_evidence_ramp(
+        hours_since_latest,
+        float(configured.get("full_strength_hours", window_hours * 0.25)),
+        window_hours,
+    )
+    strength = report_strength * recency_strength
+    target_spread_multiplier = max(
+        1.0,
+        min(1.5, float(configured.get("spread_multiplier", 1.5))),
+    )
+    target_confidence_multiplier = max(
+        0.5,
+        min(1.0, float(configured.get("confidence_multiplier", 0.85))),
+    )
     return {
-        "active": True,
+        "applicable": True,
+        "active": strength > 0.0,
+        "strength": strength,
         "reports": float(reports),
         "hours_since_latest": hours_since_latest,
-        "spread_multiplier": max(
-            1.0,
-            min(1.5, float(profile.get("spread_multiplier", 1.5))),
-        ),
-        "confidence_multiplier": max(
-            0.5,
-            min(1.0, float(profile.get("confidence_multiplier", 0.85))),
-        ),
+        "spread_multiplier": 1.0
+        + strength * (target_spread_multiplier - 1.0),
+        "confidence_multiplier": 1.0
+        - strength * (1.0 - target_confidence_multiplier),
     }
 
 
@@ -1857,7 +2141,7 @@ def build_live_nowcast(
     )
     current = forecast_current
 
-    d1 = available[available.horizon == "D-1"].copy()
+    d1 = fixed_d1_training_sample(available, timezone_name)
     if not d1.empty:
         d1 = d1[pd.to_datetime(d1.target_date).dt.date < target]
     airport_code = (
@@ -1881,9 +2165,17 @@ def build_live_nowcast(
     if not d1_scored.empty:
         d1_scored["target_date"] = pd.to_datetime(d1_scored.target_date).dt.date
         d1_scored = d1_scored[d1_scored.target_date >= target - timedelta(days=90)]
-    d1_metrics = model_metrics(d1_scored)
-    bias_map = dict(zip(d1_metrics.model, d1_metrics.bias)) if not d1_metrics.empty else {}
-    weight_map = model_weight_map(d1_scored)
+    calibration_scored, station_calibration_active = station_calibration_sample(d1_scored)
+    d1_metrics = model_metrics(calibration_scored)
+    bias_map = (
+        {
+            str(row.model): float(row.bias) * float(row.n) / (float(row.n) + 12.0)
+            for row in d1_metrics.itertuples()
+        }
+        if not d1_metrics.empty
+        else {}
+    )
+    weight_map = model_weight_map(calibration_scored)
     fallback_weight = float(pd.Series(weight_map.values()).median()) if weight_map else 1.0
     raw_equal = consensus(current.max_temp_c.tolist())
     wind_profile = wind_profile or {}
@@ -1908,7 +2200,7 @@ def build_live_nowcast(
             if "persistent_hot" not in _disabled_factors
             else pd.DataFrame()
         ),
-        d1_scored,
+        calibration_scored,
         target=target,
         forecast_mean=raw_equal.mean,
         taf_guidance=preliminary_taf,
@@ -1951,7 +2243,12 @@ def build_live_nowcast(
             else None
         ),
         heat_regime_active=bool(rapid_heat["active"] or persistent_hot["active"]),
+        heat_regime_strength=max(
+            float(rapid_heat.get("strength", 0.0) or 0.0),
+            float(persistent_hot.get("strength", 0.0) or 0.0),
+        ),
         persistent_hot_active=bool(persistent_hot["active"]),
+        persistent_hot_intensity=float(persistent_hot["intensity"]),
         taf_clear=taf_clear,
     )
     if cluster["active"]:
@@ -2204,7 +2501,7 @@ def build_live_nowcast(
         and model_heating_rate is not None
         else None
     )
-    station_residual = recent_station_residual(d1_scored)
+    station_residual = recent_station_residual(calibration_scored)
     path_residuals = observation_path_residuals(
         hourly,
         obs_today,
@@ -2274,7 +2571,7 @@ def build_live_nowcast(
         post_convective["active"] and target == local_now.date()
     )
     recent_warm_bias = recent_warm_bias_challenger(
-        d1_scored,
+        calibration_scored,
         target=target,
         taf_guidance=taf_guidance,
         temp_850_c=temp_850,
@@ -2619,6 +2916,12 @@ def build_live_nowcast(
         "recent_temperature_residual_c": recent_temperature_residual,
         "temperature_anchor_gain": temperature_anchor_gain,
         "temperature_anchor_streak": float(temperature_anchor_streak),
+        "d1_calibration_station_only": float(station_calibration_active),
+        "d1_calibration_days": float(
+            calibration_scored.target_date.nunique()
+            if not calibration_scored.empty
+            else 0
+        ),
         "observed_dryness_c": observed_dryness,
         "model_dryness_c": model_dryness,
         "dryness_surprise_c": dryness_surprise,
@@ -2670,7 +2973,9 @@ def build_live_nowcast(
         "recent_warm_bias_convection_clear": float(
             bool(recent_warm_bias["convection_clear"])
         ),
+        "rapid_heat_ramp_applicable": float(bool(rapid_heat.get("applicable", True))),
         "rapid_heat_ramp_active": float(bool(rapid_heat["active"])),
+        "rapid_heat_ramp_strength": float(rapid_heat.get("strength", 0.0) or 0.0),
         "rapid_heat_ramp_forecast_vs_latest_c": rapid_heat[
             "forecast_vs_latest_c"
         ],
@@ -2685,7 +2990,11 @@ def build_live_nowcast(
             rapid_heat["spread_multiplier"]
         ),
         "rapid_heat_ramp_adjustment_c": rapid_heat_adjustment,
+        "persistent_hot_applicable": float(
+            bool(persistent_hot.get("applicable", False))
+        ),
         "persistent_hot_active": float(bool(persistent_hot["active"])),
+        "persistent_hot_strength": float(persistent_hot.get("strength", 0.0) or 0.0),
         "persistent_hot_latest_actual_c": persistent_hot["latest_actual_c"],
         "persistent_hot_recent_baseline_c": persistent_hot["recent_baseline_c"],
         "persistent_hot_latest_anomaly_c": persistent_hot["latest_anomaly_c"],
@@ -2697,6 +3006,8 @@ def build_live_nowcast(
         ],
         "persistent_hot_taf_support": float(bool(persistent_hot["taf_support"])),
         "persistent_hot_clear_support": float(bool(persistent_hot["clear_support"])),
+        "persistent_hot_evidence_score": float(persistent_hot["evidence_score"]),
+        "persistent_hot_intensity": float(persistent_hot["intensity"]),
         "persistent_hot_bias_multiplier": float(persistent_hot["bias_multiplier"]),
         "persistent_hot_spread_multiplier": float(
             persistent_hot["spread_multiplier"]
@@ -2706,13 +3017,25 @@ def build_live_nowcast(
         "regional_cluster_mean_gap_c": cluster["mean_gap_c"],
         "regional_cluster_weight_multiplier": float(cluster["multiplier"]),
         "regional_cluster_adjustment_c": regional_cluster_adjustment,
+        "post_convective_uncertainty_applicable": float(
+            bool(post_convective.get("applicable", False))
+        ),
         "post_convective_uncertainty_active": float(post_convective_active),
+        "post_convective_uncertainty_strength": float(
+            post_convective.get("strength", 0.0) or 0.0
+        ),
         "post_convective_reports_48h": float(post_convective["reports"]),
         "hours_since_latest_convection": post_convective["hours_since_latest"],
         "post_convective_spread_multiplier": float(
             post_convective["spread_multiplier"]
         ),
+        "phase_vs_amplitude_applicable": float(
+            bool(phase_amplitude.get("applicable", False))
+        ),
         "phase_vs_amplitude_active": float(bool(phase_amplitude["active"])),
+        "phase_vs_amplitude_strength": float(
+            phase_amplitude.get("strength", 0.0) or 0.0
+        ),
         "phase_vs_amplitude_center_active": float(
             bool(phase_amplitude["center_active"])
         ),
@@ -2732,7 +3055,13 @@ def build_live_nowcast(
         "phase_confidence_multiplier": float(
             phase_amplitude["confidence_multiplier"]
         ),
+        "maritime_advection_applicable": float(
+            bool(maritime_advection.get("applicable", False))
+        ),
         "maritime_advection_active": float(bool(maritime_advection["active"])),
+        "maritime_advection_strength": float(
+            maritime_advection.get("strength", 0.0) or 0.0
+        ),
         "maritime_advection_temperature_rate_cph": maritime_advection[
             "temperature_rate_cph"
         ],
@@ -2744,7 +3073,13 @@ def build_live_nowcast(
         "maritime_advection_adjustment_c": float(
             maritime_advection["center_adjustment_c"]
         ),
+        "maritime_low_range_applicable": float(
+            bool(maritime_low_range.get("applicable", False))
+        ),
         "maritime_low_range_active": float(bool(maritime_low_range["active"])),
+        "maritime_low_range_strength": float(
+            maritime_low_range.get("strength", 0.0) or 0.0
+        ),
         "maritime_low_range_recent_range_c": maritime_low_range["recent_range_c"],
         "maritime_low_range_daily_range_c": maritime_low_range["daily_range_c"],
         "maritime_low_range_median_wind_kph": maritime_low_range["median_wind_kph"],
@@ -2755,8 +3090,8 @@ def build_live_nowcast(
             maritime_low_range["spread_multiplier"]
         ),
     }
-    if not d1_scored.empty:
-        residual_errors = d1_scored.copy()
+    if not calibration_scored.empty:
+        residual_errors = calibration_scored.copy()
         residual_errors["residual_abs_error"] = (
             residual_errors.error - residual_errors.groupby("model").error.transform("mean")
         ).abs()
@@ -2811,27 +3146,37 @@ def build_live_nowcast(
     if forecast_data_stale:
         forecast_confidence = min(40, forecast_confidence)
     if post_convective_active and not day_status.is_locked:
-        confidence_factors["post_convective_regime"] = 35.0
+        confidence_factors["post_convective_regime"] = 100.0 - 65.0 * float(
+            post_convective.get("strength", 0.0) or 0.0
+        )
         forecast_confidence = round(
             forecast_confidence * float(post_convective["confidence_multiplier"])
         )
     if rapid_heat["active"] and not day_status.is_locked:
-        confidence_factors["rapid_heat_ramp_regime"] = 45.0
+        confidence_factors["rapid_heat_ramp_regime"] = 100.0 - 55.0 * float(
+            rapid_heat.get("strength", 0.0) or 0.0
+        )
         forecast_confidence = round(
             forecast_confidence * float(rapid_heat["confidence_multiplier"])
         )
     if persistent_hot["active"] and not day_status.is_locked:
-        confidence_factors["persistent_hot_regime"] = 50.0
+        confidence_factors["persistent_hot_regime"] = 100.0 - 50.0 * float(
+            persistent_hot.get("strength", 0.0) or 0.0
+        )
         forecast_confidence = round(
             forecast_confidence * float(persistent_hot["confidence_multiplier"])
         )
     if maritime_advection["active"] and not day_status.is_locked:
-        confidence_factors["maritime_advection_regime"] = 55.0
+        confidence_factors["maritime_advection_regime"] = 100.0 - 45.0 * float(
+            maritime_advection.get("strength", 0.0) or 0.0
+        )
         forecast_confidence = round(
             forecast_confidence * float(maritime_advection["confidence_multiplier"])
         )
     if maritime_low_range["active"] and not day_status.is_locked:
-        confidence_factors["maritime_low_range_regime"] = 70.0
+        confidence_factors["maritime_low_range_regime"] = 100.0 - 30.0 * float(
+            maritime_low_range.get("strength", 0.0) or 0.0
+        )
         forecast_confidence = round(
             forecast_confidence * float(maritime_low_range["confidence_multiplier"])
         )
@@ -2840,7 +3185,9 @@ def build_live_nowcast(
         and not phase_amplitude["center_active"]
         and not day_status.is_locked
     ):
-        confidence_factors["phase_timing_uncertainty"] = 55.0
+        confidence_factors["phase_timing_uncertainty"] = 100.0 - 45.0 * float(
+            phase_amplitude.get("strength", 0.0) or 0.0
+        )
         forecast_confidence = round(
             forecast_confidence * float(phase_amplitude["confidence_multiplier"])
         )

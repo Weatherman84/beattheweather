@@ -9,6 +9,7 @@ from .live_display import (
     challenger_rows,
     forecast_chain_rows,
     forecast_driver_rows,
+    regime_strength_rows,
     strongest_driver_summary,
 )
 
@@ -19,6 +20,87 @@ def _percent(value: object) -> str:
 
 def _temperature(value: object, digits: int = 1) -> str:
     return f"{float(value):.{digits}f} °C" if value is not None and pd.notna(value) else "—"
+
+
+def _local_timestamp(value: object, timezone_name: str) -> str:
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return "Not supplied"
+    return pd.Timestamp(parsed).tz_convert(timezone_name).strftime("%d.%m.%Y %H:%M")
+
+
+def model_maxima_diagnostics(nowcast: object, timezone_name: str) -> pd.DataFrame:
+    """Build one provenance-complete table for every model maximum."""
+    columns = [
+        "model",
+        "max_temp_c",
+        "corrected_max",
+        "model_weight",
+        "d1_bias",
+        "model_run_at",
+        "available_at",
+        "fetched_at",
+        "age_minutes",
+        "used_in_forecast",
+        "provenance_status",
+    ]
+    source = getattr(nowcast, "model_freshness").copy()
+    calculated = getattr(nowcast, "current").copy()
+    calculated_columns = [
+        column
+        for column in ["model", "corrected_max", "model_weight", "d1_bias"]
+        if column in calculated
+    ]
+    if "model" in calculated_columns:
+        source = source.drop(
+            columns=[
+                column
+                for column in calculated_columns
+                if column != "model" and column in source
+            ],
+            errors="ignore",
+        ).merge(
+            calculated[calculated_columns].drop_duplicates("model", keep="last"),
+            on="model",
+            how="left",
+        )
+    for column in columns:
+        if column not in source:
+            source[column] = None
+    table = source[columns].copy()
+    table["model_weight"] = table.model_weight.map(
+        lambda value: f"{float(value):.1%}" if pd.notna(value) else "—"
+    )
+    table["d1_bias"] = table.d1_bias.map(
+        lambda value: f"{float(value):+.2f} °C" if pd.notna(value) else "—"
+    )
+    table["model_run_at"] = table.model_run_at.map(
+        lambda value: _local_timestamp(value, timezone_name)
+    )
+    table["available_at"] = table.available_at.map(
+        lambda value: _local_timestamp(value, timezone_name)
+    )
+    table["fetched_at"] = table.fetched_at.map(
+        lambda value: _local_timestamp(value, timezone_name)
+    )
+    table["age_minutes"] = table.age_minutes.map(
+        lambda value: round(float(value)) if pd.notna(value) else None
+    )
+    return table.rename(
+        columns={
+            "model": "Model",
+            "max_temp_c": "Raw max °C",
+            "corrected_max": "Corrected max °C",
+            "model_weight": "Weight",
+            "d1_bias": "Applied D-1 bias",
+            "model_run_at": "Model run · local",
+            "available_at": "Provider available · local",
+            "fetched_at": "Fetched · local",
+            "age_minutes": "Fetch age min",
+            "used_in_forecast": "Used",
+            "provenance_status": "Run provenance",
+        }
+    )
 
 
 def _latest_actual(actuals: pd.DataFrame, target: date) -> float | None:
@@ -332,6 +414,17 @@ def render_compact_live_forecast(
     memory = getattr(nowcast, "regime_memory", None)
 
     with st.expander("Live regimes and their counterfactual effect", expanded=False):
+        st.markdown("**Continuous evidence at this checkpoint**")
+        st.dataframe(
+            pd.DataFrame(regime_strength_rows(nowcast)),
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "Evidence is recalculated at every checkpoint from 0–100%. Missing or stale data, "
+            "day lock and directional-safety requirements remain hard gates. Maritime regimes "
+            "are not applicable where no defensible sea-wind sector is configured."
+        )
         states = []
         if memory is not None:
             states = [
@@ -363,7 +456,82 @@ def render_compact_live_forecast(
             st.dataframe(pd.DataFrame(fixed_variants), hide_index=True, width="stretch")
         detected = _today_memory_start(regime_memory_snapshots, target, timezone_name)
         if detected:
-            st.caption(f"First regime-memory detection today: {detected}.")
+            st.caption(
+                f"First journaled regime-memory assessment today: {detected}. This is the "
+                "first stored checkpoint, not necessarily the first time a fixed regime could "
+                "be evaluated."
+            )
+        features = dict(getattr(nowcast, "live_features", {}) or {})
+        anchor_status = features.get("anchor_transfer_status")
+        if anchor_status:
+            st.markdown("**Airport-specific Anchor Transfer**")
+            st.caption(
+                f"{anchor_status} · {features.get('anchor_transfer_hours_bucket', 'peak unknown')} · "
+                f"history {int(float(features.get('anchor_transfer_history_days', 0) or 0))} days · "
+                f"Champion prior {float(features.get('anchor_transfer_prior_gain', 0) or 0):.0%} · "
+                f"learned {float(features.get('anchor_transfer_learned_gain', 0) or 0):.0%} · "
+                f"shadow delta {float(features.get('anchor_transfer_forecast_delta_c', 0) or 0):+.2f} °C."
+            )
+
+    with st.expander("What currently feeds the Champion?", expanded=False):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Input": "Current model maxima",
+                        "Role": "Base center and spread",
+                        "History used": "Latest fresh provider fetch",
+                    },
+                    {
+                        "Input": "D-1 model errors",
+                        "Role": "Airport/model bias and performance weights",
+                        "History used": (
+                            "One fixed 20:00 D-1 sample per model/day; station METAR is preferred "
+                            "from 5 complete days and small samples are shrunk"
+                        ),
+                    },
+                    {
+                        "Input": "Current hourly model paths + METAR",
+                        "Role": "Phase, level, heating, moisture, cloud, wind and radiation update",
+                        "History used": "Current target day; influence grows toward the peak",
+                    },
+                    {
+                        "Input": "Airport Anchor Transfer",
+                        "Role": "OOS Challenger; Champion only after guarded promotion",
+                        "History used": (
+                            "One comparable checkpoint per settled airport-day, shrunk by "
+                            "peak distance and residual persistence"
+                        ),
+                    },
+                    {
+                        "Input": "TAF",
+                        "Role": "Separate aviation-guidance stage",
+                        "History used": "Latest valid report only",
+                    },
+                    {
+                        "Input": "Fixed regimes",
+                        "Role": "Gradual bias/weight/spread safeguards",
+                        "History used": "Recent settled actuals and errors",
+                    },
+                    {
+                        "Input": "Regime-memory analogs",
+                        "Role": "Historical Challenger; Champion only after OOS promotion",
+                        "History used": "Stored snapshots and settled outcomes",
+                    },
+                    {
+                        "Input": "Hourly archive",
+                        "Role": "Replay, backtest and discovery of new rules",
+                        "History used": "All archived paths; not an unchecked direct correction",
+                    },
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "Archived data do not automatically push the forecast up or down. They are used to "
+            "test a Challenger out of sample before that rule may affect the Champion."
+        )
 
     taf = getattr(nowcast, "taf_guidance", None)
     with st.expander("TAF details", expanded=False):
@@ -458,30 +626,13 @@ def render_compact_live_forecast(
         )
 
         st.markdown("**Model maxima, weights and freshness**")
-        model_table = nowcast.current[
-            [
-                "model",
-                "max_temp_c",
-                "corrected_max",
-                "model_weight",
-                "d1_bias",
-                "age_minutes",
-            ]
-        ].copy()
-        model_table["model_weight"] = model_table.model_weight.map(lambda value: f"{value:.1%}")
-        model_table["d1_bias"] = model_table.d1_bias.map(lambda value: f"{value:+.2f} °C")
-        model_table["age_minutes"] = model_table.age_minutes.map(lambda value: f"{value:.0f}")
-        model_table = model_table.rename(
-            columns={
-                "model": "Model",
-                "max_temp_c": "Raw max °C",
-                "corrected_max": "Corrected max °C",
-                "model_weight": "Weight",
-                "d1_bias": "Applied D-1 bias",
-                "age_minutes": "Fetch age min",
-            }
-        )
+        model_table = model_maxima_diagnostics(nowcast, timezone_name)
         st.dataframe(model_table, hide_index=True, width="stretch")
+        st.caption(
+            "Model run is the provider reference time; provider availability is when Open-Meteo "
+            "or meteoblue exposed that run; fetched is when Weatherman stored the displayed value. "
+            "All three timestamps are shown in airport local time."
+        )
 
         st.markdown("**Confidence and Heat Spike diagnostics**")
         st.caption(

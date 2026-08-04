@@ -95,8 +95,10 @@ def test_madrid_persistent_hot_activates_despite_lower_day_on_day_forecast():
     assert result["active"]
     assert result["forecast_vs_latest_c"] == -2.0
     assert result["recent_warm_error_c"] == -1.2
-    assert result["bias_multiplier"] == 0.15
-    assert result["spread_multiplier"] == 1.35
+    assert result["evidence_score"] == 0.75
+    assert result["intensity"] == 0.75
+    assert round(float(result["bias_multiplier"]), 4) == 0.3625
+    assert round(float(result["spread_multiplier"]), 4) == 1.2625
 
 
 def test_madrid_persistent_hot_changes_live_distribution_and_stores_challenger():
@@ -127,8 +129,8 @@ def test_madrid_persistent_hot_changes_live_distribution_and_stores_challenger()
             {
                 "airport": "LEMD",
                 "model": model,
-                "run_at": as_of - timedelta(days=1),
-                "fetched_at": as_of - timedelta(days=1),
+                "run_at": as_of - timedelta(days=1, hours=16),
+                "fetched_at": as_of - timedelta(days=1, hours=16),
                 "target_date": date(2026, 7, 29),
                 "max_temp_c": 39.0 + error,
                 "source": "open-meteo",

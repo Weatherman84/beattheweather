@@ -622,6 +622,70 @@ Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grüne
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
 **Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
 
+### Neu in Version 10.7.0 · globale kontinuierliche Regimes und Anchor-OOS-Lernen
+
+- Alle sechs Trading-Airports verwenden dieselbe Regime-Architektur. Rapid Heat Ramp,
+  Persistent Hot, Phase-vs.-Amplitude und beobachtete Konvektionsunsicherheit werden an
+  jedem Checkpoint als kontinuierliche Evidenz von 0–100 % berechnet. Airport-spezifische
+  Schwellenwerte bleiben erhalten.
+- Maritime Regimes werden nur dort als anwendbar markiert, wo ein fachlich definierter
+  Seewindsektor vorhanden ist. Fehlende/stale Daten, Day Lock und strenge Richtungs-Gates
+  bleiben binäre Sicherheitsbedingungen.
+- Regimewirkungen auf Bias, Modellgewichte, Center, Spread und Confidence wachsen
+  proportional zur Evidenz. Dadurch entsteht kein plötzlicher voller Regimesprung beim
+  ersten Journal-Checkpoint.
+- Der Trading Desk zeigt für jedes Regime explizit Anwendbarkeit, Evidenzstärke, Status
+  und mögliche Champion-Rolle – auch bei 0 % Evidenz.
+- Ein neuer **Airport Anchor Transfer Challenger** lernt ausschließlich aus früheren
+  abgeschlossenen Airport-Tagen, wie viel eines METAR-/Modellpfad-Residuals bis zum
+  Tagesmaximum bestehen bleibt. Pro Tag zählt höchstens ein vergleichbarer Checkpoint;
+  Abstand zum Peak und Residual-Persistenz werden berücksichtigt.
+- Der gelernte Anchor wird stark zum konservativen peakabhängigen Standard geschrumpft.
+  Er bleibt zunächst Research-only und darf erst nach mindestens 30 echten OOS-Tagen
+  samt MAE-, Brier-, Exact-Bucket-, Bias- und Recent-Performance-Gates automatisch in
+  den Champion einfließen. Dieselben Gates sorgen für den automatischen Rollback.
+- **Accuracy by timing** enthält einen strikt gepaarten Vergleich derselben Stationstage:
+  D-1@20:00, D0@10:00 vor Live-Faktoren, D0@10:00 nur mit Anchor und vollständiger
+  D0-Nowcast. Damit ist direkt messbar, ob der Morning Anchor oder ein anderer Live-Faktor
+  D0 gegenüber D-1 verbessert oder verschlechtert.
+- Die bestehenden D-1-METAR-Prioritäten, Modelllauf-Provenienz und Stundenarchive aus
+  v10.6.0/v10.5.2 bleiben unverändert erhalten. Kein Backfill ist erforderlich.
+
+Für das Update den gesamten Inhalt hochladen, den grünen Test abwarten, Workflow 2 einmal
+starten und Streamlit anschließend neu booten.
+
+### Neu in Version 10.6.0 · belastbare D-1- und Nowcast-Diagnostik
+
+- **Advanced Diagnostics → Model maxima** zeigt für jedes Modell immer den lokalen
+  Modelllauf, die lokale Provider-Verfügbarkeit und den tatsächlichen Abrufzeitpunkt.
+  Damit sind unterschiedliche Anbieterstände und verspätete Abrufe direkt sichtbar.
+- Die Open-Meteo-Modellmetadaten werden separat geladen. Ein Abrufzeitpunkt wird nicht
+  mehr ersatzweise als Modelllauf ausgegeben; unbestätigte Herkunft bleibt ausdrücklich
+  gekennzeichnet.
+- Die D-1-Auswertung verwendet je Modell und Zieltag einen festen Informationsstand bis
+  20:00 Uhr lokaler Zeit. Spätere D0-Läufe können die gemessene D-1-Güte nicht mehr
+  nachträglich verfälschen.
+- Vollständige Flughafen-METAR-Tagesmaxima werden aus den gespeicherten Beobachtungen
+  automatisch rekonstruiert und dauerhaft gegenüber gridded Open-Meteo-Reanalysen
+  bevorzugt. Sobald mindestens fünf Stationstage vorliegen, kalibrieren sie D-1-Bias
+  und Modellgewichte; kleine Stichproben werden stark gegen null geschrumpft.
+- Der frühe Temperature Anchor behandelt eine morgendliche Abweichung zuerst als
+  mögliche Phasenverschiebung des Erwärmungspfads. Mehr als sechs Stunden vor dem Peak
+  wirken nur 12 %, vier bis sechs Stunden 20 %, zwei bis vier Stunden 38 % und erst
+  näher am Peak 62 % des persistenten Residuals auf das Tagesmaximum.
+- `Persistent Hot` ist kein binärer Sprung mehr. Vortagshitze, Forecast-Fortsetzung,
+  wiederholter Stationsbias, TAF und klare Bedingungen ergeben einen kontinuierlichen
+  Evidenzwert; Bias-, Spread- und Regionalgewicht wachsen graduell mit der Evidenz.
+- Ein zusätzlicher früher Regime-Memory-Checkpoint läuft um 06:00 Uhr lokal. Die UI
+  bezeichnet die erste gespeicherte Bewertung nun korrekt als Journal-Checkpoint und
+  nicht als ersten technisch möglichen Erkennungszeitpunkt.
+- Eine neue Explainability-Ansicht listet offen, was in den Champion einfließt und was
+  nur Research-/Archivmaterial ist. Die vollständigen Archive bleiben für Replay und
+  Challenger-Tests erhalten, wirken aber nicht ungeprüft direkt auf den Live-Nowcast.
+
+Kein Backfill erforderlich. Beim nächsten Collector-Lauf werden bereits gespeicherte
+vollständige METAR-Tage automatisch als stationsbasierte Actuals wiederhergestellt.
+
 ### Korrektur in Version 10.5.2 · verlustfreies Stundenarchiv
 
 - Die durch den ersten v10.5.1-Lauf entfernten Stundenpfade wurden aus der letzten
