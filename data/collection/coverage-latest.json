@@ -3,9 +3,9 @@
   "archive_partitions": 618,
   "archive_rows": 416430,
   "archive_status": "deferred_to_daily_verification",
-  "checked_at": "2026-08-14T23:33:47.587671+00:00",
+  "checked_at": "2026-08-14T23:53:32.414018+00:00",
   "collector_version": "10.7.6",
-  "database_bytes": 23429120,
+  "database_bytes": 23437312,
   "warning_count": 2,
   "warnings": [
     {
@@ -16,7 +16,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 27 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 23 minutes.",
       "severity": "error",
       "type": "collector_gap"
     }
