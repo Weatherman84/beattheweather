@@ -3,9 +3,9 @@
   "archive_partitions": 618,
   "archive_rows": 416430,
   "archive_status": "deferred_to_daily_verification",
-  "checked_at": "2026-08-14T22:54:50.027495+00:00",
+  "checked_at": "2026-08-14T23:10:25.090585+00:00",
   "collector_version": "10.7.6",
-  "database_bytes": 23400448,
+  "database_bytes": 23412736,
   "warning_count": 2,
   "warnings": [
     {
