@@ -1,12 +1,12 @@
 {
-  "active_warning_count": 5,
+  "active_warning_count": 1,
   "archive_partitions": 618,
   "archive_rows": 416430,
   "archive_status": "deferred_to_daily_verification",
-  "checked_at": "2026-08-14T20:40:13.130611+00:00",
+  "checked_at": "2026-08-14T21:01:00.857777+00:00",
   "collector_version": "10.7.6",
-  "database_bytes": 23355392,
-  "warning_count": 6,
+  "database_bytes": 23359488,
+  "warning_count": 2,
   "warnings": [
     {
       "active": false,
@@ -19,42 +19,6 @@
       "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 32 minutes.",
       "severity": "error",
       "type": "collector_gap"
-    },
-    {
-      "active": true,
-      "age_minutes": 274.6,
-      "airport": "LEMD",
-      "data_type": "market",
-      "message": "LEMD: market is 275 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 311.4,
-      "airport": "EHAM",
-      "data_type": "market",
-      "message": "EHAM: market is 311 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 363.9,
-      "airport": "EPWA",
-      "data_type": "market",
-      "message": "EPWA: market is 364 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 311.3,
-      "airport": "EDDM",
-      "data_type": "market",
-      "message": "EDDM: market is 311 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     }
   ]
 }
