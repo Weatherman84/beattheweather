@@ -1,12 +1,12 @@
 {
-  "active_warning_count": 3,
+  "active_warning_count": 6,
   "archive_partitions": 618,
   "archive_rows": 416430,
   "archive_status": "deferred_to_daily_verification",
-  "checked_at": "2026-08-14T18:06:58.959711+00:00",
+  "checked_at": "2026-08-14T18:49:42.177407+00:00",
   "collector_version": "10.7.6",
-  "database_bytes": 23269376,
-  "warning_count": 4,
+  "database_bytes": 23322624,
+  "warning_count": 7,
   "warnings": [
     {
       "active": false,
@@ -22,19 +22,46 @@
     },
     {
       "active": true,
-      "age_minutes": 210.7,
-      "airport": "EPWA",
+      "age_minutes": 200.9,
+      "airport": "EHAM",
       "data_type": "market",
-      "message": "EPWA: market is 211 minutes old.",
+      "message": "EHAM: market is 201 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 210.5,
+      "age_minutes": 253.4,
+      "airport": "EPWA",
+      "data_type": "market",
+      "message": "EPWA: market is 253 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 200.8,
+      "airport": "LTAC",
+      "data_type": "market",
+      "message": "LTAC: market is 201 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 253.2,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 211 minutes old.",
+      "message": "LTFM: market is 253 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 200.7,
+      "airport": "EDDM",
+      "data_type": "market",
+      "message": "EDDM: market is 201 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     }
