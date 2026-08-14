@@ -1,0 +1,42 @@
+name: 3 - Backfill historical market prices
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Past market days to sample (start with 14–30)"
+        required: true
+        default: "30"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weatherman-database
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Weatherman
+        run: pip install -r requirements.txt
+
+      - name: Sample and persist historical prices on the newest database
+        run: >-
+          bash scripts/run_database_job.sh
+          "data: historical market-price samples"
+          python -m weatherman.cli backfill-market-history --days "${{ inputs.days }}"

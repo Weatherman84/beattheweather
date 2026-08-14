@@ -1,0 +1,30 @@
+{
+  "active_warning_count": 2,
+  "archive_partitions": 618,
+  "archive_rows": 416430,
+  "archive_status": "deferred_to_daily_verification",
+  "checked_at": "2026-08-14T12:17:07.171163+00:00",
+  "collector_version": "10.7.6",
+  "database_bytes": 20262912,
+  "warning_count": 3,
+  "warnings": [
+    {
+      "active": false,
+      "message": "Historical 24-hour collector gap: 150 minutes.",
+      "severity": "warning",
+      "type": "collector_historical_gap"
+    },
+    {
+      "active": true,
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 48 minutes.",
+      "severity": "error",
+      "type": "collector_gap"
+    },
+    {
+      "active": true,
+      "message": "No collector run has been stored for 22 minutes.",
+      "severity": "error",
+      "type": "collector_missing_recent"
+    }
+  ]
+}

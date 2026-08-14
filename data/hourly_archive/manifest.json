@@ -1,0 +1,167 @@
+{
+  "columns": [
+    "airport",
+    "model",
+    "run_at",
+    "valid_at",
+    "temp_c",
+    "dewpoint_c",
+    "cloud_cover",
+    "wind_kph",
+    "wind_direction",
+    "radiation_wm2",
+    "temp_850hpa_c"
+  ],
+  "file_count": 16,
+  "files": [
+    {
+      "bytes": 57878,
+      "file": "hourly-2026-07-19.csv.gz",
+      "maximum_run_at": "2026-07-19 23:02:15.484278",
+      "minimum_run_at": "2026-07-19 15:58:07.514335",
+      "rows": 5145,
+      "run_date": "2026-07-19",
+      "sha256": "66c9618aff50b58d77f2fc6e4dc5d3c9939adfaf40935aef24ea9bd38420677d"
+    },
+    {
+      "bytes": 126097,
+      "file": "hourly-2026-07-20.csv.gz",
+      "maximum_run_at": "2026-07-20 22:06:53.442797",
+      "minimum_run_at": "2026-07-20 08:26:25.867461",
+      "rows": 15370,
+      "run_date": "2026-07-20",
+      "sha256": "b0ca647319603200d07eec2aa0753198e6a0b656f4e1f827fb5fe231003604fc"
+    },
+    {
+      "bytes": 91344,
+      "file": "hourly-2026-07-21.csv.gz",
+      "maximum_run_at": "2026-07-21 21:57:49.765348",
+      "minimum_run_at": "2026-07-21 09:39:55.014759",
+      "rows": 8544,
+      "run_date": "2026-07-21",
+      "sha256": "fac57827c9cc1b02e100ab8d6f3e6a2d4e80ece190365b2730642b2093799014"
+    },
+    {
+      "bytes": 68182,
+      "file": "hourly-2026-07-22.csv.gz",
+      "maximum_run_at": "2026-07-22 22:05:39.444426",
+      "minimum_run_at": "2026-07-22 09:38:41.136466",
+      "rows": 5120,
+      "run_date": "2026-07-22",
+      "sha256": "30caf80c3ba674f3285fd70ec150bf02cea1dceb7343f031306ebbda96220056"
+    },
+    {
+      "bytes": 69513,
+      "file": "hourly-2026-07-23.csv.gz",
+      "maximum_run_at": "2026-07-23 22:11:11.518399",
+      "minimum_run_at": "2026-07-23 09:32:30.533414",
+      "rows": 5119,
+      "run_date": "2026-07-23",
+      "sha256": "ad85c69c95e66af7f30916c5880a4114dadfec7dd95c6dea19127cbd1049b936"
+    },
+    {
+      "bytes": 71737,
+      "file": "hourly-2026-07-24.csv.gz",
+      "maximum_run_at": "2026-07-24 20:05:58.245068",
+      "minimum_run_at": "2026-07-24 09:13:42.851210",
+      "rows": 5113,
+      "run_date": "2026-07-24",
+      "sha256": "012064c6f8320acf3eb69bbf5144facea04d369812625ecc030c392af6d2c9e0"
+    },
+    {
+      "bytes": 87257,
+      "file": "hourly-2026-07-25.csv.gz",
+      "maximum_run_at": "2026-07-25 21:24:01.799972",
+      "minimum_run_at": "2026-07-25 06:07:53.666113",
+      "rows": 6801,
+      "run_date": "2026-07-25",
+      "sha256": "fdb1bb0437e90ff8bee0c2d31494e54ff9de76adbe40450aefcd8b3931dffb1d"
+    },
+    {
+      "bytes": 69591,
+      "file": "hourly-2026-07-26.csv.gz",
+      "maximum_run_at": "2026-07-26 19:00:44.372589",
+      "minimum_run_at": "2026-07-26 07:19:44.558340",
+      "rows": 5098,
+      "run_date": "2026-07-26",
+      "sha256": "899a22b3d82c346bf4a0323d47a008ffc6babb3a3d56574bce8a8b1c5905f2ec"
+    },
+    {
+      "bytes": 93958,
+      "file": "hourly-2026-07-27.csv.gz",
+      "maximum_run_at": "2026-07-27 22:33:46.228229",
+      "minimum_run_at": "2026-07-27 10:52:46.251402",
+      "rows": 8423,
+      "run_date": "2026-07-27",
+      "sha256": "97d3f7ee57daf0d7f133337c59c1d27fc927449204862f1cd9cf173e2964dd88"
+    },
+    {
+      "bytes": 109112,
+      "file": "hourly-2026-07-28.csv.gz",
+      "maximum_run_at": "2026-07-28 22:12:26.225691",
+      "minimum_run_at": "2026-07-28 10:13:44.421895",
+      "rows": 10006,
+      "run_date": "2026-07-28",
+      "sha256": "ae04e88794cfd4737cdece84de85a457879de7a9e000127947ca2ce2ab6fde1b"
+    },
+    {
+      "bytes": 110319,
+      "file": "hourly-2026-07-29.csv.gz",
+      "maximum_run_at": "2026-07-29 21:49:08.905666",
+      "minimum_run_at": "2026-07-29 10:17:16.870797",
+      "rows": 10006,
+      "run_date": "2026-07-29",
+      "sha256": "0455cea298eeb1d1651e1918027b2ad22679a00063d978a5dcd2ddfbddd9901f"
+    },
+    {
+      "bytes": 114069,
+      "file": "hourly-2026-07-30.csv.gz",
+      "maximum_run_at": "2026-07-30 22:38:25.899702",
+      "minimum_run_at": "2026-07-30 09:44:55.359329",
+      "rows": 10006,
+      "run_date": "2026-07-30",
+      "sha256": "366300a63db3e9d6594a8a2e795505c330f518dd12d0b6f05df959818c6191d4"
+    },
+    {
+      "bytes": 137477,
+      "file": "hourly-2026-07-31.csv.gz",
+      "maximum_run_at": "2026-07-31 22:09:17.076895",
+      "minimum_run_at": "2026-07-31 07:42:01.601153",
+      "rows": 12473,
+      "run_date": "2026-07-31",
+      "sha256": "537431a1ec949d218f1d828014b6b36be6cb1b3986a648d8c16e0898004aa41b"
+    },
+    {
+      "bytes": 153290,
+      "file": "hourly-2026-08-01.csv.gz",
+      "maximum_run_at": "2026-08-01 20:05:57.603045",
+      "minimum_run_at": "2026-08-01 07:39:44.523632",
+      "rows": 15510,
+      "run_date": "2026-08-01",
+      "sha256": "1a4bc11c8371a7b1c678c4197a5d7b95ad4c029a8e2b4973c5c5ee2b939a7d47"
+    },
+    {
+      "bytes": 161972,
+      "file": "hourly-2026-08-02.csv.gz",
+      "maximum_run_at": "2026-08-02 21:29:27.998833",
+      "minimum_run_at": "2026-08-02 07:17:04.188436",
+      "rows": 16486,
+      "run_date": "2026-08-02",
+      "sha256": "74685ffa6dcf96d1b0c0ba1b03b1c4c140d0a5f734d6b14646a881a956cc7d26"
+    },
+    {
+      "bytes": 67905,
+      "file": "hourly-2026-08-03.csv.gz",
+      "maximum_run_at": "2026-08-03 17:35:17.231338",
+      "minimum_run_at": "2026-08-03 12:39:31.279697",
+      "rows": 4995,
+      "run_date": "2026-08-03",
+      "sha256": "08fcff0c48676263cbc87d30038042b8187ff7dbe8cf9b3aede165fc18bdca29"
+    }
+  ],
+  "maximum_run_at": "2026-08-03 17:35:17.231338",
+  "minimum_run_at": "2026-07-19 15:58:07.514335",
+  "schema_version": 1,
+  "total_bytes": 1589701,
+  "total_rows": 144215
+}

@@ -1,0 +1,44 @@
+name: 1 - Initial history backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of historical days"
+        required: true
+        default: "365"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weatherman-database
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Weatherman
+        run: pip install -r requirements.txt
+
+      - name: Discover, backfill and persist on the newest database
+        run: >-
+          bash scripts/run_database_job.sh
+          "data: initial historical backfill"
+          python -m weatherman.cli sync-airport-universe --include-closed
+          --then
+          python -m weatherman.cli backfill --days "${{ inputs.days }}"

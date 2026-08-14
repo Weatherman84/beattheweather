@@ -1,0 +1,79 @@
+name: 0B - Emergency compact main
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type exactly COMPACT MAIN V10.7.6
+        required: true
+        type: string
+      backup_downloaded:
+        description: I downloaded the green 0A backup artifact
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weatherman-database
+  cancel-in-progress: false
+
+jobs:
+  compact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check explicit recovery confirmation
+        shell: bash
+        env:
+          RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
+          BACKUP_DOWNLOADED: ${{ inputs.backup_downloaded }}
+        run: |
+          set -euo pipefail
+          test "$RECOVERY_CONFIRMATION" = "COMPACT MAIN V10.7.6"
+          test "$BACKUP_DOWNLOADED" = "true"
+
+      - name: Download the current main snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Verify the protected snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -qx 'version = "10.7.6"' pyproject.toml
+          grep -qx '__version__ = "10.7.6"' src/weatherman/__init__.py
+          test -s data/weatherman.db
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Replace main history with the exact same file tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Weatherman Recovery"
+          git config user.email "actions@users.noreply.github.com"
+
+          expected_remote="$(git rev-parse HEAD)"
+          observed_remote="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$expected_remote" = "$observed_remote"
+
+          original_tree="$(git rev-parse 'HEAD^{tree}')"
+          new_commit="$(printf '%s\n' 'Clean deployment baseline v10.7.6' | git commit-tree "$original_tree")"
+          compacted_tree="$(git rev-parse "${new_commit}^{tree}")"
+          test "$original_tree" = "$compacted_tree"
+
+          git push origin "$new_commit:refs/heads/main" \
+            "--force-with-lease=refs/heads/main:$expected_remote"
+
+          {
+            echo "## Main history compacted"
+            echo
+            echo "Old commit: \`$expected_remote\`"
+            echo "New root commit: \`$new_commit\`"
+            echo "Unchanged tree: \`$original_tree\`"
+          } >> "$GITHUB_STEP_SUMMARY"
