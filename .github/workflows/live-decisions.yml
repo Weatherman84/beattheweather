@@ -3,7 +3,8 @@ name: 5 - Consolidated ten-minute collector
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *"
+    # Offset from the top of the hour, where GitHub documents peak scheduler load.
+    - cron: "7,17,27,37,47,57 * * * *"
 
 permissions:
   contents: write
@@ -27,8 +28,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Record the Actions queue timestamp
-        run: echo "WEATHERMAN_SCHEDULED_AT=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }} --jq .created_at)" >> "$GITHUB_ENV"
+      - name: Record distinct scheduler timestamps
+        run: |
+          echo "WEATHERMAN_EVENT_CREATED_AT=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }} --jq .created_at)" >> "$GITHUB_ENV"
+          echo "WEATHERMAN_RUN_STARTED_AT=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }} --jq .run_started_at)" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Collect every due source through the single writer
