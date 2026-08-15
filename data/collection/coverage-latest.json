@@ -4,20 +4,20 @@
   "archive_rows": 438208,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
-    "expected_slots": 9,
+    "expected_slots": 11,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 37.850480000000005,
+    "median_execution_seconds": 26.295684,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 299.0,
-    "missing_slots": 5,
-    "observed_slots": 4,
-    "p95_execution_seconds": 145.98610949999997,
-    "runs": 4,
-    "trigger_coverage": 0.4444444444444444
+    "median_trigger_delay_seconds": 377.0,
+    "missing_slots": 6,
+    "observed_slots": 5,
+    "p95_execution_seconds": 140.304884,
+    "runs": 5,
+    "trigger_coverage": 0.45454545454545453
   },
-  "checked_at": "2026-08-15T09:32:10.436996+00:00",
+  "checked_at": "2026-08-15T09:55:31.090461+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 20852736,
+  "database_bytes": 21241856,
   "warning_count": 4,
   "warnings": [
     {
@@ -34,19 +34,19 @@
     },
     {
       "active": true,
-      "age_minutes": 1046.5,
+      "age_minutes": 1069.9,
       "airport": "LEMD",
       "data_type": "market",
-      "message": "LEMD: market is 1047 minutes old.",
+      "message": "LEMD: market is 1070 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 1083.2,
+      "age_minutes": 1106.6,
       "airport": "EDDM",
       "data_type": "market",
-      "message": "EDDM: market is 1083 minutes old.",
+      "message": "EDDM: market is 1107 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     }
