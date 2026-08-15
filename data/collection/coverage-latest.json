@@ -4,20 +4,20 @@
   "archive_rows": 438208,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
-    "expected_slots": 19,
+    "expected_slots": 22,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 38.42303,
+    "median_execution_seconds": 39.606823,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 415.0,
-    "missing_slots": 11,
-    "observed_slots": 8,
-    "p95_execution_seconds": 123.89359414999994,
-    "runs": 8,
-    "trigger_coverage": 0.42105263157894735
+    "median_trigger_delay_seconds": 377.0,
+    "missing_slots": 13,
+    "observed_slots": 9,
+    "p95_execution_seconds": 118.30270959999996,
+    "runs": 9,
+    "trigger_coverage": 0.4090909090909091
   },
-  "checked_at": "2026-08-15T11:18:10.779888+00:00",
+  "checked_at": "2026-08-15T11:40:43.926773+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 23142400,
+  "database_bytes": 23629824,
   "warning_count": 2,
   "warnings": [
     {
