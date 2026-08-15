@@ -4,20 +4,20 @@
   "archive_rows": 438208,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
-    "expected_slots": 56,
+    "expected_slots": 58,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 38.0888165,
+    "median_execution_seconds": 39.409224,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 313.5,
-    "missing_slots": 36,
-    "observed_slots": 20,
-    "p95_execution_seconds": 84.06916895000006,
-    "runs": 20,
-    "trigger_coverage": 0.35714285714285715
+    "median_trigger_delay_seconds": 318.0,
+    "missing_slots": 37,
+    "observed_slots": 21,
+    "p95_execution_seconds": 163.029786,
+    "runs": 21,
+    "trigger_coverage": 0.3620689655172414
   },
-  "checked_at": "2026-08-15T17:18:29.366582+00:00",
+  "checked_at": "2026-08-15T17:48:15.780156+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 28176384,
+  "database_bytes": 28332032,
   "warning_count": 4,
   "warnings": [
     {
@@ -34,19 +34,19 @@
     },
     {
       "active": true,
-      "age_minutes": 221.5,
+      "age_minutes": 251.2,
       "airport": "LTFM",
       "data_type": "forecast",
-      "message": "LTFM: forecast is 221 minutes old.",
+      "message": "LTFM: forecast is 251 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 199.5,
+      "age_minutes": 229.2,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 199 minutes old.",
+      "message": "LTFM: market is 229 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     }
