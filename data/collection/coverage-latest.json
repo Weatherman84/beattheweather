@@ -3,20 +3,20 @@
   "archive_partitions": 618,
   "archive_rows": 416430,
   "archive_status": "deferred_to_daily_verification",
-  "checked_at": "2026-08-14T23:53:32.414018+00:00",
+  "checked_at": "2026-08-15T00:27:34.260805+00:00",
   "collector_version": "10.7.6",
-  "database_bytes": 23437312,
+  "database_bytes": 23449600,
   "warning_count": 2,
   "warnings": [
     {
       "active": false,
-      "message": "Historical 24-hour collector gap: 150 minutes.",
+      "message": "Historical 24-hour collector gap: 118 minutes.",
       "severity": "warning",
       "type": "collector_historical_gap"
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 23 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 34 minutes.",
       "severity": "error",
       "type": "collector_gap"
     }
