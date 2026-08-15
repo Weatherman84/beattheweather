@@ -591,7 +591,7 @@ def checkpoint_completeness(
                         "status": (
                             str(selected.get("checkpoint_status") or "captured")
                             if selected is not None
-                            else "MISSING"
+                            else "unavailable"
                         ),
                         "reconstructed": (
                             bool(selected.get("checkpoint_reconstructed", False))
@@ -599,7 +599,57 @@ def checkpoint_completeness(
                             else False
                         ),
                         "source_age_minutes": (
-                            selected.get("checkpoint_gap_minutes")
+                            selected.get("source_age_at_checkpoint_minutes")
+                            if selected is not None
+                            and pd.notna(
+                                selected.get("source_age_at_checkpoint_minutes")
+                            )
+                            else selected.get("checkpoint_gap_minutes")
+                            if selected is not None
+                            else None
+                        ),
+                        "source_age_min_minutes": (
+                            selected.get("source_age_min_minutes")
+                            if selected is not None
+                            else None
+                        ),
+                        "source_age_median_minutes": (
+                            selected.get("source_age_median_minutes")
+                            if selected is not None
+                            else None
+                        ),
+                        "source_age_max_minutes": (
+                            selected.get("source_age_max_minutes")
+                            if selected is not None
+                            else None
+                        ),
+                        "freshness_status": (
+                            str(selected.get("freshness_status") or "unavailable")
+                            if selected is not None
+                            else "unavailable"
+                        ),
+                        "evidence_class": (
+                            str(selected.get("evidence_class") or "unavailable")
+                            if selected is not None
+                            else "unavailable"
+                        ),
+                        "coverage_ratio": (
+                            selected.get("source_coverage_ratio")
+                            if selected is not None
+                            else None
+                        ),
+                        "forecast_run_at": (
+                            selected.get("forecast_run_at")
+                            if selected is not None
+                            else None
+                        ),
+                        "forecast_available_at": (
+                            selected.get("forecast_available_at")
+                            if selected is not None
+                            else None
+                        ),
+                        "forecast_fetched_at": (
+                            selected.get("forecast_fetched_at")
                             if selected is not None
                             else None
                         ),

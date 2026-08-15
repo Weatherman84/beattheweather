@@ -540,6 +540,7 @@ def test_shadow_collection_stays_research_only_without_an_actionable_basket():
     }
     nowcast = SimpleNamespace(
         probabilities=fair,
+        stage_probabilities={"Raw model mean": fair},
         forecast_confidence=85,
         day_status=SimpleNamespace(is_locked=False, phase="heating"),
         metar_pending=False,

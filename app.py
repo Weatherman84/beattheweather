@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.7.6")
+discard_stale_weatherman_modules("10.7.7")
 
 import pandas as pd
 import plotly.express as px
@@ -253,6 +253,22 @@ if coverage_report_path.exists():
                         f"• {prefix}: "
                         f"{item.get('message', 'Unspecified collection warning')}"
                     )
+        cadence = coverage_report.get("cadence") or {}
+        if cadence.get("runs"):
+            with st.sidebar.expander("Collector cadence · last 24 h"):
+                st.write(f"Runs: {int(cadence.get('runs', 0))}")
+                st.write(
+                    "Trigger coverage: "
+                    f"{float(cadence.get('trigger_coverage', 0.0)):.0%}"
+                )
+                st.write(
+                    "Missing inferred slots: "
+                    f"{int(cadence.get('missing_slots', 0))}"
+                )
+                runtime = cadence.get("median_execution_seconds")
+                if runtime is not None:
+                    st.write(f"Median runtime: {float(runtime) / 60:.1f} min")
+                st.caption(str(cadence.get("measurement", "")))
 
 
 @st.fragment(run_every=60)
@@ -1752,18 +1768,34 @@ with tab_accuracy:
         shown_health["source_age_minutes"] = shown_health.source_age_minutes.map(
             lambda value: f"{float(value):.0f} min" if pd.notna(value) else "—"
         )
+        shown_health["coverage_ratio"] = shown_health.coverage_ratio.map(
+            lambda value: f"{float(value):.0%}" if pd.notna(value) else "—"
+        )
+        display_columns = [
+            "target_date",
+            "checkpoint",
+            "checkpoint_at",
+            "status",
+            "freshness_status",
+            "evidence_class",
+            "source_age_minutes",
+            "coverage_ratio",
+            "models",
+        ]
         st.dataframe(
-            shown_health.rename(
+            shown_health[display_columns].rename(
                 columns={
                     "target_date": "Target day",
                     "checkpoint": "Checkpoint",
                     "checkpoint_at": "Local cut-off",
                     "status": "Status",
-                    "reconstructed": "Catch-up",
+                    "freshness_status": "Freshness",
+                    "evidence_class": "Evidence",
                     "source_age_minutes": "Source age",
+                    "coverage_ratio": "Coverage",
                     "models": "Models",
                 }
-            ).drop(columns=["airport"]),
+            ),
             hide_index=True,
             width="stretch",
         )

@@ -1201,9 +1201,10 @@ elif module == "Universe & coverage":
             ["airport", "checkpoint"], as_index=False
         ).agg(
             expected=("status", "size"),
-            captured=("status", lambda values: int((values != "MISSING").sum())),
+            captured=("status", lambda values: int((values != "unavailable").sum())),
             reconstructed=("reconstructed", "sum"),
             median_source_age_minutes=("source_age_minutes", "median"),
+            median_coverage_ratio=("coverage_ratio", "median"),
         )
         coverage["complete"] = coverage.captured / coverage.expected
         st.dataframe(coverage, hide_index=True, width="stretch")

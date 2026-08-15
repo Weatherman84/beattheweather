@@ -45,10 +45,11 @@ def test_database_retry_helper_reruns_instead_of_merging_sqlite() -> None:
 
 def test_live_workflow_runs_consolidated_collector_every_ten_minutes() -> None:
     workflow = (ROOT / ".github" / "workflows" / "live-decisions.yml").read_text()
-    assert 'cron: "*/10 * * * *"' in workflow
+    assert 'cron: "7,17,27,37,47,57 * * * *"' in workflow
     assert "Consolidated ten-minute collector" in workflow
     assert "run-collector" in workflow
-    assert "WEATHERMAN_SCHEDULED_AT" in workflow
+    assert "WEATHERMAN_EVENT_CREATED_AT" in workflow
+    assert "WEATHERMAN_RUN_STARTED_AT" in workflow
     assert 'WEATHERMAN_FAST_DATABASE_JOB: "1"' in workflow
 
 

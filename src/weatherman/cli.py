@@ -16,6 +16,10 @@ from .service import (
     sync_airport_universe,
 )
 from .maintenance import maintain_sqlite_database
+from .research_diagnostics import (
+    peak_lock_research_report,
+    replay_readiness_report,
+)
 
 
 def main() -> None:
@@ -27,7 +31,7 @@ def main() -> None:
     collector_cmd = subs.add_parser("run-collector")
     collector_cmd.add_argument("--airports", nargs="*")
     collector_cmd.add_argument("--force-models", action="store_true")
-    collector_cmd.add_argument("--skip-known-taf-gap", action="store_true")
+    collector_cmd.add_argument("--recover-known-taf-gap", action="store_true")
     backfill_cmd = subs.add_parser("backfill")
     backfill_cmd.add_argument("--airports", nargs="*")
     backfill_cmd.add_argument("--days", type=int, default=365)
@@ -62,12 +66,16 @@ def main() -> None:
     archive_cmd.add_argument("--before")
     audit_cmd = subs.add_parser("audit-hourly-archive")
     audit_cmd.add_argument("--archive-directory", type=Path, default=Path("data/hourly_archive"))
+    peak_lock_cmd = subs.add_parser("research-peak-lock")
+    peak_lock_cmd.add_argument("--report", type=Path)
+    readiness_cmd = subs.add_parser("replay-readiness")
+    readiness_cmd.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.command == "run-collector":
         result = run_collector(
             args.airports,
             force_models=args.force_models,
-            recover_known_gap=not args.skip_known_taf_gap,
+            recover_known_gap=args.recover_known_taf_gap,
         )
     elif args.command == "collect":
         result = collect(args.airports, args.days)
@@ -113,6 +121,14 @@ def main() -> None:
         )
     elif args.command == "audit-hourly-archive":
         result = rebuild_manifest(args.archive_directory)
+    elif args.command == "research-peak-lock":
+        result = peak_lock_research_report(
+            **({"report_path": args.report} if args.report is not None else {})
+        )
+    elif args.command == "replay-readiness":
+        result = replay_readiness_report(
+            **({"report_path": args.report} if args.report is not None else {})
+        )
     else:
         result = backfill(args.days, args.airports)
     print(result)

@@ -45,6 +45,7 @@ from .settings import ROOT, trading_airports
 
 
 COLLECTOR_INTERVAL_MINUTES = 10
+COLLECTOR_SLOT_OFFSET_MINUTES = 7
 LATEST_COVERAGE_REPORT = ROOT / "data" / "collection" / "coverage-latest.json"
 STAGE1_RECOVERY_REPORT = (
     ROOT / "data" / "collection" / "recovery-2026-08-10-11.json"
@@ -55,13 +56,59 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def _environment_time(name: str) -> datetime | None:
+    configured = os.getenv(name, "").strip()
+    if not configured:
+        return None
+    return _utc(datetime.fromisoformat(configured.replace("Z", "+00:00")))
+
+
+def _expected_slot_at(event_created_at: datetime) -> datetime:
+    """Infer the most recent declared :07/:17/... cron slot.
+
+    GitHub does not expose the intended cron slot in the run payload. This value is
+    therefore explicitly an inference; event creation and queue start remain stored
+    separately so it cannot be mistaken for an observed scheduler timestamp.
+    """
+    explicit = _environment_time("WEATHERMAN_EXPECTED_SLOT_AT")
+    if explicit is not None:
+        return explicit
+    created = _utc(event_created_at)
+    anchor = created.replace(
+        minute=COLLECTOR_SLOT_OFFSET_MINUTES,
+        second=0,
+        microsecond=0,
+    )
+    if created < anchor:
+        anchor -= timedelta(minutes=COLLECTOR_INTERVAL_MINUTES)
+    intervals = int(
+        (created - anchor).total_seconds() // (COLLECTOR_INTERVAL_MINUTES * 60)
+    )
+    return anchor + timedelta(minutes=intervals * COLLECTOR_INTERVAL_MINUTES)
+
+
+def _scheduler_times(
+    started_at: datetime,
+    *,
+    trigger: str,
+) -> tuple[datetime, datetime, datetime]:
+    event_created = (
+        _environment_time("WEATHERMAN_EVENT_CREATED_AT")
+        or _environment_time("WEATHERMAN_SCHEDULED_AT")
+        or started_at
+    )
+    queue_started = _environment_time("WEATHERMAN_RUN_STARTED_AT") or event_created
+    expected = (
+        _expected_slot_at(event_created)
+        if trigger == "schedule"
+        else _environment_time("WEATHERMAN_EXPECTED_SLOT_AT") or event_created
+    )
+    return expected, event_created, queue_started
+
+
 def _scheduled_at(started_at: datetime) -> datetime:
-    configured = os.getenv("WEATHERMAN_SCHEDULED_AT", "").strip()
-    if configured:
-        parsed = datetime.fromisoformat(configured.replace("Z", "+00:00"))
-        return _utc(parsed)
-    minute = started_at.minute - started_at.minute % COLLECTOR_INTERVAL_MINUTES
-    return started_at.replace(minute=minute, second=0, microsecond=0)
+    """Backward-compatible helper used by older callers and tests."""
+    return _scheduler_times(started_at, trigger="schedule")[0]
 
 
 def _run_id() -> str:
@@ -98,6 +145,8 @@ def _start_run(
     run_id: str,
     *,
     scheduled_at: datetime,
+    event_created_at: datetime | None = None,
+    queue_started_at: datetime | None = None,
     started_at: datetime,
     trigger: str,
     airport_codes: list[str],
@@ -129,12 +178,24 @@ def _start_run(
             CollectionRun(
                 run_id=run_id,
                 scheduled_at=scheduled_at,
+                event_created_at=event_created_at,
+                queue_started_at=queue_started_at,
                 started_at=started_at,
                 collector_version=__version__,
                 trigger=trigger,
                 overall_status="running",
                 scheduler_drift_seconds=max(
                     0.0, (started_at - scheduled_at).total_seconds()
+                ),
+                trigger_delay_seconds=(
+                    max(0.0, (event_created_at - scheduled_at).total_seconds())
+                    if event_created_at is not None
+                    else None
+                ),
+                queue_delay_seconds=(
+                    max(0.0, (queue_started_at - event_created_at).total_seconds())
+                    if event_created_at is not None and queue_started_at is not None
+                    else None
                 ),
                 airports_json=_json(airport_codes),
                 source_status_json="{}",
@@ -161,6 +222,9 @@ def _finish_run(
         if row is None:
             return
         row.ended_at = ended_at
+        row.execution_seconds = max(
+            0.0, (ended_at - _utc(row.started_at)).total_seconds()
+        )
         row.overall_status = status
         row.error_reason = error_reason
         row.source_status_json = _json(
@@ -184,6 +248,28 @@ def _finish_run(
                 for item in coverage
             }
         )
+        row.provider_metrics_json = _json(
+            {
+                "aviation": results.get("aviation_provider_metrics", {}),
+                "live": (
+                    results.get("live_decisions", {}).get(
+                        "provider_timings_seconds", {}
+                    )
+                    if isinstance(results.get("live_decisions"), dict)
+                    else {}
+                ),
+                "status": (
+                    results.get("live_decisions", {}).get("provider_status", {})
+                    if isinstance(results.get("live_decisions"), dict)
+                    else {}
+                ),
+            }
+        )
+        row.airport_metrics_json = _json(
+            results.get("live_decisions", {}).get("airport_timings_seconds", {})
+            if isinstance(results.get("live_decisions"), dict)
+            else {}
+        )
         for item in coverage:
             session.add(
                 CollectionCoverage(
@@ -196,6 +282,9 @@ def _finish_run(
                     rows_read=int(item.get("rows_read", 0)),
                     rows_written=int(item.get("rows_written", 0)),
                     source_age_minutes=item.get("source_age_minutes"),
+                    duration_seconds=item.get("duration_seconds"),
+                    attempts=item.get("attempts"),
+                    metrics_json=_json(item.get("metrics", {})),
                     reason=item.get("reason"),
                 )
             )
@@ -242,20 +331,26 @@ def run_collector(
     now: datetime | None = None,
     trigger: str | None = None,
     force_models: bool = False,
-    recover_known_gap: bool = True,
+    recover_known_gap: bool = False,
 ) -> dict[str, object]:
     """Run every scheduled write through one auditable Python entry point."""
     init_db()
     started_at = _utc(now or datetime.now(timezone.utc))
-    scheduled_at = _scheduled_at(started_at)
+    run_trigger = trigger or os.getenv("GITHUB_EVENT_NAME", "manual")
+    scheduled_at, event_created_at, queue_started_at = _scheduler_times(
+        started_at,
+        trigger=run_trigger,
+    )
     run_id = _run_id()
     catalog = trading_airports()
     requested = [code for code in (airport_codes or list(catalog)) if code in catalog]
     _start_run(
         run_id,
         scheduled_at=scheduled_at,
+        event_created_at=event_created_at,
+        queue_started_at=queue_started_at,
         started_at=started_at,
-        trigger=trigger or os.getenv("GITHUB_EVENT_NAME", "manual"),
+        trigger=run_trigger,
         airport_codes=requested,
     )
     coverage: list[dict[str, object]] = []
@@ -264,6 +359,7 @@ def run_collector(
         aviation = collect_aviation_journal(requested, now=started_at)
         coverage.extend(aviation["coverage"])
         results["aviation"] = aviation["counts"]
+        results["aviation_provider_metrics"] = aviation.get("provider_metrics", {})
         results["taf_gap_recovery"] = (
             _recover_madrid_taf_gap() if recover_known_gap else {"status": "skipped"}
         )
@@ -281,6 +377,7 @@ def run_collector(
             now=started_at,
             aviation_already_collected=True,
         )
+        coverage.extend(results["live_decisions"].get("provider_coverage", []))
         _finish_run(run_id, status="success", results=results, coverage=coverage)
     except Exception as exc:
         reason = f"{type(exc).__name__}: {exc}"
@@ -295,6 +392,8 @@ def run_collector(
     return {
         "run_id": run_id,
         "scheduled_at": scheduled_at.isoformat(),
+        "event_created_at": event_created_at.isoformat(),
+        "queue_started_at": queue_started_at.isoformat(),
         "started_at": started_at.isoformat(),
         "status": "success",
         **results,
@@ -373,6 +472,12 @@ def coverage_audit(
     init_db()
     checked_at = _utc(now or datetime.now(timezone.utc))
     warnings: list[dict[str, object]] = []
+    cadence_metrics: dict[str, object] = {
+        "measurement": "no v10.7.7 scheduler lineage available",
+        "runs": 0,
+        "expected_slots": 0,
+        "missing_slots": 0,
+    }
     catalog = trading_airports()
     with Session() as session:
         runs = pd.read_sql(
@@ -447,7 +552,10 @@ def coverage_audit(
                         "severity": "error",
                         "type": "collector_failed",
                         "active": not bool(later_success),
-                        "message": f"Run {row.run_id} ended as {row.overall_status}: {row.error_reason}",
+                        "message": (
+                            f"Run {row.run_id} ended as {row.overall_status}: "
+                            f"{row.error_reason}"
+                        ),
                     }
                 )
             late = runs[runs.scheduler_drift_seconds > 15 * 60]
@@ -459,9 +567,68 @@ def coverage_audit(
                         "active": bool(
                             row.scheduled_at >= checked_at - timedelta(hours=1)
                         ),
-                        "message": f"Run {row.run_id} started {row.scheduler_drift_seconds / 60:.0f} minutes late.",
+                        "message": (
+                            f"Run {row.run_id} started "
+                            f"{row.scheduler_drift_seconds / 60:.0f} minutes late."
+                        ),
                     }
                 )
+            lineage = runs[
+                pd.to_datetime(
+                    runs.get("event_created_at"), utc=True, errors="coerce"
+                ).notna()
+            ].copy()
+            if not lineage.empty:
+                for column in (
+                    "event_created_at",
+                    "queue_started_at",
+                    "started_at",
+                    "ended_at",
+                ):
+                    lineage[column] = pd.to_datetime(
+                        lineage[column], utc=True, errors="coerce"
+                    )
+                first_slot = lineage.scheduled_at.min()
+                last_slot = lineage.scheduled_at.max()
+                expected_slots = int(
+                    (last_slot - first_slot).total_seconds()
+                    // (COLLECTOR_INTERVAL_MINUTES * 60)
+                ) + 1
+                observed_slots = lineage.scheduled_at.nunique()
+                runtime = pd.to_numeric(
+                    lineage.execution_seconds, errors="coerce"
+                ).dropna()
+                trigger_delay = pd.to_numeric(
+                    lineage.trigger_delay_seconds, errors="coerce"
+                ).dropna()
+                queue_delay = pd.to_numeric(
+                    lineage.queue_delay_seconds, errors="coerce"
+                ).dropna()
+                cadence_metrics = {
+                    "measurement": (
+                        "Expected slots are inferred from the declared offset cron; "
+                        "GitHub does not expose dropped-trigger causes."
+                    ),
+                    "runs": int(len(lineage)),
+                    "expected_slots": expected_slots,
+                    "observed_slots": int(observed_slots),
+                    "missing_slots": max(0, expected_slots - int(observed_slots)),
+                    "trigger_coverage": (
+                        float(observed_slots / expected_slots) if expected_slots else 0.0
+                    ),
+                    "median_trigger_delay_seconds": (
+                        float(trigger_delay.median()) if not trigger_delay.empty else None
+                    ),
+                    "median_queue_delay_seconds": (
+                        float(queue_delay.median()) if not queue_delay.empty else None
+                    ),
+                    "median_execution_seconds": (
+                        float(runtime.median()) if not runtime.empty else None
+                    ),
+                    "p95_execution_seconds": (
+                        float(runtime.quantile(0.95)) if not runtime.empty else None
+                    ),
+                }
 
         for code, airport in catalog.items():
             def source_frame(model):
@@ -592,6 +759,7 @@ def coverage_audit(
         "archive_rows": int(manifest.get("total_rows", 0)),
         "warning_count": len(warnings),
         "active_warning_count": active_warning_count,
+        "cadence": cadence_metrics,
         "warnings": warnings,
     }
     _atomic_json(report_path, report)

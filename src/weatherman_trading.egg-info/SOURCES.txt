@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 src/runtime_bootstrap.py
 src/weatherman/__init__.py
+src/weatherman/actual_quality.py
 src/weatherman/analytics.py
 src/weatherman/catalog.py
 src/weatherman/cli.py
@@ -20,6 +21,7 @@ src/weatherman/providers.py
 src/weatherman/regime_memory.py
 src/weatherman/regime_profiles.py
 src/weatherman/research.py
+src/weatherman/research_diagnostics.py
 src/weatherman/service.py
 src/weatherman/settings.py
 src/weatherman/shadow.py
@@ -55,4 +57,5 @@ tests/test_v1072_checkpoint_reliability.py
 tests/test_v1073_stage1_reliability.py
 tests/test_v1074_actuals_cadence_and_lineage.py
 tests/test_v1075_live_refresh_and_actual_repair.py
+tests/test_v1077_stability_and_research.py
 tests/test_workflows.py

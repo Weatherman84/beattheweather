@@ -91,11 +91,11 @@ festen Checkpoints und schreibt die Live-Entscheidungsstände. Fällige Modelle 
 über denselben kontrollierten Pfad aktualisiert. Workflow 2 bleibt der manuelle
 Vollabruf; Workflow 4 ist nur noch ein manueller Fallback.
 
-Wenn du auf Version 10.7.6 aktualisierst, warte den grünen Test ab und starte danach
-einmal **5 - Consolidated ten-minute collector**. Dieser Lauf repariert abgeschlossene
-Stations-Actuals jetzt unabhängig vom Trading-Fenster aus dem vorhandenen METAR-Archiv,
-ohne jüngere Produktionsdaten zu ersetzen. Starte anschließend einmal
-**8 - Daily archive verification and SQLite maintenance** und boote Streamlit neu.
+Wenn du auf Version 10.7.7 aktualisierst, warte den grünen Test ab und starte danach
+einmal **5 - Consolidated ten-minute collector**. Der erste Lauf ergänzt ausschließlich
+neue Metadaten-Spalten und lässt die vorhandenen Tabellenzeilen unverändert. Starte
+anschließend einmal **8 - Daily archive verification and SQLite maintenance** und boote
+Streamlit neu. Workflow 1 und Workflow 7 sind für dieses Update nicht erforderlich.
 
 Der Streamlit-Button **Refresh live trading data** aktualisiert für den ausgewählten
 Airport und Zieltag alle unmittelbar entscheidungsrelevanten Daten: konfigurierte
@@ -635,6 +635,37 @@ erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
 Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grünen Test
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
 **Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
+
+### Stabilitäts- und Research-Update 10.7.7
+
+- Workflow 5 bleibt der einzige geplante Datenbank-Writer. Providerabrufe laufen jetzt
+  mit begrenzter Parallelität und kurzen Live-Timeouts; alle SQLite-Schreibvorgänge bleiben
+  seriell. Die einmalige Madrid-TAF-Reparatur läuft nicht mehr bei jedem Collector-Start.
+- Der Cron liegt auf `:07/:17/:27/:37/:47/:57`, um die Lastspitze zur vollen Stunde zu
+  vermeiden. Das ist eine Entlastung, aber keine Zehn-Minuten-Garantie von GitHub Actions.
+- Jeder neue Lauf trennt Soll-Slot, Event-Erstellung, Queue-Start, Python-Start und Ende.
+  Provider- und Airport-Laufzeiten, Retries, Status und fehlende Slots werden im
+  Coverage-Bericht ausgewiesen.
+- Neue feste Checkpoints speichern verwendeten Forecast-Lauf, Verfügbarkeits- und
+  Abrufzeit, konservatives Quellalter, Coverage, Freshness und Evidenzklasse. `scheduled`,
+  `reconstructed-causal` und `unavailable` bleiben eindeutig getrennt; historische
+  Verfügbarkeit richtet sich weiterhin nach `available_at`.
+- Finale Stations-Actuals können nicht durch provisorische oder Archivwerte ersetzt
+  werden. Provisorische Actuals zählen nicht für OOS-Promotionen. Raw- und
+  Champion-Wahrscheinlichkeit müssen bei neuen Shadow-Zeilen vollständig getrennt sein.
+- Peak-Lock-Ablation und Replay-Readiness sind reine Research-Berichte. Sie schreiben
+  weder Produktionsdaten noch OOS-Zähler, Promotionen oder Engine-Konfiguration.
+
+Für die beiden Research-Berichte sind optional diese rein lesenden Befehle verfügbar:
+
+```bash
+python -m weatherman.cli research-peak-lock
+python -m weatherman.cli replay-readiness
+```
+
+Es gibt keine produktive Forecast-, Bias-, Gewichts-, Regime-, Day-Lock- oder
+Trading-Gate-Änderung. Details, Tests und Rollback stehen in
+`VERSION_HANDOFF_10.7.7.md`.
 
 ### Korrektur in Version 10.7.4 · finale Actuals, echte 10-Minuten-Cadence und Lineage
 

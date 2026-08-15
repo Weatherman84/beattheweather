@@ -32,6 +32,12 @@ class Settings:
     maximum_live_model_age_minutes: int = int(
         os.getenv("MAXIMUM_LIVE_MODEL_AGE_MINUTES", "90")
     )
+    collector_provider_workers: int = int(
+        os.getenv("COLLECTOR_PROVIDER_WORKERS", "12")
+    )
+    collector_provider_timeout_seconds: float = float(
+        os.getenv("COLLECTOR_PROVIDER_TIMEOUT_SECONDS", "8")
+    )
     edge_recommendations_enabled: bool = os.getenv(
         "EDGE_RECOMMENDATIONS_ENABLED",
         "false",

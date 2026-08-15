@@ -216,8 +216,8 @@ def test_checkpoint_completeness_shows_captured_and_missing_rows() -> None:
     assert result.loc["D0 @10", "status"] == "reconstructed-causal"
     assert bool(result.loc["D0 @10", "reconstructed"])
     assert result.loc["D0 @10", "models"] == 5
-    assert result.loc["D0 @06", "status"] == "MISSING"
-    assert result.loc["D-1 @20", "status"] == "MISSING"
+    assert result.loc["D0 @06", "status"] == "unavailable"
+    assert result.loc["D-1 @20", "status"] == "unavailable"
 
 
 def test_research_collector_reconstructs_exact_cutoff_with_provenance(
