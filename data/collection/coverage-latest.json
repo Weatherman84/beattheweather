@@ -4,20 +4,20 @@
   "archive_rows": 438208,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
-    "expected_slots": 24,
+    "expected_slots": 29,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 39.5080235,
+    "median_execution_seconds": 39.606823,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 299.0,
-    "missing_slots": 14,
-    "observed_slots": 10,
-    "p95_execution_seconds": 112.71182504999987,
-    "runs": 10,
-    "trigger_coverage": 0.4166666666666667
+    "median_trigger_delay_seconds": 377.0,
+    "missing_slots": 18,
+    "observed_slots": 11,
+    "p95_execution_seconds": 118.5364155,
+    "runs": 11,
+    "trigger_coverage": 0.3793103448275862
   },
-  "checked_at": "2026-08-15T12:00:09.399758+00:00",
+  "checked_at": "2026-08-15T12:57:57.440876+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 24342528,
+  "database_bytes": 25083904,
   "warning_count": 2,
   "warnings": [
     {
@@ -28,7 +28,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
       "severity": "error",
       "type": "collector_gap"
     }
