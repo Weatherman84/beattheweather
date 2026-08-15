@@ -264,6 +264,26 @@ class ForecastSnapshot(Base):
     checkpoint_gap_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
     checkpoint_reconstructed: Mapped[bool] = mapped_column(Boolean, default=False)
     checkpoint_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    freshness_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    evidence_class: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source_age_at_checkpoint_minutes: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    source_age_min_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_age_median_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_age_max_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expected_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_coverage_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    forecast_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    forecast_available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    forecast_fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     source_provenance_json: Mapped[str] = mapped_column(Text, default="[]")
     taf_report_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     taf_issue_time: Mapped[datetime | None] = mapped_column(
@@ -467,17 +487,28 @@ class CollectionRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    event_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    queue_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     collector_version: Mapped[str] = mapped_column(String(30))
     trigger: Mapped[str] = mapped_column(String(30), default="schedule")
     overall_status: Mapped[str] = mapped_column(String(30), index=True)
     scheduler_drift_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    trigger_delay_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    queue_delay_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    execution_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     airports_json: Mapped[str] = mapped_column(Text, default="[]")
     source_status_json: Mapped[str] = mapped_column(Text, default="{}")
     rows_read_json: Mapped[str] = mapped_column(Text, default="{}")
     rows_written_json: Mapped[str] = mapped_column(Text, default="{}")
     source_age_json: Mapped[str] = mapped_column(Text, default="{}")
+    provider_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    airport_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     persistence_status: Mapped[str] = mapped_column(String(30), default="pending_commit")
     error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -499,6 +530,9 @@ class CollectionCoverage(Base):
     rows_read: Mapped[int] = mapped_column(Integer, default=0)
     rows_written: Mapped[int] = mapped_column(Integer, default=0)
     source_age_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -614,6 +648,18 @@ def init_db() -> None:
                     "checkpoint_gap_minutes": "FLOAT",
                     "checkpoint_reconstructed": "BOOLEAN DEFAULT 0",
                     "checkpoint_status": "VARCHAR(40)",
+                    "freshness_status": "VARCHAR(20)",
+                    "evidence_class": "VARCHAR(20)",
+                    "source_age_at_checkpoint_minutes": "FLOAT",
+                    "source_age_min_minutes": "FLOAT",
+                    "source_age_median_minutes": "FLOAT",
+                    "source_age_max_minutes": "FLOAT",
+                    "expected_model_count": "INTEGER",
+                    "source_model_count": "INTEGER",
+                    "source_coverage_ratio": "FLOAT",
+                    "forecast_run_at": "DATETIME",
+                    "forecast_available_at": "DATETIME",
+                    "forecast_fetched_at": "DATETIME",
                     "source_provenance_json": "TEXT DEFAULT '[]'",
                     "taf_report_id": "INTEGER",
                     "taf_issue_time": "DATETIME",
@@ -642,6 +688,26 @@ def init_db() -> None:
                     "CREATE INDEX IF NOT EXISTS ix_forecast_snapshots_taf_issue_time "
                     "ON forecast_snapshots (taf_issue_time)"
                 )
+            )
+            add_columns(
+                "collection_runs",
+                {
+                    "event_created_at": "DATETIME",
+                    "queue_started_at": "DATETIME",
+                    "trigger_delay_seconds": "FLOAT",
+                    "queue_delay_seconds": "FLOAT",
+                    "execution_seconds": "FLOAT",
+                    "provider_metrics_json": "TEXT DEFAULT '{}'",
+                    "airport_metrics_json": "TEXT DEFAULT '{}'",
+                },
+            )
+            add_columns(
+                "collection_coverage",
+                {
+                    "duration_seconds": "FLOAT",
+                    "attempts": "INTEGER",
+                    "metrics_json": "TEXT DEFAULT '{}'",
+                },
             )
             add_columns(
                 "taf_reports",

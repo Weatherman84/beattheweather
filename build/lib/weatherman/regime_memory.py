@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .actual_quality import settlement_grade_actuals
+
 from .analytics import condition_probability_range, consensus
 from .nowcast import merge_complete_metar_actuals
 
@@ -258,7 +260,7 @@ def _timing_group(value: object) -> str:
 def _actual_map(actuals: pd.DataFrame, target: date) -> dict[date, float]:
     if actuals.empty or not {"target_date", "max_temp_c"}.issubset(actuals.columns):
         return {}
-    frame = actuals.copy()
+    frame = settlement_grade_actuals(actuals)
     frame["target_date"] = pd.to_datetime(frame.target_date, errors="coerce").dt.date
     frame["max_temp_c"] = pd.to_numeric(frame.max_temp_c, errors="coerce")
     frame = frame[(frame.target_date < target) & frame.max_temp_c.notna()]
@@ -424,7 +426,10 @@ def evaluate_promotion_gate(
         on=["airport", "target_date", "captured_at"],
         suffixes=("_challenger", "_champion"),
     )
-    actual = actuals[["airport", "target_date", "max_temp_c"]].copy()
+    actual = settlement_grade_actuals(actuals)
+    if actual.empty:
+        return empty
+    actual = actual[["airport", "target_date", "max_temp_c"]].copy()
     actual["target_date"] = pd.to_datetime(actual.target_date, errors="coerce").dt.date
     actual["max_temp_c"] = pd.to_numeric(actual.max_temp_c, errors="coerce")
     paired = paired.merge(actual, on=["airport", "target_date"], how="inner")

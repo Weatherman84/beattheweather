@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .actual_quality import nonprovisional_actuals, settlement_grade_actuals
+
 from .analytics import (
     Consensus,
     DayStatus,
@@ -570,14 +572,14 @@ def station_calibration_sample(
     """Prefer settlement-grade station maxima over gridded reanalysis targets."""
     if scored.empty or "source_actual" not in scored:
         return scored.copy(), False
-    source = scored.source_actual.fillna("").astype(str).str.lower()
-    station = scored[source.str.contains("metar|station", regex=True)].copy()
+    eligible = nonprovisional_actuals(scored)
+    station = settlement_grade_actuals(eligible)
     station_days = (
         station.target_date.nunique() if "target_date" in station else 0
     )
     if station_days >= max(1, int(minimum_station_days)):
         return station, True
-    return scored.copy(), False
+    return eligible, False
 
 
 def recent_station_residual(scored: pd.DataFrame) -> float | None:

@@ -300,16 +300,26 @@ def _store_current_provider_forecasts(
     airport: dict,
     as_of: datetime,
     days: int = 3,
-) -> dict[str, int]:
-    """Refresh only provider data that is due for a live trading airport."""
+) -> dict[str, object]:
+    """Fetch due providers concurrently and persist their rows serially.
+
+    Only network reads run in worker threads. The caller-owned SQLAlchemy session is
+    never shared with a worker, keeping SQLite on the established single-writer path.
+    """
+    started = time.perf_counter()
     local_target = _as_utc(as_of).astimezone(ZoneInfo(airport["timezone"])).date()
-    counts = {
+    counts: dict[str, object] = {
         "forecasts": 0,
         "hourly_forecasts": 0,
         "open_meteo_polls": 0,
         "meteoblue_polls": 0,
+        "provider_timings_seconds": {},
+        "provider_status": {},
+        "provider_coverage": [],
     }
-    batches: list[dict] = []
+    forecast_rows: list[dict] = []
+    hourly_rows: list[dict] = []
+    tasks: dict[str, tuple[Callable, tuple, dict]] = {}
     open_meteo_due = _source_refresh_due(
         session,
         airport_code=airport_code,
@@ -321,36 +331,26 @@ def _store_current_provider_forecasts(
     if open_meteo_due:
         counts["open_meteo_polls"] = 1
         for model in airport["models"]:
-            try:
-                batches.extend(open_meteo_forecast(airport, model, days))
-            except Exception as exc:
-                print(f"WARN {airport_code}/{model} live model refresh: {exc}")
-            try:
-                hourly_rows = open_meteo_hourly(airport, model, days)
-            except Exception as exc:
-                print(f"WARN {airport_code}/{model} live hourly refresh: {exc}")
-            else:
-                counts["hourly_forecasts"] += _upsert_batch(
-                    session,
-                    HourlyForecast,
-                    hourly_rows,
-                    lambda item: {
-                        "airport": airport_code,
-                        "model": item["model"],
-                        "run_at": item["run_at"],
-                        "valid_at": item["valid_at"],
-                    },
-                    lambda item: {
-                        "temp_c": item["temp_c"],
-                        "dewpoint_c": item["dewpoint_c"],
-                        "cloud_cover": item["cloud_cover"],
-                        "wind_kph": item["wind_kph"],
-                        "wind_direction": item["wind_direction"],
-                        "radiation_wm2": item["radiation_wm2"],
-                        "temp_850hpa_c": item["temp_850hpa_c"],
-                    },
-                    f"{airport_code}/{model} live hourly forecasts",
-                )
+            tasks[f"open-meteo/daily/{model}"] = (
+                open_meteo_forecast,
+                (airport, model, days),
+                {
+                    "attempts": 1,
+                    "timeout": settings.collector_provider_timeout_seconds,
+                    "metadata_attempts": 1,
+                    "metadata_timeout": min(
+                        5.0, settings.collector_provider_timeout_seconds
+                    ),
+                },
+            )
+            tasks[f"open-meteo/hourly/{model}"] = (
+                open_meteo_hourly,
+                (airport, model, days),
+                {
+                    "attempts": 1,
+                    "timeout": settings.collector_provider_timeout_seconds,
+                },
+            )
 
     meteoblue_due = _source_refresh_due(
         session,
@@ -362,15 +362,87 @@ def _store_current_provider_forecasts(
     )
     if meteoblue_due:
         counts["meteoblue_polls"] = 1
+        tasks["meteoblue/daily"] = (
+            meteoblue_forecast,
+            (airport,),
+            {
+                "attempts": 1,
+                "timeout": settings.collector_provider_timeout_seconds,
+            },
+        )
+
+    task_results: dict[str, list[dict]] = {}
+    task_metrics: dict[str, dict[str, object]] = {}
+
+    def fetch(
+        function: Callable, args: tuple, kwargs: dict
+    ) -> tuple[list[dict], str | None, float]:
+        task_started = time.perf_counter()
         try:
-            batches.extend(meteoblue_forecast(airport))
+            rows = list(function(*args, **kwargs) or [])
         except Exception as exc:
-            print(f"WARN {airport_code}/meteoblue live model refresh: {exc}")
+            return [], f"{type(exc).__name__}: {exc}", time.perf_counter() - task_started
+        return rows, None, time.perf_counter() - task_started
+
+    if tasks:
+        workers = max(
+            1,
+            min(settings.collector_provider_workers, len(tasks)),
+        )
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="collector-provider",
+        ) as pool:
+            futures = {
+                pool.submit(fetch, function, args, kwargs): label
+                for label, (function, args, kwargs) in tasks.items()
+            }
+            for future in as_completed(futures):
+                label = futures[future]
+                rows, error, duration = future.result()
+                task_results[label] = rows
+                task_metrics[label] = {
+                    "status": "failed" if error else "success",
+                    "duration_seconds": round(duration, 3),
+                    "rows_read": len(rows),
+                    "attempts": 1,
+                    "reason": error,
+                }
+                if error:
+                    print(f"WARN {airport_code}/{label}: {error}")
+
+    for label, rows in task_results.items():
+        if label.startswith("open-meteo/hourly/"):
+            hourly_rows.extend(rows)
+        else:
+            forecast_rows.extend(rows)
+
+    counts["hourly_forecasts"] = _upsert_batch(
+        session,
+        HourlyForecast,
+        hourly_rows,
+        lambda item: {
+            "airport": airport_code,
+            "model": item["model"],
+            "run_at": item["run_at"],
+            "valid_at": item["valid_at"],
+        },
+        lambda item: {
+            "temp_c": item["temp_c"],
+            "dewpoint_c": item["dewpoint_c"],
+            "cloud_cover": item["cloud_cover"],
+            "wind_kph": item["wind_kph"],
+            "wind_direction": item["wind_direction"],
+            "radiation_wm2": item["radiation_wm2"],
+            "temp_850hpa_c": item["temp_850hpa_c"],
+        },
+        f"{airport_code}/live hourly forecasts",
+    )
 
     counts["forecasts"] += _upsert_batch(
         session,
         Forecast,
-        batches,
+        forecast_rows,
         lambda item: {
             "airport": airport_code,
             "model": item["model"],
@@ -388,6 +460,58 @@ def _store_current_provider_forecasts(
         },
         f"{airport_code}/live current forecasts",
     )
+    timings = {
+        label: metric["duration_seconds"] for label, metric in task_metrics.items()
+    }
+    statuses = {label: metric["status"] for label, metric in task_metrics.items()}
+    counts["provider_timings_seconds"] = timings
+    counts["provider_status"] = statuses
+    for provider in ("open-meteo", "meteoblue"):
+        provider_metrics = {
+            label: metric
+            for label, metric in task_metrics.items()
+            if label.startswith(provider + "/")
+        }
+        if not provider_metrics:
+            continue
+        failures = [
+            metric for metric in provider_metrics.values() if metric["status"] != "success"
+        ]
+        counts["provider_coverage"].append(
+            {
+                "airport": airport_code,
+                "data_type": provider,
+                "status": (
+                    "source_or_parser_failed"
+                    if len(failures) == len(provider_metrics)
+                    else "partial_provider_failure"
+                    if failures
+                    else "stored_pending_persistence"
+                ),
+                "latest_source_at": as_of,
+                "rows_read": sum(
+                    int(metric["rows_read"]) for metric in provider_metrics.values()
+                ),
+                "rows_written": (
+                    int(counts["forecasts"])
+                    + int(counts["hourly_forecasts"])
+                    if provider == "open-meteo"
+                    else len(task_results.get("meteoblue/daily", []))
+                ),
+                "source_age_minutes": 0.0,
+                "duration_seconds": max(
+                    float(metric["duration_seconds"])
+                    for metric in provider_metrics.values()
+                ),
+                "attempts": len(provider_metrics),
+                "metrics": provider_metrics,
+                "reason": "; ".join(
+                    str(metric["reason"]) for metric in failures if metric.get("reason")
+                )
+                or None,
+            }
+        )
+    counts["airport_elapsed_seconds"] = round(time.perf_counter() - started, 3)
     return counts
 
 
@@ -434,6 +558,7 @@ def _checkpoint_provenance(
     checkpoint_at: datetime,
     current_time: datetime,
     label: str,
+    expected_models: Iterable[str] | None = None,
 ) -> dict[str, object]:
     """Describe the exact pre-cutoff forecast information used by a checkpoint."""
     frame = read_archive_live(
@@ -443,8 +568,18 @@ def _checkpoint_provenance(
     )
     eligible: list[tuple[datetime, object]] = []
     cutoff = _as_utc(checkpoint_at)
+    def present(value: object) -> bool:
+        return value is not None and not bool(pd.isna(value))
+
     for row in frame.itertuples():
-        effective = row.available_at or row.fetched_at or row.run_at
+        effective = next(
+            (
+                value
+                for value in (row.available_at, row.fetched_at, row.run_at)
+                if present(value)
+            ),
+            None,
+        )
         if effective is None:
             continue
         effective_utc = _as_utc(effective)
@@ -462,6 +597,57 @@ def _checkpoint_provenance(
         if source_at is not None
         else None
     )
+    ages = sorted(
+        max(0.0, (cutoff - effective).total_seconds() / 60)
+        for effective, _row in selected
+    )
+    minimum_age = ages[0] if ages else None
+    maximum_age = ages[-1] if ages else None
+    median_age = (
+        ages[len(ages) // 2]
+        if len(ages) % 2
+        else (ages[len(ages) // 2 - 1] + ages[len(ages) // 2]) / 2
+        if ages
+        else None
+    )
+    expected = {
+        str(model) for model in (expected_models or latest_by_model) if str(model)
+    }
+    source_models = len(selected)
+    coverage_ratio = source_models / len(expected) if expected else 0.0
+    evidence_class = (
+        "unavailable"
+        if not selected
+        else "complete"
+        if coverage_ratio >= 0.8
+        else "partial"
+        if coverage_ratio >= 0.6
+        else "insufficient"
+    )
+    freshness_status = (
+        "unavailable"
+        if maximum_age is None
+        else "fresh"
+        if maximum_age <= 30
+        else "aging"
+        if maximum_age <= 90
+        else "stale"
+    )
+    available_times = [
+        _as_utc(row.available_at)
+        for _effective, row in selected
+        if present(row.available_at)
+    ]
+    fetched_times = [
+        _as_utc(row.fetched_at)
+        for _effective, row in selected
+        if present(row.fetched_at)
+    ]
+    run_times = [
+        _as_utc(row.model_run_at)
+        for _effective, row in selected
+        if present(row.model_run_at)
+    ]
     provenance = [
         {
             "model": row.model,
@@ -485,8 +671,24 @@ def _checkpoint_provenance(
         "checkpoint_gap_minutes": gap_minutes,
         "checkpoint_reconstructed": reconstructed,
         "checkpoint_status": (
-            "reconstructed-causal" if reconstructed else "scheduled-precutoff"
+            "unavailable"
+            if not selected
+            else "reconstructed-causal"
+            if reconstructed
+            else "scheduled-precutoff"
         ),
+        "freshness_status": freshness_status,
+        "evidence_class": evidence_class,
+        "source_age_at_checkpoint_minutes": maximum_age,
+        "source_age_min_minutes": minimum_age,
+        "source_age_median_minutes": median_age,
+        "source_age_max_minutes": maximum_age,
+        "expected_model_count": len(expected),
+        "source_model_count": source_models,
+        "source_coverage_ratio": coverage_ratio,
+        "forecast_run_at": max(run_times, default=None),
+        "forecast_available_at": max(available_times, default=None),
+        "forecast_fetched_at": max(fetched_times, default=None),
         "source_provenance_json": json.dumps(provenance, separators=(",", ":")),
     }
 
@@ -918,6 +1120,18 @@ def _record_forecast_snapshot(
         "checkpoint_gap_minutes": None,
         "checkpoint_reconstructed": False,
         "checkpoint_status": None,
+        "freshness_status": None,
+        "evidence_class": None,
+        "source_age_at_checkpoint_minutes": None,
+        "source_age_min_minutes": None,
+        "source_age_median_minutes": None,
+        "source_age_max_minutes": None,
+        "expected_model_count": None,
+        "source_model_count": None,
+        "source_coverage_ratio": None,
+        "forecast_run_at": None,
+        "forecast_available_at": None,
+        "forecast_fetched_at": None,
         "source_provenance_json": "[]",
     }
     if checkpoint_metadata:
@@ -1261,16 +1475,23 @@ def _record_shadow_evaluations(
         nowcast.probabilities,
         pd.DataFrame(market_rows),
     )
+    raw_probabilities = getattr(nowcast, "stage_probabilities", {}).get(
+        "Raw model mean",
+        {},
+    )
+    if not raw_probabilities:
+        print(
+            f"WARN {code}/shadow watcher/{target}: raw probability lineage missing; "
+            "no partial shadow row was stored."
+        )
+        return 0, 0
     rows = evaluate_shadow_markets(
         airport=code,
         target=target,
         captured_at=captured_at,
         timing=_signal_timing(captured_at, target, airport["timezone"]),
         probabilities=nowcast.probabilities,
-        raw_probabilities=getattr(nowcast, "stage_probabilities", {}).get(
-            "Raw model mean",
-            {},
-        ),
+        raw_probabilities=raw_probabilities,
         markets=pd.DataFrame(market_rows),
         books=books,
         forecast_confidence=nowcast.forecast_confidence,
@@ -1280,6 +1501,17 @@ def _record_shadow_evaluations(
         forecast_stale=nowcast.forecast_data_stale,
         recommendations_enabled=settings.edge_recommendations_enabled,
     )
+    if any(
+        row.get("raw_probability") is None
+        or row.get("fair_probability") is None
+        or row.get("forecast_snapshot_at") is None
+        for row in rows
+    ):
+        print(
+            f"WARN {code}/shadow watcher/{target}: incomplete probability lineage; "
+            "no partial shadow row was stored."
+        )
+        return 0, 0
     shadow_count = _upsert_batch(
         session,
         ShadowEvaluation,
@@ -1686,11 +1918,34 @@ def collect_research_checkpoints(
                     "research_models",
                     ["ecmwf_ifs025", "gfs_global", "icon_global"],
                 )
-                for model in models:
-                    try:
-                        batches.extend(open_meteo_forecast(airport, model, days=3))
-                    except Exception as exc:
-                        print(f"WARN {code}/{model} research checkpoint: {exc}")
+                with ThreadPoolExecutor(
+                    max_workers=max(
+                        1,
+                        min(settings.collector_provider_workers, len(models)),
+                    ),
+                    thread_name_prefix="checkpoint-provider",
+                ) as pool:
+                    futures = {
+                        pool.submit(
+                            open_meteo_forecast,
+                            airport,
+                            model,
+                            3,
+                            attempts=1,
+                            timeout=settings.collector_provider_timeout_seconds,
+                            metadata_attempts=1,
+                            metadata_timeout=min(
+                                5.0, settings.collector_provider_timeout_seconds
+                            ),
+                        ): model
+                        for model in models
+                    }
+                    for future in as_completed(futures):
+                        model = futures[future]
+                        try:
+                            batches.extend(future.result())
+                        except Exception as exc:
+                            print(f"WARN {code}/{model} research checkpoint: {exc}")
             counts["forecasts"] += _upsert_batch(
                 session,
                 Forecast,
@@ -1736,7 +1991,14 @@ def collect_research_checkpoints(
                         checkpoint_at=cutoff,
                         current_time=current_time,
                         label=label,
+                        expected_models=airport.get(
+                            "research_models",
+                            airport.get("models", []),
+                        ),
                     )
+                    if metadata["checkpoint_status"] == "unavailable":
+                        counts["checkpoints_missing_inputs"] += 1
+                        continue
                     nowcast = _build_nowcast_from_session(
                         session,
                         code,
@@ -2030,12 +2292,58 @@ def collect_aviation_journal(
     catalog = trading_airports()
     requested = [code for code in (airport_codes or list(catalog)) if code in catalog]
     coverage: list[dict[str, object]] = []
-    try:
-        taf_rows = recent_tafs(requested, attempts=3, timeout=15)
-        taf_error = None
-    except Exception as exc:
-        taf_rows = []
-        taf_error = f"{type(exc).__name__}: {exc}"
+    tasks: dict[str, tuple[Callable, tuple, dict]] = {
+        "taf": (
+            recent_tafs,
+            (requested,),
+            {"attempts": 1, "timeout": settings.collector_provider_timeout_seconds},
+        )
+    }
+    for code in requested:
+        tasks[f"metar/{code}"] = (
+            recent_metars,
+            (code,),
+            {
+                "hours": 48,
+                "attempts": 1,
+                "timeout": min(6.0, settings.collector_provider_timeout_seconds),
+            },
+        )
+
+    def fetch(
+        function: Callable, args: tuple, kwargs: dict
+    ) -> tuple[list[dict], str | None, float]:
+        task_started = time.perf_counter()
+        try:
+            rows = list(function(*args, **kwargs) or [])
+        except Exception as exc:
+            return [], f"{type(exc).__name__}: {exc}", time.perf_counter() - task_started
+        return rows, None, time.perf_counter() - task_started
+
+    fetched: dict[str, list[dict]] = {}
+    provider_metrics: dict[str, dict[str, object]] = {}
+    workers = max(1, min(settings.collector_provider_workers, len(tasks)))
+    with ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix="collector-aviation",
+    ) as pool:
+        futures = {
+            pool.submit(fetch, function, args, kwargs): label
+            for label, (function, args, kwargs) in tasks.items()
+        }
+        for future in as_completed(futures):
+            label = futures[future]
+            rows, error, duration = future.result()
+            fetched[label] = rows
+            provider_metrics[label] = {
+                "status": "failed" if error else "success",
+                "duration_seconds": round(duration, 3),
+                "rows_read": len(rows),
+                "attempts": 1,
+                "reason": error,
+            }
+    taf_rows = fetched.get("taf", [])
+    taf_error = provider_metrics.get("taf", {}).get("reason")
     totals = {
         "observations_read": 0,
         "observations_written": 0,
@@ -2049,12 +2357,9 @@ def collect_aviation_journal(
             previous_metar = session.scalar(
                 select(func.max(Observation.observed_at)).where(Observation.airport == code)
             )
-            try:
-                metar_rows = recent_metars(code, hours=48, attempts=3, timeout=15)
-                metar_error = None
-            except Exception as exc:
-                metar_rows = []
-                metar_error = f"{type(exc).__name__}: {exc}"
+            metar_rows = fetched.get(f"metar/{code}", [])
+            metar_metric = provider_metrics.get(f"metar/{code}", {})
+            metar_error = metar_metric.get("reason")
             before_count = int(
                 session.scalar(
                     select(func.count(Observation.id)).where(Observation.airport == code)
@@ -2118,6 +2423,9 @@ def collect_aviation_journal(
                         if latest_metar is not None
                         else None
                     ),
+                    "duration_seconds": metar_metric.get("duration_seconds"),
+                    "attempts": metar_metric.get("attempts", 1),
+                    "metrics": metar_metric,
                     "reason": metar_reason,
                 }
             )
@@ -2149,11 +2457,20 @@ def collect_aviation_journal(
                         if latest_taf is not None
                         else None
                     ),
+                    "duration_seconds": provider_metrics.get("taf", {}).get(
+                        "duration_seconds"
+                    ),
+                    "attempts": provider_metrics.get("taf", {}).get("attempts", 1),
+                    "metrics": provider_metrics.get("taf", {}),
                     "reason": taf_error,
                 }
             )
         session.commit()
-    return {"counts": totals, "coverage": coverage}
+    return {
+        "counts": totals,
+        "coverage": coverage,
+        "provider_metrics": provider_metrics,
+    }
 
 
 def backfill_taf_revision(
@@ -2241,7 +2558,7 @@ def collect_live_decision_checkpoints(
     *,
     now: datetime | None = None,
     aviation_already_collected: bool = False,
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Persist live decisions and keep journaling every later METAR through evening."""
     init_db()
     captured_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -2286,6 +2603,10 @@ def collect_live_decision_checkpoints(
         "restored_actuals": 0,
         "post_peak_snapshots": 0,
         "post_peak_no_new_metar": 0,
+        "provider_timings_seconds": {},
+        "provider_status": {},
+        "provider_coverage": [],
+        "airport_timings_seconds": {},
     }
     if not metar_due_codes and not forecast_due_codes:
         return counts
@@ -2303,8 +2624,25 @@ def collect_live_decision_checkpoints(
                 airport=catalog[code],
                 as_of=captured_at,
             )
-            for key, value in provider_counts.items():
-                counts[key] += value
+            for key in (
+                "forecasts",
+                "hourly_forecasts",
+                "open_meteo_polls",
+                "meteoblue_polls",
+            ):
+                counts[key] += int(provider_counts.get(key, 0))
+            counts["provider_timings_seconds"][code] = provider_counts.get(
+                "provider_timings_seconds", {}
+            )
+            counts["provider_status"][code] = provider_counts.get(
+                "provider_status", {}
+            )
+            counts["provider_coverage"].extend(
+                provider_counts.get("provider_coverage", [])
+            )
+            counts["airport_timings_seconds"][code] = provider_counts.get(
+                "airport_elapsed_seconds", 0.0
+            )
         session.commit()
         for code in metar_due_codes:
             airport = catalog[code]
@@ -2401,11 +2739,16 @@ def collect_live_decision_checkpoints(
                     catalog,
                     f"{code}/live-decision TAF",
                 )
+                market_started = time.perf_counter()
                 try:
                     market_rows = polymarket_prices(airport, local_target)
                 except Exception as exc:
                     print(f"WARN {code}/live-decision Polymarket: {exc}")
-                counts["market_prices"] += _upsert_batch(
+                    market_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    market_error = None
+                market_duration = round(time.perf_counter() - market_started, 3)
+                market_rows_written = _upsert_batch(
                     session,
                     MarketSnapshot,
                     market_rows,
@@ -2423,6 +2766,37 @@ def collect_live_decision_checkpoints(
                     },
                     f"{code}/live-decision Polymarket",
                 )
+                counts["market_prices"] += market_rows_written
+                counts["provider_timings_seconds"].setdefault(code, {})[
+                    "polymarket/prices"
+                ] = market_duration
+                counts["provider_status"].setdefault(code, {})[
+                    "polymarket/prices"
+                ] = "failed" if market_error else "success"
+                counts["provider_coverage"].append(
+                    {
+                        "airport": code,
+                        "data_type": "polymarket",
+                        "status": (
+                            "source_or_parser_failed"
+                            if market_error
+                            else "stored_pending_persistence"
+                            if market_rows
+                            else "source_had_no_new_report"
+                        ),
+                        "latest_source_at": max(
+                            (row["captured_at"] for row in market_rows),
+                            default=None,
+                        ),
+                        "rows_read": len(market_rows),
+                        "rows_written": market_rows_written,
+                        "source_age_minutes": 0.0 if market_rows else None,
+                        "duration_seconds": market_duration,
+                        "attempts": 1,
+                        "metrics": {},
+                        "reason": market_error,
+                    }
+                )
             token_ids = [
                 str(row["token_id"])
                 for row in market_rows
@@ -2430,10 +2804,45 @@ def collect_live_decision_checkpoints(
             ]
             books = {}
             if token_ids:
+                clob_started = time.perf_counter()
                 try:
                     books = polymarket_order_books(token_ids)
                 except Exception as exc:
                     print(f"WARN {code}/live-decision CLOB books: {exc}")
+                    clob_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    clob_error = None
+                clob_duration = round(time.perf_counter() - clob_started, 3)
+                counts["provider_timings_seconds"].setdefault(code, {})[
+                    "polymarket/clob"
+                ] = clob_duration
+                counts["provider_status"].setdefault(code, {})[
+                    "polymarket/clob"
+                ] = "failed" if clob_error else "success"
+                counts["provider_coverage"].append(
+                    {
+                        "airport": code,
+                        "data_type": "polymarket-clob",
+                        "status": (
+                            "source_or_parser_failed"
+                            if clob_error
+                            else "stored_pending_persistence"
+                            if books
+                            else "source_had_no_new_report"
+                        ),
+                        "latest_source_at": max(
+                            (book.get("fetched_at") for book in books.values()),
+                            default=None,
+                        ),
+                        "rows_read": len(books),
+                        "rows_written": 0,
+                        "source_age_minutes": 0.0 if books else None,
+                        "duration_seconds": clob_duration,
+                        "attempts": 1,
+                        "metrics": {"requested_tokens": len(token_ids)},
+                        "reason": clob_error,
+                    }
+                )
             snapshot_at = (
                 max(row["captured_at"] for row in market_rows) if market_rows else captured_at
             )
