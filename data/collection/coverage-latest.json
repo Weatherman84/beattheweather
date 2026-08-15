@@ -1,24 +1,24 @@
 {
-  "active_warning_count": 2,
+  "active_warning_count": 1,
   "archive_partitions": 629,
   "archive_rows": 438208,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
-    "expected_slots": 14,
+    "expected_slots": 17,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 37.850480000000005,
+    "median_execution_seconds": 40.077651,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 415.0,
-    "missing_slots": 8,
-    "observed_slots": 6,
-    "p95_execution_seconds": 135.07536325,
-    "runs": 6,
-    "trigger_coverage": 0.42857142857142855
+    "median_trigger_delay_seconds": 377.0,
+    "missing_slots": 10,
+    "observed_slots": 7,
+    "p95_execution_seconds": 129.48447869999993,
+    "runs": 7,
+    "trigger_coverage": 0.4117647058823529
   },
-  "checked_at": "2026-08-15T10:27:15.513250+00:00",
+  "checked_at": "2026-08-15T10:51:19.651455+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 21917696,
-  "warning_count": 3,
+  "database_bytes": 22429696,
+  "warning_count": 2,
   "warnings": [
     {
       "active": false,
@@ -31,15 +31,6 @@
       "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
-    },
-    {
-      "active": true,
-      "age_minutes": 1101.6,
-      "airport": "LEMD",
-      "data_type": "market",
-      "message": "LEMD: market is 1102 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     }
   ]
 }
