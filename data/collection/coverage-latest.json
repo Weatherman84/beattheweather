@@ -6,7 +6,7 @@
   "cadence": {
     "expected_slots": 144,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 27.2278865,
+    "median_execution_seconds": 26.367717,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 291.0,
     "missing_slots": 100,
@@ -15,9 +15,9 @@
     "runs": 44,
     "trigger_coverage": 0.3055555555555556
   },
-  "checked_at": "2026-08-16T15:18:57.101638+00:00",
+  "checked_at": "2026-08-16T15:45:59.760523+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 32706560,
+  "database_bytes": 32976896,
   "warning_count": 2,
   "warnings": [
     {
