@@ -1,24 +1,24 @@
 {
-  "active_warning_count": 1,
+  "active_warning_count": 4,
   "archive_partitions": 629,
   "archive_rows": 438208,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
-    "expected_slots": 103,
+    "expected_slots": 111,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 23.662076,
+    "median_execution_seconds": 25.220821,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 313.0,
-    "missing_slots": 67,
-    "observed_slots": 36,
-    "p95_execution_seconds": 100.69245675,
-    "runs": 36,
-    "trigger_coverage": 0.34951456310679613
+    "median_trigger_delay_seconds": 317.0,
+    "missing_slots": 74,
+    "observed_slots": 37,
+    "p95_execution_seconds": 96.53663479999965,
+    "runs": 37,
+    "trigger_coverage": 0.3333333333333333
   },
-  "checked_at": "2026-08-16T01:12:56.305574+00:00",
+  "checked_at": "2026-08-16T02:36:54.671164+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 28676096,
-  "warning_count": 2,
+  "database_bytes": 28729344,
+  "warning_count": 5,
   "warnings": [
     {
       "active": false,
@@ -31,6 +31,33 @@
       "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 80 minutes.",
       "severity": "error",
       "type": "collector_gap"
+    },
+    {
+      "active": true,
+      "age_minutes": 698.6,
+      "airport": "LTAC",
+      "data_type": "market",
+      "message": "LTAC: market is 699 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 779.9,
+      "airport": "LTFM",
+      "data_type": "forecast",
+      "message": "LTFM: forecast is 780 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 757.9,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 758 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     }
   ]
 }
