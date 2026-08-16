@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .actual_quality import settlement_grade_actuals
+
 
 @dataclass(frozen=True)
 class Consensus:
@@ -531,6 +533,7 @@ def checkpoint_completeness(
     *,
     as_of: datetime | None = None,
     lookback_days: int = 7,
+    expected_models_by_airport: dict[str, list[str]] | None = None,
 ) -> pd.DataFrame:
     """Expose expected fixed checkpoints, including missing rows and provenance."""
     now = pd.Timestamp(as_of or datetime.now(timezone.utc))
@@ -582,6 +585,10 @@ def checkpoint_completeness(
                     if not candidates.empty
                     else None
                 )
+                lineage = _checkpoint_lineage_view(
+                    selected,
+                    (expected_models_by_airport or {}).get(airport),
+                )
                 rows.append(
                     {
                         "airport": airport,
@@ -599,14 +606,7 @@ def checkpoint_completeness(
                             else False
                         ),
                         "source_age_minutes": (
-                            selected.get("source_age_at_checkpoint_minutes")
-                            if selected is not None
-                            and pd.notna(
-                                selected.get("source_age_at_checkpoint_minutes")
-                            )
-                            else selected.get("checkpoint_gap_minutes")
-                            if selected is not None
-                            else None
+                            lineage.get("source_age_minutes")
                         ),
                         "source_age_min_minutes": (
                             selected.get("source_age_min_minutes")
@@ -624,9 +624,7 @@ def checkpoint_completeness(
                             else None
                         ),
                         "freshness_status": (
-                            str(selected.get("freshness_status") or "unavailable")
-                            if selected is not None
-                            else "unavailable"
+                            str(lineage.get("freshness_status") or "unavailable")
                         ),
                         "evidence_class": (
                             str(selected.get("evidence_class") or "unavailable")
@@ -634,9 +632,16 @@ def checkpoint_completeness(
                             else "unavailable"
                         ),
                         "coverage_ratio": (
-                            selected.get("source_coverage_ratio")
-                            if selected is not None
-                            else None
+                            lineage.get("coverage_ratio")
+                        ),
+                        "expected_models": (
+                            int(lineage.get("expected_model_count", 0) or 0)
+                        ),
+                        "available_models": (
+                            int(lineage.get("available_model_count", 0) or 0)
+                        ),
+                        "used_models": (
+                            int(lineage.get("used_model_count", 0) or 0)
                         ),
                         "forecast_run_at": (
                             selected.get("forecast_run_at")
@@ -658,6 +663,289 @@ def checkpoint_completeness(
                         else 0,
                     }
                 )
+    return pd.DataFrame(rows)
+
+
+def _checkpoint_lineage_view(
+    row: pd.Series | None,
+    expected_models: list[str] | None = None,
+) -> dict[str, object]:
+    """Correct legacy display metadata without rewriting historical evidence."""
+    if row is None:
+        return {
+            "source_age_minutes": None,
+            "freshness_status": "unavailable",
+            "coverage_ratio": None,
+            "expected_model_count": len(expected_models or []),
+            "available_model_count": 0,
+            "used_model_count": 0,
+        }
+    expected = {str(model) for model in (expected_models or []) if str(model)}
+    if not expected:
+        try:
+            expected = {
+                str(model)
+                for model in json.loads(str(row.get("expected_models_json") or "[]"))
+            }
+        except (TypeError, json.JSONDecodeError):
+            expected = set()
+    try:
+        provenance = json.loads(str(row.get("source_provenance_json") or "[]"))
+    except (TypeError, json.JSONDecodeError):
+        provenance = []
+    records = [item for item in provenance if isinstance(item, dict)]
+    available = {str(item.get("model")) for item in records if item.get("model")}
+    relevant = [item for item in records if str(item.get("model")) in expected]
+    ages = sorted(
+        float(item["age_at_cutoff_minutes"])
+        for item in relevant
+        if item.get("age_at_cutoff_minutes") is not None
+    )
+    if expected and records:
+        maximum_age = ages[-1] if ages else None
+        coverage = min(1.0, len({str(item.get("model")) for item in relevant}) / len(expected))
+        freshness = (
+            "unavailable"
+            if maximum_age is None
+            else "fresh"
+            if maximum_age <= 30
+            else "aging"
+            if maximum_age <= 90
+            else "stale"
+        )
+        return {
+            "source_age_minutes": maximum_age,
+            "freshness_status": freshness,
+            "coverage_ratio": coverage,
+            "expected_model_count": len(expected),
+            "available_model_count": len(available),
+            "used_model_count": int(
+                row.get("used_model_count")
+                if pd.notna(row.get("used_model_count"))
+                else row.get("model_count", 0)
+                or 0
+            ),
+        }
+    coverage_value = pd.to_numeric(row.get("source_coverage_ratio"), errors="coerce")
+    return {
+        "source_age_minutes": (
+            row.get("source_age_at_checkpoint_minutes")
+            if pd.notna(row.get("source_age_at_checkpoint_minutes"))
+            else row.get("checkpoint_gap_minutes")
+        ),
+        "freshness_status": str(row.get("freshness_status") or "unavailable"),
+        "coverage_ratio": min(1.0, float(coverage_value))
+        if pd.notna(coverage_value)
+        else None,
+        "expected_model_count": int(row.get("expected_model_count", 0) or 0),
+        "available_model_count": int(
+            row.get("available_model_count")
+            if pd.notna(row.get("available_model_count"))
+            else row.get("source_model_count", 0)
+            or 0
+        ),
+        "used_model_count": int(
+            row.get("used_model_count")
+            if pd.notna(row.get("used_model_count"))
+            else row.get("model_count", 0)
+            or 0
+        ),
+    }
+
+
+FORECAST_LADDER_HISTORY_STAGES: dict[str, str] = {
+    "d1_champion_c": "D-1 Champion",
+    "d0_06_raw_c": "D0@06 Raw",
+    "d0_06_bias_c": "D0@06 Bias",
+    "d0_06_metar_c": "D0@06 METAR",
+    "d0_06_champion_c": "D0@06 Champion",
+    "d0_10_raw_c": "D0@10 Raw",
+    "d0_10_bias_c": "D0@10 Bias",
+    "d0_10_metar_c": "D0@10 METAR",
+    "d0_10_champion_c": "D0@10 Champion",
+    "live_raw_c": "First Live Raw",
+    "live_bias_c": "First Live Bias",
+    "live_metar_c": "First Live METAR",
+    "live_champion_c": "First Live Champion",
+}
+
+
+def _ladder_evidence(row: pd.Series | None, *, live: bool = False) -> str:
+    if row is None:
+        return "missing"
+    if live:
+        hours = pd.to_numeric(row.get("hours_to_peak"), errors="coerce")
+        if pd.notna(hours) and float(hours) < 0:
+            return "late/post-peak"
+        captured = pd.to_datetime(row.get("captured_at"), utc=True, errors="coerce")
+        peak = pd.to_datetime(row.get("expected_peak_at"), utc=True, errors="coerce")
+        if pd.notna(captured) and pd.notna(peak) and captured > peak:
+            return "late/post-peak"
+        return "scheduled"
+    status = str(row.get("checkpoint_status") or "").casefold()
+    if "reconstructed" in status or bool(row.get("checkpoint_reconstructed", False)):
+        return "reconstructed"
+    if "scheduled" in status:
+        return "scheduled"
+    return "missing"
+
+
+def forecast_ladder_history(
+    snapshots: pd.DataFrame,
+    actuals: pd.DataFrame,
+    *,
+    timezone_name: str,
+    expected_checkpoint_models: list[str] | None = None,
+) -> pd.DataFrame:
+    """Return one compact chronological evaluation row per final station day.
+
+    The function consumes only the already airport-filtered snapshot and Actual
+    frames used by Trading Desk.  It never opens the raw archive itself and never
+    mutates OOS counters or forecast configuration.
+    """
+    final_actuals = settlement_grade_actuals(actuals)
+    if final_actuals.empty:
+        return pd.DataFrame()
+    actual = final_actuals.copy()
+    actual["target_date"] = pd.to_datetime(actual.target_date, errors="coerce").dt.date
+    actual["actual_c"] = pd.to_numeric(actual.max_temp_c, errors="coerce")
+    actual["actual_source"] = (
+        actual["source"].astype(str) if "source" in actual else "final station"
+    )
+    actual = actual.dropna(subset=["target_date", "actual_c"]).sort_values(
+        "target_date"
+    ).drop_duplicates(["airport", "target_date"], keep="last")
+
+    frame = snapshots.copy()
+    if not frame.empty:
+        frame["target_date"] = pd.to_datetime(frame.target_date, errors="coerce").dt.date
+        frame["captured_at"] = pd.to_datetime(
+            frame.captured_at, utc=True, errors="coerce"
+        )
+    rows: list[dict[str, object]] = []
+    stage_columns = {
+        "raw": "raw_model_mean_c",
+        "bias": "bias_corrected_c",
+        "metar": "metar_conditioned_c",
+        "champion": "final_forecast_c",
+    }
+    for actual_row in actual.itertuples():
+        target = actual_row.target_date
+        day = (
+            frame[
+                (frame.airport.astype(str) == str(actual_row.airport))
+                & (frame.target_date == target)
+            ].copy()
+            if not frame.empty
+            else pd.DataFrame()
+        )
+
+        def checkpoint(label: str) -> pd.Series | None:
+            if day.empty or "checkpoint_label" not in day:
+                return None
+            normalised = day.checkpoint_label.fillna("").astype(str).str.replace(
+                " ", "", regex=False
+            ).str.casefold()
+            selected = day[normalised == label.replace(" ", "").casefold()]
+            return selected.sort_values("captured_at").iloc[-1] if not selected.empty else None
+
+        d1 = checkpoint("D-1@20")
+        d006 = checkpoint("D0@06")
+        d010 = checkpoint("D0@10")
+        live = None
+        if not day.empty:
+            live_candidates = day[
+                day.timing.fillna("").astype(str).str.startswith("D0 live")
+            ].copy()
+            if "checkpoint_label" in live_candidates:
+                live_candidates = live_candidates[
+                    live_candidates.checkpoint_label.fillna("").astype(str).eq("")
+                ]
+            if not live_candidates.empty:
+                live = live_candidates.sort_values("captured_at").iloc[0]
+
+        result: dict[str, object] = {
+            "airport": str(actual_row.airport),
+            "target_date": target,
+            "actual_c": float(actual_row.actual_c),
+            "actual_status": "final",
+            "actual_source": str(actual_row.actual_source),
+        }
+        selected_rows = {
+            "d1": d1,
+            "d0_06": d006,
+            "d0_10": d010,
+            "live": live,
+        }
+        for prefix, selected in selected_rows.items():
+            evidence = _ladder_evidence(selected, live=prefix == "live")
+            lineage = (
+                _checkpoint_lineage_view(selected, expected_checkpoint_models)
+                if prefix != "live"
+                else {}
+            )
+            result[f"{prefix}_evidence"] = evidence
+            result[f"{prefix}_freshness"] = (
+                str(lineage.get("freshness_status") or "unavailable")
+                if prefix != "live"
+                else str(selected.get("freshness_status") or "unavailable")
+                if selected is not None
+                else "unavailable"
+            )
+            result[f"{prefix}_source_age_minutes"] = (
+                lineage.get("source_age_minutes")
+                if prefix != "live"
+                else selected.get("source_age_at_checkpoint_minutes")
+                if selected is not None
+                else None
+            )
+        result["live_local_time"] = (
+            pd.Timestamp(live.captured_at).tz_convert(timezone_name).strftime("%H:%M")
+            if live is not None and pd.notna(live.captured_at)
+            else None
+        )
+        result["d1_champion_c"] = (
+            d1.get("final_forecast_c") if d1 is not None else None
+        )
+        for prefix, selected in (("d0_06", d006), ("d0_10", d010), ("live", live)):
+            for stage, source_column in stage_columns.items():
+                result[f"{prefix}_{stage}_c"] = (
+                    selected.get(source_column) if selected is not None else None
+                )
+        for forecast_column in FORECAST_LADDER_HISTORY_STAGES:
+            value = pd.to_numeric(result.get(forecast_column), errors="coerce")
+            result[forecast_column] = float(value) if pd.notna(value) else None
+            result[f"{forecast_column.removesuffix('_c')}_error_c"] = (
+                float(value) - float(actual_row.actual_c) if pd.notna(value) else None
+            )
+        evidence_values = [
+            value for key, value in result.items() if key.endswith("_evidence")
+        ]
+        result["regular_oos"] = (
+            "reconstructed" not in evidence_values
+            and "late/post-peak" not in evidence_values
+            and any(value == "scheduled" for value in evidence_values)
+        )
+        rows.append(result)
+    return pd.DataFrame(rows).sort_values("target_date", ascending=False).reset_index(drop=True)
+
+
+def forecast_ladder_history_metrics(history: pd.DataFrame) -> pd.DataFrame:
+    """Summarise each ladder stage without allowing signed errors to cancel MAE."""
+    if history.empty:
+        return pd.DataFrame(columns=["stage", "bias", "mae", "n"])
+    rows: list[dict[str, object]] = []
+    for forecast_column, label in FORECAST_LADDER_HISTORY_STAGES.items():
+        error_column = f"{forecast_column.removesuffix('_c')}_error_c"
+        errors = pd.to_numeric(history.get(error_column), errors="coerce").dropna()
+        rows.append(
+            {
+                "stage": label,
+                "bias": float(errors.mean()) if not errors.empty else None,
+                "mae": float(errors.abs().mean()) if not errors.empty else None,
+                "n": int(len(errors)),
+            }
+        )
     return pd.DataFrame(rows)
 
 

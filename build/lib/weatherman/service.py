@@ -590,7 +590,14 @@ def _checkpoint_provenance(
         current = latest_by_model.get(row.model)
         if current is None or effective > current[0]:
             latest_by_model[row.model] = (effective, row)
-    selected = sorted(latest_by_model.values(), key=lambda item: item[1].model)
+    selected_all = sorted(latest_by_model.values(), key=lambda item: item[1].model)
+    expected = {
+        str(model) for model in (expected_models or latest_by_model) if str(model)
+    }
+    selected = [item for item in selected_all if str(item[1].model) in expected]
+    available_models = {str(item[1].model) for item in selected_all}
+    relevant_models = {str(item[1].model) for item in selected}
+    extra_models = available_models - expected
     source_at = max((item[0] for item in selected), default=None)
     gap_minutes = (
         max(0.0, (cutoff - source_at).total_seconds() / 60)
@@ -610,14 +617,11 @@ def _checkpoint_provenance(
         if ages
         else None
     )
-    expected = {
-        str(model) for model in (expected_models or latest_by_model) if str(model)
-    }
-    source_models = len(selected)
-    coverage_ratio = source_models / len(expected) if expected else 0.0
+    source_models = len(relevant_models)
+    coverage_ratio = min(1.0, source_models / len(expected)) if expected else 0.0
     evidence_class = (
         "unavailable"
-        if not selected
+        if not relevant_models
         else "complete"
         if coverage_ratio >= 0.8
         else "partial"
@@ -659,9 +663,10 @@ def _checkpoint_provenance(
             "age_at_cutoff_minutes": max(
                 0.0, (cutoff - effective).total_seconds() / 60
             ),
+            "relevant_to_checkpoint": str(row.model) in expected,
             "provenance_status": row.provenance_status,
         }
-        for effective, row in selected
+        for effective, row in selected_all
     ]
     reconstructed = _as_utc(current_time) > cutoff + timedelta(minutes=1)
     return {
@@ -672,7 +677,7 @@ def _checkpoint_provenance(
         "checkpoint_reconstructed": reconstructed,
         "checkpoint_status": (
             "unavailable"
-            if not selected
+            if not relevant_models
             else "reconstructed-causal"
             if reconstructed
             else "scheduled-precutoff"
@@ -685,7 +690,13 @@ def _checkpoint_provenance(
         "source_age_max_minutes": maximum_age,
         "expected_model_count": len(expected),
         "source_model_count": source_models,
+        "available_model_count": len(available_models),
         "source_coverage_ratio": coverage_ratio,
+        "expected_models_json": json.dumps(sorted(expected), separators=(",", ":")),
+        "available_models_json": json.dumps(
+            sorted(available_models), separators=(",", ":")
+        ),
+        "extra_models_json": json.dumps(sorted(extra_models), separators=(",", ":")),
         "forecast_run_at": max(run_times, default=None),
         "forecast_available_at": max(available_times, default=None),
         "forecast_fetched_at": max(fetched_times, default=None),
@@ -950,6 +961,107 @@ def _build_nowcast_from_session(
     )
 
 
+def _live_snapshot_provenance(nowcast, airport: dict) -> dict[str, object]:
+    """Persist the model set and age that actually formed a live Champion."""
+    frame = nowcast.model_freshness.copy()
+    if frame.empty or "model" not in frame:
+        return {}
+    expected = {
+        str(model)
+        for model in [*airport.get("models", []), "meteoblue"]
+        if str(model)
+    }
+    available = set(frame.model.dropna().astype(str))
+    used = set(nowcast.current.model.dropna().astype(str))
+    relevant_available = available & expected
+    extra = available - expected
+    used_rows = frame[frame.model.astype(str).isin(used)].copy()
+    ages = sorted(
+        float(value)
+        for value in pd.to_numeric(
+            used_rows.get("age_minutes", pd.Series(dtype=float)), errors="coerce"
+        ).dropna()
+    )
+    minimum_age = ages[0] if ages else None
+    maximum_age = ages[-1] if ages else None
+    median_age = (
+        ages[len(ages) // 2]
+        if len(ages) % 2
+        else (ages[len(ages) // 2 - 1] + ages[len(ages) // 2]) / 2
+        if ages
+        else None
+    )
+    freshness = (
+        "unavailable"
+        if maximum_age is None
+        else "fresh"
+        if maximum_age <= 30
+        else "aging"
+        if maximum_age <= 90
+        else "stale"
+    )
+
+    def latest_timestamp(column: str) -> datetime | None:
+        if column not in used_rows:
+            return None
+        values = pd.to_datetime(used_rows[column], utc=True, errors="coerce").dropna()
+        return values.max().to_pydatetime() if not values.empty else None
+
+    provenance = []
+    def timestamp_text(value: object) -> str | None:
+        if value is None or bool(pd.isna(value)):
+            return None
+        return pd.Timestamp(value).isoformat()
+
+    for row in frame.itertuples():
+        provenance.append(
+            {
+                "model": str(row.model),
+                "source": getattr(row, "source", None),
+                "model_run_at": timestamp_text(getattr(row, "model_run_at", None)),
+                "available_at": timestamp_text(getattr(row, "available_at", None)),
+                "fetched_at": timestamp_text(getattr(row, "fetched_at", None)),
+                "age_minutes": (
+                    float(row.age_minutes)
+                    if getattr(row, "age_minutes", None) is not None
+                    and not pd.isna(row.age_minutes)
+                    else None
+                ),
+                "used_by_champion": str(row.model) in used,
+                "expected": str(row.model) in expected,
+            }
+        )
+    coverage = min(1.0, len(relevant_available) / len(expected)) if expected else 0.0
+    return {
+        "source_captured_at": latest_timestamp("data_timestamp"),
+        "freshness_status": freshness,
+        "evidence_class": (
+            "complete"
+            if coverage >= 0.8
+            else "partial"
+            if coverage >= 0.6
+            else "insufficient"
+        ),
+        "source_age_at_checkpoint_minutes": maximum_age,
+        "source_age_min_minutes": minimum_age,
+        "source_age_median_minutes": median_age,
+        "source_age_max_minutes": maximum_age,
+        "expected_model_count": len(expected),
+        "source_model_count": len(relevant_available),
+        "available_model_count": len(available),
+        "used_model_count": len(used),
+        "source_coverage_ratio": coverage,
+        "expected_models_json": json.dumps(sorted(expected), separators=(",", ":")),
+        "available_models_json": json.dumps(sorted(available), separators=(",", ":")),
+        "used_models_json": json.dumps(sorted(used), separators=(",", ":")),
+        "extra_models_json": json.dumps(sorted(extra), separators=(",", ":")),
+        "forecast_run_at": latest_timestamp("model_run_at"),
+        "forecast_available_at": latest_timestamp("available_at"),
+        "forecast_fetched_at": latest_timestamp("fetched_at"),
+        "source_provenance_json": json.dumps(provenance, separators=(",", ":")),
+    }
+
+
 def _record_forecast_snapshot(
     session,
     code: str,
@@ -1128,12 +1240,19 @@ def _record_forecast_snapshot(
         "source_age_max_minutes": None,
         "expected_model_count": None,
         "source_model_count": None,
+        "available_model_count": None,
+        "used_model_count": None,
         "source_coverage_ratio": None,
+        "expected_models_json": "[]",
+        "available_models_json": "[]",
+        "used_models_json": "[]",
+        "extra_models_json": "[]",
         "forecast_run_at": None,
         "forecast_available_at": None,
         "forecast_fetched_at": None,
         "source_provenance_json": "[]",
     }
+    row.update(_live_snapshot_provenance(nowcast, airport))
     if checkpoint_metadata:
         row.update(checkpoint_metadata)
     return _upsert_batch(
