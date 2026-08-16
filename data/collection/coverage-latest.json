@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 7,
+  "active_warning_count": 8,
   "archive_partitions": 640,
   "archive_rows": 459994,
   "archive_status": "deferred_to_daily_verification",
@@ -15,10 +15,10 @@
     "runs": 44,
     "trigger_coverage": 0.3076923076923077
   },
-  "checked_at": "2026-08-16T18:24:28.459271+00:00",
+  "checked_at": "2026-08-16T18:57:18.630373+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 33587200,
-  "warning_count": 8,
+  "database_bytes": 33619968,
+  "warning_count": 9,
   "warnings": [
     {
       "active": false,
@@ -34,55 +34,64 @@
     },
     {
       "active": true,
-      "age_minutes": 215.8,
+      "age_minutes": 92.3,
+      "airport": "EHAM",
+      "data_type": "METAR",
+      "message": "EHAM: METAR is 92 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 248.6,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 216 minutes old.",
+      "message": "EHAM: forecast is 249 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 185.9,
+      "age_minutes": 218.8,
       "airport": "EHAM",
       "data_type": "market",
-      "message": "EHAM: market is 186 minutes old.",
+      "message": "EHAM: market is 219 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 215.3,
+      "age_minutes": 248.2,
       "airport": "EPWA",
       "data_type": "market",
-      "message": "EPWA: market is 215 minutes old.",
+      "message": "EPWA: market is 248 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 185.8,
+      "age_minutes": 218.7,
       "airport": "LTAC",
       "data_type": "market",
-      "message": "LTAC: market is 186 minutes old.",
+      "message": "LTAC: market is 219 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 244.8,
+      "age_minutes": 277.6,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 245 minutes old.",
+      "message": "LTFM: market is 278 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 185.8,
+      "age_minutes": 218.6,
       "airport": "EDDM",
       "data_type": "market",
-      "message": "EDDM: market is 186 minutes old.",
+      "message": "EDDM: market is 219 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     }
