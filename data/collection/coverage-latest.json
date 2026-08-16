@@ -4,20 +4,20 @@
   "archive_rows": 459994,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
-    "expected_slots": 137,
+    "expected_slots": 142,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 26.943831,
+    "median_execution_seconds": 27.2278865,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 309.0,
-    "missing_slots": 94,
-    "observed_slots": 43,
-    "p95_execution_seconds": 125.73058259999996,
-    "runs": 43,
-    "trigger_coverage": 0.31386861313868614
+    "median_trigger_delay_seconds": 299.5,
+    "missing_slots": 98,
+    "observed_slots": 44,
+    "p95_execution_seconds": 157.90012770000004,
+    "runs": 44,
+    "trigger_coverage": 0.30985915492957744
   },
-  "checked_at": "2026-08-16T06:58:52.984016+00:00",
+  "checked_at": "2026-08-16T07:41:42.156401+00:00",
   "collector_version": "10.7.7",
-  "database_bytes": 24248320,
+  "database_bytes": 24551424,
   "warning_count": 8,
   "warnings": [
     {
@@ -34,55 +34,55 @@
     },
     {
       "active": true,
-      "age_minutes": 875.8,
+      "age_minutes": 918.6,
       "airport": "LEMD",
       "data_type": "market",
-      "message": "LEMD: market is 876 minutes old.",
+      "message": "LEMD: market is 919 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 960.8,
+      "age_minutes": 1003.6,
       "airport": "EHAM",
       "data_type": "market",
-      "message": "EHAM: market is 961 minutes old.",
+      "message": "EHAM: market is 1004 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 960.7,
+      "age_minutes": 1003.5,
       "airport": "EPWA",
       "data_type": "market",
-      "message": "EPWA: market is 961 minutes old.",
+      "message": "EPWA: market is 1004 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 960.6,
+      "age_minutes": 1003.4,
       "airport": "LTAC",
       "data_type": "market",
-      "message": "LTAC: market is 961 minutes old.",
+      "message": "LTAC: market is 1003 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 1019.9,
+      "age_minutes": 1062.7,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 1020 minutes old.",
+      "message": "LTFM: market is 1063 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 960.5,
+      "age_minutes": 1003.4,
       "airport": "EDDM",
       "data_type": "market",
-      "message": "EDDM: market is 961 minutes old.",
+      "message": "EDDM: market is 1003 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     }
