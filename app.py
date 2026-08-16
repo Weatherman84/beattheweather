@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.7.7")
+discard_stale_weatherman_modules("10.7.8")
 
 import pandas as pd
 import plotly.express as px
@@ -24,6 +24,8 @@ from weatherman.analytics import (
     detect_market_model_conflict,
     fixed_decision_snapshots,
     flat_bet_simulation,
+    forecast_ladder_history,
+    forecast_ladder_history_metrics,
     forecast_ladder_frame,
     forecast_scorecards,
     historical_d1_ladder,
@@ -46,7 +48,6 @@ from weatherman.db import (
     Session,
     ShadowEvaluation,
     SignalSnapshot,
-    StrategySnapshot,
     TafReport,
     init_db,
     refresh_database_connections,
@@ -268,6 +269,19 @@ if coverage_report_path.exists():
                 runtime = cadence.get("median_execution_seconds")
                 if runtime is not None:
                     st.write(f"Median runtime: {float(runtime) / 60:.1f} min")
+                p95_runtime = cadence.get("p95_execution_seconds")
+                if p95_runtime is not None:
+                    st.write(f"P95 runtime: {float(p95_runtime) / 60:.1f} min")
+                trigger_delay = cadence.get("median_trigger_delay_seconds")
+                if trigger_delay is not None:
+                    st.write(
+                        f"Median scheduled-trigger delay: {float(trigger_delay) / 60:.1f} min"
+                    )
+                queue_delay = cadence.get("median_queue_delay_seconds")
+                if queue_delay is not None:
+                    st.write(f"Median concurrency queue: {float(queue_delay) / 60:.1f} min")
+                if cadence.get("diagnosis"):
+                    st.caption(str(cadence["diagnosis"]))
                 st.caption(str(cadence.get("measurement", "")))
 
 
@@ -406,26 +420,51 @@ if st.sidebar.button("Refresh live trading data", type="primary"):
         st.session_state["refresh_feedback"] = feedback
         st.rerun()
 
+target_zone = ZoneInfo(timezone_name)
+target_start_utc = datetime(
+    target.year,
+    target.month,
+    target.day,
+    tzinfo=target_zone,
+).astimezone(timezone.utc)
+target_end_utc = target_start_utc + timedelta(days=1)
+
 with Session() as session:
     history_filter = {"airport": airport}
-    all_forecasts = read_archive_live(Forecast, session.bind, filters=history_filter)
+    all_forecasts = read_archive_live(
+        Forecast,
+        session.bind,
+        filters=history_filter,
+        minimums={"target_date": target - timedelta(days=90)},
+    )
     all_actuals = read_archive_live(DailyActual, session.bind, filters=history_filter)
     all_observations = read_archive_live(Observation, session.bind, filters=history_filter)
-    hourly = read_archive_live(HourlyForecast, session.bind, filters=history_filter)
+    hourly = read_archive_live(
+        HourlyForecast,
+        session.bind,
+        filters=history_filter,
+        minimums={"valid_at": target_start_utc},
+        maximums={"valid_at": target_end_utc},
+    )
     all_market_snapshots = read_archive_live(
-        MarketSnapshot, session.bind, filters=history_filter
+        MarketSnapshot,
+        session.bind,
+        filters={**history_filter, "target_date": target},
     )
     all_signal_snapshots = read_archive_live(
-        SignalSnapshot, session.bind, filters=history_filter
-    )
-    all_strategy_snapshots = read_archive_live(
-        StrategySnapshot, session.bind, filters=history_filter
+        SignalSnapshot,
+        session.bind,
+        filters={**history_filter, "target_date": target},
     )
     all_shadow_evaluations = read_archive_live(
-        ShadowEvaluation, session.bind, filters=history_filter
+        ShadowEvaluation,
+        session.bind,
+        filters={**history_filter, "target_date": target},
     )
     all_basket_snapshots = read_archive_live(
-        BasketSnapshot, session.bind, filters=history_filter
+        BasketSnapshot,
+        session.bind,
+        filters={**history_filter, "target_date": target},
     )
     all_forecast_snapshots = read_archive_live(
         ForecastSnapshot, session.bind, filters=history_filter
@@ -434,49 +473,22 @@ with Session() as session:
         ForecastVariantSnapshot, session.bind, filters=history_filter
     )
     all_regime_memory_snapshots = read_archive_live(
-        RegimeMemorySnapshot, session.bind, filters=history_filter
+        RegimeMemorySnapshot,
+        session.bind,
+        filters={**history_filter, "target_date": target},
     )
     all_tafs = read_archive_live(TafReport, session.bind, filters=history_filter)
 
-forecasts = (
-    all_forecasts[all_forecasts.airport == airport].copy()
-    if not all_forecasts.empty
-    else all_forecasts
-)
-actuals = (
-    all_actuals[all_actuals.airport == airport].copy() if not all_actuals.empty else all_actuals
-)
-observations = (
-    all_observations[all_observations.airport == airport].copy()
-    if not all_observations.empty
-    else all_observations
-)
-market_snapshots = (
-    all_market_snapshots[all_market_snapshots.airport == airport].copy()
-    if not all_market_snapshots.empty
-    else all_market_snapshots
-)
-signal_snapshots = (
-    all_signal_snapshots[all_signal_snapshots.airport == airport].copy()
-    if not all_signal_snapshots.empty
-    else all_signal_snapshots
-)
-strategy_snapshots = (
-    all_strategy_snapshots[all_strategy_snapshots.airport == airport].copy()
-    if not all_strategy_snapshots.empty
-    else all_strategy_snapshots
-)
-shadow_evaluations = (
-    all_shadow_evaluations[all_shadow_evaluations.airport == airport].copy()
-    if not all_shadow_evaluations.empty
-    else all_shadow_evaluations
-)
-basket_snapshots = (
-    all_basket_snapshots[all_basket_snapshots.airport == airport].copy()
-    if not all_basket_snapshots.empty
-    else all_basket_snapshots
-)
-tafs = all_tafs[all_tafs.airport == airport].copy() if not all_tafs.empty else all_tafs
+forecasts = all_forecasts
+actuals = all_actuals
+observations = all_observations
+market_snapshots = all_market_snapshots
+signal_snapshots = all_signal_snapshots
+all_strategy_snapshots = pd.DataFrame()
+strategy_snapshots = pd.DataFrame()
+shadow_evaluations = all_shadow_evaluations
+basket_snapshots = all_basket_snapshots
+tafs = all_tafs
 
 target_markets = (
     market_snapshots[pd.to_datetime(market_snapshots.target_date).dt.date == target].copy()
@@ -1665,9 +1677,166 @@ with tab_shadow:
 with tab_accuracy:
     st.subheader(f"{airport} · accuracy by information timing")
     st.caption(
-        "This is the same timing analysis as Airport Research, restricted to the "
-        "airport selected in the Trading Desk sidebar."
+        "Only the airport selected in the Trading Desk is evaluated. The raw archive "
+        "remains offline; this view works on the compact stored forecast snapshots."
     )
+    ladder_history = forecast_ladder_history(
+        all_forecast_snapshots,
+        actuals,
+        timezone_name=timezone_name,
+        expected_checkpoint_models=list(
+            catalog[airport].get("research_models", catalog[airport].get("models", []))
+        ),
+    )
+    st.markdown("#### Forecast Ladder History")
+    if ladder_history.empty:
+        st.info(
+            "No final station Actuals with matching stored forecast snapshots are "
+            "available for this airport yet."
+        )
+    else:
+        available_start = min(ladder_history.target_date)
+        available_end = max(ladder_history.target_date)
+        f1, f2, f3 = st.columns([1.3, 1, 1.8])
+        history_scope = f1.selectbox(
+            "Evidence filter",
+            ["All available days", "Regular OOS snapshots only"],
+            key=f"ladder_scope_{airport}",
+        )
+        include_reconstructed = f2.checkbox(
+            "Include reconstructed",
+            value=True,
+            key=f"ladder_reconstructed_{airport}",
+        )
+        selected_range = f3.date_input(
+            "Target-day range",
+            value=(available_start, available_end),
+            min_value=available_start,
+            max_value=available_end,
+            key=f"ladder_range_{airport}",
+        )
+        if isinstance(selected_range, (tuple, list)) and len(selected_range) == 2:
+            range_start, range_end = selected_range
+        else:
+            range_start = range_end = selected_range
+        selected_history = ladder_history[
+            (ladder_history.target_date >= range_start)
+            & (ladder_history.target_date <= range_end)
+        ].copy()
+        if history_scope == "Regular OOS snapshots only":
+            selected_history = selected_history[selected_history.regular_oos]
+        if not include_reconstructed:
+            evidence_columns = [
+                column for column in selected_history if column.endswith("_evidence")
+            ]
+            reconstructed = selected_history[evidence_columns].eq("reconstructed").any(axis=1)
+            selected_history = selected_history[~reconstructed]
+
+        if selected_history.empty:
+            st.info("No days match the selected evidence and date filters.")
+        else:
+            summary = forecast_ladder_history_metrics(selected_history)
+            summary_display = summary.copy()
+            summary_display["bias"] = summary_display.bias.map(
+                lambda value: f"{float(value):+.2f} °C" if pd.notna(value) else "—"
+            )
+            summary_display["mae"] = summary_display.mae.map(
+                lambda value: f"{float(value):.2f} °C" if pd.notna(value) else "—"
+            )
+            st.dataframe(
+                summary_display.rename(
+                    columns={"stage": "Forecast stage", "bias": "Bias", "mae": "MAE", "n": "N"}
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            champion_summary = summary[
+                summary.stage.str.contains("Champion", regex=False) & (summary.n > 0)
+            ].copy()
+            maximum_champion_n = int(champion_summary.n.max()) if not champion_summary.empty else 0
+            minimum_comparable_n = max(3, int(maximum_champion_n * 0.8 + 0.999))
+            eligible_best = champion_summary[
+                champion_summary.n >= minimum_comparable_n
+            ].sort_values(["mae", "n"], ascending=[True, False])
+            if not eligible_best.empty:
+                best = eligible_best.iloc[0]
+                st.caption(
+                    f"Best comparably covered Champion timing in this filter: {best.stage} · "
+                    f"{float(best.mae):.2f} °C across N={int(best.n)} day(s). "
+                    f"Stages need at least N={minimum_comparable_n} here. This identifies "
+                    "forecast timing quality, not market-price or executable-edge quality."
+                )
+
+            def forecast_with_error(row: pd.Series, column: str) -> str:
+                value = row.get(column)
+                error = row.get(f"{column.removesuffix('_c')}_error_c")
+                if pd.isna(value):
+                    return "—"
+                return f"{float(value):.2f} ({float(error):+.2f})"
+
+            def evidence_text(row: pd.Series, prefix: str) -> str:
+                evidence = str(row.get(f"{prefix}_evidence") or "missing")
+                freshness = str(row.get(f"{prefix}_freshness") or "unavailable")
+                age = row.get(f"{prefix}_source_age_minutes")
+                age_text = f"{float(age):.0f} min" if pd.notna(age) else "age n/a"
+                return f"{evidence} · {freshness} · {age_text}"
+
+            detail_rows = []
+            for _, history_row in selected_history.iterrows():
+                detail = {
+                    "Date": history_row.target_date,
+                    "Actual": f"{float(history_row.actual_c):.2f}",
+                    "Actual quality": (
+                        f"{history_row.actual_status} · {history_row.actual_source}"
+                    ),
+                    "D-1 Champion (error)": forecast_with_error(
+                        history_row, "d1_champion_c"
+                    ),
+                    "D-1 evidence": evidence_text(history_row, "d1"),
+                    "D0@06 Raw (error)": forecast_with_error(
+                        history_row, "d0_06_raw_c"
+                    ),
+                    "D0@06 Bias (error)": forecast_with_error(
+                        history_row, "d0_06_bias_c"
+                    ),
+                    "D0@06 METAR (error)": forecast_with_error(
+                        history_row, "d0_06_metar_c"
+                    ),
+                    "D0@06 Champion (error)": forecast_with_error(
+                        history_row, "d0_06_champion_c"
+                    ),
+                    "D0@06 evidence": evidence_text(history_row, "d0_06"),
+                    "D0@10 Raw (error)": forecast_with_error(
+                        history_row, "d0_10_raw_c"
+                    ),
+                    "D0@10 Bias (error)": forecast_with_error(
+                        history_row, "d0_10_bias_c"
+                    ),
+                    "D0@10 METAR (error)": forecast_with_error(
+                        history_row, "d0_10_metar_c"
+                    ),
+                    "D0@10 Champion (error)": forecast_with_error(
+                        history_row, "d0_10_champion_c"
+                    ),
+                    "D0@10 evidence": evidence_text(history_row, "d0_10"),
+                    "First Live local": history_row.live_local_time or "—",
+                    "Live Raw (error)": forecast_with_error(history_row, "live_raw_c"),
+                    "Live Bias (error)": forecast_with_error(history_row, "live_bias_c"),
+                    "Live METAR (error)": forecast_with_error(history_row, "live_metar_c"),
+                    "Live Champion (error)": forecast_with_error(
+                        history_row, "live_champion_c"
+                    ),
+                    "Live evidence": evidence_text(history_row, "live"),
+                }
+                detail_rows.append(detail)
+            st.dataframe(pd.DataFrame(detail_rows), hide_index=True, width="stretch")
+            st.caption(
+                "Forecast cells show forecast °C followed by signed error in parentheses. "
+                "Bias is the signed mean error; MAE uses absolute errors so warm and cold "
+                "misses cannot cancel. OOS here means evaluation-eligible stored production "
+                "evidence and does not increment promotion counters."
+            )
+
     accuracy_window = st.selectbox(
         "Evaluation window",
         [90, 30, 365],
@@ -1752,6 +1921,14 @@ with tab_accuracy:
         all_forecast_snapshots,
         {airport: timezone_name},
         lookback_days=7,
+        expected_models_by_airport={
+            airport: list(
+                catalog[airport].get(
+                    "research_models",
+                    catalog[airport].get("models", []),
+                )
+            )
+        },
     )
     st.subheader("Fixed-checkpoint completeness")
     st.caption(
@@ -1780,7 +1957,9 @@ with tab_accuracy:
             "evidence_class",
             "source_age_minutes",
             "coverage_ratio",
-            "models",
+            "expected_models",
+            "available_models",
+            "used_models",
         ]
         st.dataframe(
             shown_health[display_columns].rename(
@@ -1793,7 +1972,9 @@ with tab_accuracy:
                     "evidence_class": "Evidence",
                     "source_age_minutes": "Source age",
                     "coverage_ratio": "Coverage",
-                    "models": "Models",
+                    "expected_models": "Expected",
+                    "available_models": "Available",
+                    "used_models": "Used by Champion",
                 }
             ),
             hide_index=True,

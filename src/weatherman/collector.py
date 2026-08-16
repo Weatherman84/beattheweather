@@ -473,7 +473,7 @@ def coverage_audit(
     checked_at = _utc(now or datetime.now(timezone.utc))
     warnings: list[dict[str, object]] = []
     cadence_metrics: dict[str, object] = {
-        "measurement": "no v10.7.7 scheduler lineage available",
+        "measurement": "no v10.7.7+ scheduler lineage available",
         "runs": 0,
         "expected_slots": 0,
         "missing_slots": 0,
@@ -604,6 +604,20 @@ def coverage_audit(
                 queue_delay = pd.to_numeric(
                     lineage.queue_delay_seconds, errors="coerce"
                 ).dropna()
+                trigger_coverage = (
+                    float(observed_slots / expected_slots) if expected_slots else 0.0
+                )
+                median_queue_delay = (
+                    float(queue_delay.median()) if not queue_delay.empty else None
+                )
+                p95_execution = (
+                    float(runtime.quantile(0.95)) if not runtime.empty else None
+                )
+                scheduler_boundary = (
+                    trigger_coverage < 0.8
+                    and (median_queue_delay is None or median_queue_delay < 60)
+                    and (p95_execution is None or p95_execution < 600)
+                )
                 cadence_metrics = {
                     "measurement": (
                         "Expected slots are inferred from the declared offset cron; "
@@ -613,20 +627,22 @@ def coverage_audit(
                     "expected_slots": expected_slots,
                     "observed_slots": int(observed_slots),
                     "missing_slots": max(0, expected_slots - int(observed_slots)),
-                    "trigger_coverage": (
-                        float(observed_slots / expected_slots) if expected_slots else 0.0
-                    ),
+                    "trigger_coverage": trigger_coverage,
                     "median_trigger_delay_seconds": (
                         float(trigger_delay.median()) if not trigger_delay.empty else None
                     ),
-                    "median_queue_delay_seconds": (
-                        float(queue_delay.median()) if not queue_delay.empty else None
-                    ),
+                    "median_queue_delay_seconds": median_queue_delay,
                     "median_execution_seconds": (
                         float(runtime.median()) if not runtime.empty else None
                     ),
-                    "p95_execution_seconds": (
-                        float(runtime.quantile(0.95)) if not runtime.empty else None
+                    "p95_execution_seconds": p95_execution,
+                    "diagnosis": (
+                        "Observed bottleneck is scheduled-trigger delivery: recorded jobs "
+                        "start without a material concurrency queue and finish below the "
+                        "ten-minute interval. GitHub does not expose why uncreated schedule "
+                        "events were dropped."
+                        if scheduler_boundary
+                        else "No single scheduler-versus-runtime bottleneck is established."
                     ),
                 }
 

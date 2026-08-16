@@ -274,7 +274,13 @@ class ForecastSnapshot(Base):
     source_age_max_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
     expected_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    available_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    used_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_coverage_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expected_models_json: Mapped[str] = mapped_column(Text, default="[]")
+    available_models_json: Mapped[str] = mapped_column(Text, default="[]")
+    used_models_json: Mapped[str] = mapped_column(Text, default="[]")
+    extra_models_json: Mapped[str] = mapped_column(Text, default="[]")
     forecast_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -656,7 +662,13 @@ def init_db() -> None:
                     "source_age_max_minutes": "FLOAT",
                     "expected_model_count": "INTEGER",
                     "source_model_count": "INTEGER",
+                    "available_model_count": "INTEGER",
+                    "used_model_count": "INTEGER",
                     "source_coverage_ratio": "FLOAT",
+                    "expected_models_json": "TEXT DEFAULT '[]'",
+                    "available_models_json": "TEXT DEFAULT '[]'",
+                    "used_models_json": "TEXT DEFAULT '[]'",
+                    "extra_models_json": "TEXT DEFAULT '[]'",
                     "forecast_run_at": "DATETIME",
                     "forecast_available_at": "DATETIME",
                     "forecast_fetched_at": "DATETIME",

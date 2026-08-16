@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: weatherman-trading
-Version: 10.7.7
+Version: 10.7.8
 Summary: Model consensus, nowcast and backtesting for daily maximum-temperature markets
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
@@ -60,9 +60,10 @@ Ab Version 9.5.2 liegt das technische Startmodul innerhalb von `src`. Dadurch ka
 GitHub den Test auch dann vollständig ausführen, wenn bei einem Update keine neue
 Python-Datei im Repository-Hauptverzeichnis angelegt wurde.
 
-Ab Version 9.5.3 wechseln **Trading Desk** und **Airport Research** über
-Streamlits interne Seitennavigation. Beide Bereiche bleiben im selben Browser-Tab;
-der frühere absolute Markdown-Link wird nicht mehr verwendet.
+In v10.7.8 ist die speicherintensive **Airport Research**-Navigation im
+Produktionsbetrieb deaktiviert. Die sechs Trading-Airports und ihre kompakte
+Forecast Ladder History liegen vollständig im Trading Desk. Breites Research und
+Historical Replay werden getrennt von Streamlit ausgeführt.
 
 ## Schritt 3: Meteoblue-Key hinterlegen
 
@@ -107,7 +108,7 @@ festen Checkpoints und schreibt die Live-Entscheidungsstände. Fällige Modelle 
 über denselben kontrollierten Pfad aktualisiert. Workflow 2 bleibt der manuelle
 Vollabruf; Workflow 4 ist nur noch ein manueller Fallback.
 
-Wenn du auf Version 10.7.7 aktualisierst, warte den grünen Test ab und starte danach
+Wenn du auf Version 10.7.8 aktualisierst, warte den grünen Test ab und starte danach
 einmal **5 - Consolidated ten-minute collector**. Der erste Lauf ergänzt ausschließlich
 neue Metadaten-Spalten und lässt die vorhandenen Tabellenzeilen unverändert. Starte
 anschließend einmal **8 - Daily archive verification and SQLite maintenance** und boote
@@ -651,6 +652,35 @@ erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
 Für das Update den gesamten Inhalt von `UPLOAD_TO_GITHUB` hochladen, den grünen Test
 abwarten, **2 - Collect current forecasts** einmal manuell starten und Streamlit über
 **Manage app → Reboot app** neu starten. Kein Backfill erforderlich.
+
+### Speicher- und Trading-Desk-Hotfix 10.7.8
+
+- Archivpartitionen werden bereits während des Dekomprimierens nach Airport und
+  Zeitgrenzen gefiltert. Der reproduzierbare ausgewählte-Airport-Messlauf sank damit
+  von rund 777 MB auf 186 MB Peak-RSS; die gleichzeitig gehaltenen Frames sanken von
+  29,5 MB auf 4,9 MB.
+- Hourly-Pfade, Markt-, Signal-, Shadow-, Basket- und Regime-Ansichten laden im Trading
+  Desk nur den ausgewählten Airport und den tatsächlich benötigten Zieltag. Die
+  90-Tage-Kalibrierung, vollständigen Actuals, Regime-Memory- und OOS-Daten bleiben
+  erhalten; die Modelllogik wird nicht durch kurzes Abschneiden der Historie verändert.
+- Airport Research ist aus der produktiven Navigation entfernt und als leichte
+  Offline-Hinweisseite abgesichert. Replay und breite Research-Abfragen laufen nicht
+  bei normalen Streamlit-Reruns.
+- Forecast Ladder History zeigt je Airport und Tag finale Actuals, D-1, D0@06, D0@10
+  und den ersten Live-Stand mit Raw/Bias/METAR/Champion, signierten Fehlern,
+  Evidenz/Freshness/Quellalter sowie Bias/MAE/N. Zeitraum, reguläre OOS-Evidenz und
+  rekonstruierte Tage sind filterbar.
+- Checkpoint-Provenance trennt `expected`, alle kausal `available` und tatsächlich
+  `used by Champion`. Fremdmodelle können Coverage nicht mehr über 100 % treiben und
+  verschlechtern nicht mehr die Freshness der erwarteten Modellmenge.
+- Der Cadence-Bericht zeigt Median/P95-Laufzeit, Trigger- und Queue-Verzögerung. Bei der
+  aktuellen Messung sind kurze Ausführungszeiten und praktisch keine Concurrency-Queue
+  sichtbar; die fehlende Cadence entsteht an der GitHub-Schedule-Dispatch-Grenze. GitHub
+  veröffentlicht keine Ursache für nicht erzeugte Cron-Events.
+
+Es gibt keine produktive Forecast-, Bias-, Gewichts-, Regime-, Day-Lock-, TAF-,
+Promotion- oder Trading-Gate-Änderung. Der 30-Tage-Replay-Pilot bleibt ein separater
+zweiter Schritt. Details und Rollback stehen in `VERSION_HANDOFF_10.7.8.md`.
 
 ### Stabilitäts- und Research-Update 10.7.7
 

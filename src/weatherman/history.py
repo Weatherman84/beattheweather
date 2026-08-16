@@ -201,6 +201,94 @@ def _read_records(path: Path) -> list[dict[str, object]]:
     return records
 
 
+def _archive_filter_values(value: object) -> set[object]:
+    values = value if isinstance(value, (set, tuple, list, frozenset)) else (value,)
+    return {_json_value(item) for item in values}
+
+
+def _record_matches_filters(
+    record: Mapping[str, object],
+    filters: Mapping[str, object],
+) -> bool:
+    """Apply equality filters before archive rows enter an in-memory frame.
+
+    Archive partitions intentionally contain every airport.  Filtering only after
+    building a DataFrame caused a selected-airport Streamlit rerun to materialise
+    the complete archive repeatedly.  JSON values are canonicalised on write, so
+    equality and membership filters can safely be evaluated while streaming.
+    """
+    for column, value in filters.items():
+        if column not in record:
+            return False
+        if record.get(column) not in _archive_filter_values(value):
+            return False
+    return True
+
+
+def _read_filtered_records(
+    path: Path,
+    *,
+    filters: Mapping[str, object] | None = None,
+    minimums: Mapping[str, object] | None = None,
+    maximums: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    def ordered(value: object, boundary: object) -> tuple[object, object]:
+        if isinstance(boundary, datetime):
+            left = pd.Timestamp(value)
+            right = pd.Timestamp(boundary)
+            if left.tzinfo is None:
+                left = left.tz_localize("UTC")
+            else:
+                left = left.tz_convert("UTC")
+            if right.tzinfo is None:
+                right = right.tz_localize("UTC")
+            else:
+                right = right.tz_convert("UTC")
+            return left, right
+        if isinstance(boundary, date):
+            return pd.Timestamp(value).date(), boundary
+        return value, boundary
+
+    def within_bounds(record: Mapping[str, object]) -> bool:
+        for column, boundary in (minimums or {}).items():
+            value = record.get(column)
+            if value is None:
+                return False
+            left, right = ordered(value, boundary)
+            if left < right:
+                return False
+        for column, boundary in (maximums or {}).items():
+            value = record.get(column)
+            if value is None:
+                return False
+            left, right = ordered(value, boundary)
+            if left > right:
+                return False
+        return True
+
+    records: list[dict[str, object]] = []
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise HistoryArchiveError(
+                        f"Archive {path} contains a non-object row."
+                    )
+                if filters and not _record_matches_filters(record, filters):
+                    continue
+                if not within_bounds(record):
+                    continue
+                records.append(record)
+    except HistoryArchiveError:
+        raise
+    except (OSError, EOFError, json.JSONDecodeError) as exc:
+        raise HistoryArchiveError(f"Cannot read archive {path}: {exc}") from exc
+    return records
+
+
 def _manifest_path(directory: Path) -> Path:
     return directory / "manifest.json"
 
@@ -410,6 +498,9 @@ def read_archived_table(
     directory: Path = DEFAULT_ARCHIVE_DIRECTORY,
     start: object | None = None,
     end: object | None = None,
+    filters: Mapping[str, object] | None = None,
+    minimums: Mapping[str, object] | None = None,
+    maximums: Mapping[str, object] | None = None,
 ) -> pd.DataFrame:
     spec = ARCHIVE_SPECS.get(table)
     if spec is None:
@@ -423,7 +514,14 @@ def read_archived_table(
             continue
         if end_day is not None and day > end_day:
             continue
-        records.extend(_read_records(path))
+        records.extend(
+            _read_filtered_records(
+                path,
+                filters=filters,
+                minimums=minimums,
+                maximums=maximums,
+            )
+        )
     return pd.DataFrame(records)
 
 
@@ -476,7 +574,27 @@ def read_archive_live(
         if configured_database is None or bound_database != configured_database:
             return _normalise_model_frame(model, live)
         directory = DEFAULT_ARCHIVE_DIRECTORY
-    archived = read_archived_table(spec.table, directory=directory)
+    archive_start = (minimums or {}).get(spec.event_time)
+    archive_end = (maximums or {}).get(spec.event_time)
+    if as_of_column == spec.event_time and as_of is not None:
+        archive_end = min(archive_end, as_of) if archive_end is not None else as_of
+    archive_maximums = dict(maximums or {})
+    if as_of_column is not None and as_of is not None:
+        existing_maximum = archive_maximums.get(as_of_column)
+        archive_maximums[as_of_column] = (
+            min(existing_maximum, as_of)
+            if existing_maximum is not None
+            else as_of
+        )
+    archived = read_archived_table(
+        spec.table,
+        directory=directory,
+        start=archive_start,
+        end=archive_end,
+        filters=filters,
+        minimums=minimums,
+        maximums=archive_maximums,
+    )
     archived = _normalise_model_frame(model, archived)
     if not archived.empty:
         for column, value in (filters or {}).items():

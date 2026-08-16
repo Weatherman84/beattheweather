@@ -58,4 +58,5 @@ tests/test_v1073_stage1_reliability.py
 tests/test_v1074_actuals_cadence_and_lineage.py
 tests/test_v1075_live_refresh_and_actual_repair.py
 tests/test_v1077_stability_and_research.py
+tests/test_v1078_memory_provenance_and_ladder.py
 tests/test_workflows.py

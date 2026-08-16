@@ -1,18 +1,45 @@
 # Weatherman Project Handoff
 
-Stand: 15. August 2026
+Stand: 16. August 2026
 
-Gebaut: **v10.7.7**
+Gebaut: **v10.7.8**
 
-Ausgangsbasis: **v10.7.6**, geprüft auf `main`-Commit
-`218308d7fbbb6939ad6b62034afb370448b714ec`
+Ausgangsbasis: produktive **v10.7.7**, Code ab `336b033`; umgesetzt auf dem aktuellen
+Collector-Datenstand `04891c6`.
 
 ## Ergebnis
 
-v10.7.7 ist das freigegebene Stabilitäts-, Observability- und Research-Readiness-
-Release. Es verändert keine produktive Forecast-Formel. Die bestehende SQLite-Datenbank
-wird nur durch nullable/defaulted Metadaten-Spalten erweitert; vorhandene Zeilen werden
-nicht neu berechnet oder gelöscht.
+v10.7.8 ist ein Speicher- und Trading-Desk-Hotfix. Es verändert keine produktive
+Forecast-Formel. Die bestehende SQLite-Datenbank wird nur durch nullable/defaulted
+Provenance-Spalten erweitert; vorhandene Zeilen werden nicht neu berechnet oder gelöscht.
+
+## v10.7.8 Ergebnis
+
+- Root Cause des Streamlit-Ausfalls: `read_archive_live` materialisierte vor dem
+  Airport-Filter jede vollständige komprimierte Partition. Das Trading Desk hielt zudem
+  13 historische Frames und unnötige Hochfrequenzzeiträume gleichzeitig.
+- Der gleiche ausgewählte-Airport-Leselauf sank von ca. 777 MB auf 186 MB Peak-RSS und
+  von 29,5 MB auf 4,9 MB tatsächlich gehaltener Frame-Daten.
+- Archivfilter werden zeilenweise beim Dekomprimieren angewandt; Datumsgrenzen schneiden
+  Partitionen und Zeilen vor der DataFrame-Erzeugung. Hourly-, Markt-, Signal-, Shadow-,
+  Basket- und Regime-Daten sind im Trading Desk auf den aktiven Zieltag begrenzt.
+- Die 90-Tage-Modellkalibrierung, vollständigen finalen Actuals, Forecast-Snapshots,
+  Challenger-Varianten und OOS-Gates bleiben erhalten. Live-Regimes werden nicht durch
+  wenige Tage Historie ersetzt.
+- Airport Research ist in Streamlit ausgeblendet und führt beim Direktaufruf keine
+  Archivabfragen mehr aus. Research-Module und Roharchive bleiben für isolierte Jobs.
+- Forecast Ladder History ist pro ausgewähltem Airport verfügbar: D-1 Champion,
+  D0@06/D0@10/erstes Live jeweils als vollständige Raw/Bias/METAR/Champion-Kette,
+  Actual-Quelle, Fehler, Evidence, Freshness, Source Age und Bias/MAE/N.
+- Checkpoint-Coverage trennt erwartete, verfügbare und Champion-verwendete Modelle.
+  Coverage ist auf 100 % begrenzt; zusätzliche Fremdmodelle verändern die relevante
+  Freshness nicht.
+- Der aktuelle Coverage-Bericht zeigt 44/144 beobachtete Slots, Median-Laufzeit ca.
+  27 Sekunden, P95 ca. 124 Sekunden und Median-Queue 0 Sekunden. Damit liegt der
+  beobachtete Engpass bei GitHubs Schedule-Dispatch, nicht in Collector-Laufzeit oder
+  SQLite-Concurrency. Die Ursache nicht erzeugter Cron-Events bleibt von GitHub verborgen.
+
+Weitere Details, Acceptance Criteria und Rollback: `VERSION_HANDOFF_10.7.8.md`.
 
 ## Verifizierte Befunde und Ursachen
 
@@ -115,7 +142,7 @@ späteren Abrufzeitpunkt.
 
 1. Paketinhalt hochladen und grünen Test abwarten.
 2. Workflow **5 - Consolidated ten-minute collector** einmal manuell starten.
-3. Im Coverage-Bereich einen neuen v10.7.7-Lauf mit getrennten Zeitstempeln prüfen.
+3. Im Coverage-Bereich einen neuen v10.7.8-Lauf mit getrennten Zeitstempeln prüfen.
 4. Workflow **8 - Daily archive verification and SQLite maintenance** starten.
 5. Streamlit einmal neu booten und Trading Desk/Checkpoint-Anzeige prüfen.
 6. Den manuellen Live-Refresh für mindestens zwei Airports testen.
@@ -124,14 +151,14 @@ Workflow 1, Workflow 7 und ein Jahres-Backfill sind nicht erforderlich.
 
 ## Rollback
 
-Der Release ist code-seitig durch erneutes Hochladen des letzten v10.7.6-Pakets
-rückrollbar. Die neuen SQLite-Spalten sind additiv und werden von v10.7.6 ignoriert;
+Der Release ist code-seitig durch erneutes Hochladen des letzten v10.7.7-Pakets
+rückrollbar. Die neuen SQLite-Spalten sind additiv und werden von v10.7.7 ignoriert;
 ein Datenbank-Downgrade oder Löschen von Spalten ist nicht erforderlich. Vor dem Upload
 bleibt die aktuelle Repository-/DB-Version der Wiederherstellungspunkt.
 
 ## Empfehlung für v10.8.0
 
-Nach produktiver Abnahme von v10.7.7 kann ein strikt isolierter 30-Tage-Pilot für
+Nach produktiver Abnahme von v10.7.8 kann ein strikt isolierter 30-Tage-Pilot für
 Madrid und München beginnen. Voraussetzung ist, dass die neue Collector-Lineage über
 mehrere reale Läufe valide ist und der Readiness-Bericht die Pilotinputs je Zeitpunkt
 als historisch-kausal oder ausdrücklich `reconstructed-research` klassifiziert. Ein
