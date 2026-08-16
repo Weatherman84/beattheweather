@@ -2,23 +2,23 @@
   "active_warning_count": 1,
   "archive_partitions": 640,
   "archive_rows": 459994,
-  "archive_status": "verified",
+  "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
     "expected_slots": 142,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 25.4565235,
+    "median_execution_seconds": 25.121444,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 303.0,
-    "missing_slots": 98,
-    "observed_slots": 44,
-    "p95_execution_seconds": 124.17984190000004,
-    "runs": 44,
-    "trigger_coverage": 0.30985915492957744
+    "missing_slots": 97,
+    "observed_slots": 45,
+    "p95_execution_seconds": 122.62910119999991,
+    "runs": 45,
+    "trigger_coverage": 0.31690140845070425
   },
-  "checked_at": "2026-08-16T21:51:02.132405+00:00",
+  "checked_at": "2026-08-16T21:52:52.783364+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 33124352,
+  "database_bytes": 33140736,
   "warning_count": 2,
   "warnings": [
     {
