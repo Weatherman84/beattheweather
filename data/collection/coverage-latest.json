@@ -5,20 +5,20 @@
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 142,
+    "expected_slots": 143,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 25.121444,
+    "median_execution_seconds": 25.791603,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 313.0,
-    "missing_slots": 99,
+    "missing_slots": 100,
     "observed_slots": 43,
     "p95_execution_seconds": 133.4088476999999,
     "runs": 43,
-    "trigger_coverage": 0.3028169014084507
+    "trigger_coverage": 0.3006993006993007
   },
-  "checked_at": "2026-08-17T08:46:44.085180+00:00",
+  "checked_at": "2026-08-17T09:26:29.746444+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 29147136,
+  "database_bytes": 29736960,
   "warning_count": 7,
   "warnings": [
     {
@@ -29,52 +29,52 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 60 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
     {
       "active": true,
-      "age_minutes": 1004.8,
+      "age_minutes": 1044.6,
       "airport": "LEMD",
       "data_type": "market",
-      "message": "LEMD: market is 1005 minutes old.",
+      "message": "LEMD: market is 1045 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 1048.2,
+      "age_minutes": 1088.0,
       "airport": "EHAM",
       "data_type": "market",
-      "message": "EHAM: market is 1048 minutes old.",
+      "message": "EHAM: market is 1088 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 1077.6,
+      "age_minutes": 1117.3,
       "airport": "EPWA",
       "data_type": "market",
-      "message": "EPWA: market is 1078 minutes old.",
+      "message": "EPWA: market is 1117 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 1107.0,
+      "age_minutes": 1146.8,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 1107 minutes old.",
+      "message": "LTFM: market is 1147 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 1048.0,
+      "age_minutes": 1087.8,
       "airport": "EDDM",
       "data_type": "market",
-      "message": "EDDM: market is 1048 minutes old.",
+      "message": "EDDM: market is 1088 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     }
