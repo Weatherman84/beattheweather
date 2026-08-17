@@ -1,37 +1,55 @@
 {
-  "active_warning_count": 1,
+  "active_warning_count": 3,
   "archive_partitions": 640,
   "archive_rows": 459994,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 144,
+    "expected_slots": 139,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 24.474778999999998,
+    "median_execution_seconds": 25.121444,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 298.0,
-    "missing_slots": 98,
-    "observed_slots": 46,
-    "p95_execution_seconds": 121.0783605,
-    "runs": 46,
-    "trigger_coverage": 0.3194444444444444
+    "median_trigger_delay_seconds": 293.0,
+    "missing_slots": 94,
+    "observed_slots": 45,
+    "p95_execution_seconds": 122.62910119999991,
+    "runs": 45,
+    "trigger_coverage": 0.3237410071942446
   },
-  "checked_at": "2026-08-17T01:06:48.143651+00:00",
+  "checked_at": "2026-08-17T02:35:10.357064+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 33247232,
-  "warning_count": 2,
+  "database_bytes": 33357824,
+  "warning_count": 4,
   "warnings": [
     {
       "active": false,
-      "message": "Historical 24-hour collector gap: 80 minutes.",
+      "message": "Historical 24-hour collector gap: 90 minutes.",
       "severity": "warning",
       "type": "collector_historical_gap"
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 70 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 90 minutes.",
       "severity": "error",
       "type": "collector_gap"
+    },
+    {
+      "active": true,
+      "age_minutes": 676.5,
+      "airport": "LTAC",
+      "data_type": "market",
+      "message": "LTAC: market is 677 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 735.5,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 735 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     }
   ]
 }
