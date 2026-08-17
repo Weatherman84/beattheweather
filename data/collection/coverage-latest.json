@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 3,
+  "active_warning_count": 5,
   "archive_partitions": 651,
   "archive_rows": 483820,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 142,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 29.413094,
+    "median_execution_seconds": 29.585755,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 318.5,
+    "median_trigger_delay_seconds": 324.0,
     "missing_slots": 103,
-    "observed_slots": 40,
-    "p95_execution_seconds": 139.64292384999996,
-    "runs": 40,
-    "trigger_coverage": 0.27972027972027974
+    "observed_slots": 39,
+    "p95_execution_seconds": 129.51968460000003,
+    "runs": 39,
+    "trigger_coverage": 0.2746478873239437
   },
-  "checked_at": "2026-08-17T17:13:08.758990+00:00",
+  "checked_at": "2026-08-17T17:50:41.682666+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 36769792,
-  "warning_count": 4,
+  "database_bytes": 36995072,
+  "warning_count": 6,
   "warnings": [
     {
       "active": false,
@@ -35,17 +35,35 @@
     },
     {
       "active": true,
-      "age_minutes": 189.0,
-      "airport": "LTFM",
+      "age_minutes": 189.3,
+      "airport": "EPWA",
       "data_type": "market",
-      "message": "LTFM: market is 189 minutes old.",
+      "message": "EPWA: market is 189 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "database_bytes": 36769792,
-      "message": "Active SQLite is 35.1 MiB.",
+      "age_minutes": 227.1,
+      "airport": "LTFM",
+      "data_type": "forecast",
+      "message": "LTFM: forecast is 227 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 226.5,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 227 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "database_bytes": 36995072,
+      "message": "Active SQLite is 35.3 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
