@@ -5,20 +5,20 @@
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 137,
+    "expected_slots": 144,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 25.121444,
+    "median_execution_seconds": 24.474778999999998,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 293.0,
-    "missing_slots": 92,
-    "observed_slots": 45,
-    "p95_execution_seconds": 122.62910119999991,
-    "runs": 45,
-    "trigger_coverage": 0.3284671532846715
+    "median_trigger_delay_seconds": 298.0,
+    "missing_slots": 98,
+    "observed_slots": 46,
+    "p95_execution_seconds": 121.0783605,
+    "runs": 46,
+    "trigger_coverage": 0.3194444444444444
   },
-  "checked_at": "2026-08-16T23:53:20.578925+00:00",
+  "checked_at": "2026-08-17T01:06:48.143651+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 33218560,
+  "database_bytes": 33247232,
   "warning_count": 2,
   "warnings": [
     {
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 70 minutes.",
       "severity": "error",
       "type": "collector_gap"
     }
