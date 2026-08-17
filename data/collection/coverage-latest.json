@@ -5,20 +5,20 @@
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 141,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 26.7069345,
+    "median_execution_seconds": 29.413094,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 327.0,
-    "missing_slots": 103,
+    "missing_slots": 101,
     "observed_slots": 40,
     "p95_execution_seconds": 139.64292384999996,
     "runs": 40,
-    "trigger_coverage": 0.27972027972027974
+    "trigger_coverage": 0.28368794326241137
   },
-  "checked_at": "2026-08-17T15:45:03.452593+00:00",
+  "checked_at": "2026-08-17T16:03:26.759845+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 36360192,
+  "database_bytes": 36532224,
   "warning_count": 2,
   "warnings": [
     {
