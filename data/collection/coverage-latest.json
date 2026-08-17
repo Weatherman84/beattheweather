@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 8,
+  "active_warning_count": 2,
   "archive_partitions": 651,
   "archive_rows": 483820,
   "archive_status": "deferred_to_daily_verification",
@@ -9,17 +9,17 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 29.6440945,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 327.0,
+    "median_trigger_delay_seconds": 320.0,
     "missing_slots": 105,
     "observed_slots": 38,
     "p95_execution_seconds": 130.77430939999996,
     "runs": 38,
     "trigger_coverage": 0.26573426573426573
   },
-  "checked_at": "2026-08-17T20:47:42.917981+00:00",
+  "checked_at": "2026-08-17T21:13:09.585907+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 37175296,
-  "warning_count": 9,
+  "database_bytes": 37187584,
+  "warning_count": 3,
   "warnings": [
     {
       "active": false,
@@ -35,61 +35,7 @@
     },
     {
       "active": true,
-      "age_minutes": 284.7,
-      "airport": "LEMD",
-      "data_type": "market",
-      "message": "LEMD: market is 285 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 338.8,
-      "airport": "EHAM",
-      "data_type": "forecast",
-      "message": "EHAM: forecast is 339 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 338.7,
-      "airport": "EHAM",
-      "data_type": "market",
-      "message": "EHAM: market is 339 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 366.8,
-      "airport": "EPWA",
-      "data_type": "forecast",
-      "message": "EPWA: forecast is 367 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 366.4,
-      "airport": "EPWA",
-      "data_type": "market",
-      "message": "EPWA: market is 366 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 338.6,
-      "airport": "EDDM",
-      "data_type": "market",
-      "message": "EDDM: market is 339 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "database_bytes": 37175296,
+      "database_bytes": 37187584,
       "message": "Active SQLite is 35.5 MiB.",
       "severity": "error",
       "type": "database_growth"
