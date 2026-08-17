@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 2,
+  "active_warning_count": 1,
   "archive_partitions": 651,
   "archive_rows": 483820,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 141,
+    "expected_slots": 144,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 27.2761465,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 308.0,
-    "missing_slots": 99,
+    "missing_slots": 102,
     "observed_slots": 42,
     "p95_execution_seconds": 136.19799084999977,
     "runs": 42,
-    "trigger_coverage": 0.2978723404255319
+    "trigger_coverage": 0.2916666666666667
   },
-  "checked_at": "2026-08-17T10:07:52.479079+00:00",
+  "checked_at": "2026-08-17T10:49:20.793381+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 30527488,
-  "warning_count": 3,
+  "database_bytes": 31342592,
+  "warning_count": 2,
   "warnings": [
     {
       "active": false,
@@ -29,18 +29,9 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
       "severity": "error",
       "type": "collector_gap"
-    },
-    {
-      "active": true,
-      "age_minutes": 1085.9,
-      "airport": "LEMD",
-      "data_type": "market",
-      "message": "LEMD: market is 1086 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     }
   ]
 }
