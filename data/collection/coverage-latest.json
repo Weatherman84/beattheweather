@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 1,
+  "active_warning_count": 3,
   "archive_partitions": 651,
   "archive_rows": 483820,
   "archive_status": "deferred_to_daily_verification",
@@ -9,17 +9,17 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 29.413094,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 327.0,
+    "median_trigger_delay_seconds": 318.5,
     "missing_slots": 103,
     "observed_slots": 40,
     "p95_execution_seconds": 139.64292384999996,
     "runs": 40,
     "trigger_coverage": 0.27972027972027974
   },
-  "checked_at": "2026-08-17T16:43:30.376733+00:00",
+  "checked_at": "2026-08-17T17:13:08.758990+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 36651008,
-  "warning_count": 2,
+  "database_bytes": 36769792,
+  "warning_count": 4,
   "warnings": [
     {
       "active": false,
@@ -32,6 +32,22 @@
       "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
+    },
+    {
+      "active": true,
+      "age_minutes": 189.0,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 189 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "database_bytes": 36769792,
+      "message": "Active SQLite is 35.1 MiB.",
+      "severity": "error",
+      "type": "database_growth"
     }
   ]
 }
