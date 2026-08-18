@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 2,
+  "active_warning_count": 4,
   "archive_partitions": 651,
   "archive_rows": 483820,
   "archive_status": "deferred_to_daily_verification",
@@ -7,19 +7,19 @@
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
     "expected_slots": 140,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 30.418657500000002,
+    "median_execution_seconds": 29.6440945,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 366.5,
+    "median_trigger_delay_seconds": 354.5,
     "missing_slots": 104,
     "observed_slots": 36,
     "p95_execution_seconds": 133.283559,
     "runs": 36,
     "trigger_coverage": 0.2571428571428571
   },
-  "checked_at": "2026-08-18T01:41:27.246741+00:00",
+  "checked_at": "2026-08-18T02:44:07.819272+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 37273600,
-  "warning_count": 3,
+  "database_bytes": 37335040,
+  "warning_count": 5,
   "warnings": [
     {
       "active": false,
@@ -29,14 +29,32 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 110 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 60 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
     {
       "active": true,
-      "database_bytes": 37273600,
-      "message": "Active SQLite is 35.5 MiB.",
+      "age_minutes": 695.0,
+      "airport": "LTAC",
+      "data_type": "market",
+      "message": "LTAC: market is 695 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 760.0,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 760 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "database_bytes": 37335040,
+      "message": "Active SQLite is 35.6 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
