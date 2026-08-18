@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 7,
+  "active_warning_count": 9,
   "archive_partitions": 662,
   "archive_rows": 516924,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 141,
+    "expected_slots": 142,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 28.249339,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 311.5,
-    "missing_slots": 105,
+    "median_trigger_delay_seconds": 305.5,
+    "missing_slots": 106,
     "observed_slots": 36,
     "p95_execution_seconds": 163.43768825,
     "runs": 36,
-    "trigger_coverage": 0.2553191489361702
+    "trigger_coverage": 0.2535211267605634
   },
-  "checked_at": "2026-08-18T18:34:13.698601+00:00",
+  "checked_at": "2026-08-18T19:13:04.028240+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 37888000,
-  "warning_count": 8,
+  "database_bytes": 37974016,
+  "warning_count": 10,
   "warnings": [
     {
       "active": false,
@@ -35,53 +35,71 @@
     },
     {
       "active": true,
-      "age_minutes": 185.7,
+      "age_minutes": 191.4,
+      "airport": "LEMD",
+      "data_type": "market",
+      "message": "LEMD: market is 191 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 224.7,
+      "airport": "EHAM",
+      "data_type": "forecast",
+      "message": "EHAM: forecast is 225 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 224.5,
       "airport": "EHAM",
       "data_type": "market",
-      "message": "EHAM: market is 186 minutes old.",
+      "message": "EHAM: market is 225 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 225.1,
+      "age_minutes": 264.0,
       "airport": "EPWA",
       "data_type": "market",
-      "message": "EPWA: market is 225 minutes old.",
+      "message": "EPWA: market is 264 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 185.6,
+      "age_minutes": 224.5,
       "airport": "LTAC",
       "data_type": "market",
-      "message": "LTAC: market is 186 minutes old.",
+      "message": "LTAC: market is 224 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 271.9,
+      "age_minutes": 310.8,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 272 minutes old.",
+      "message": "LTFM: market is 311 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 185.6,
+      "age_minutes": 224.4,
       "airport": "EDDM",
       "data_type": "market",
-      "message": "EDDM: market is 186 minutes old.",
+      "message": "EDDM: market is 224 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "database_bytes": 37888000,
-      "message": "Active SQLite is 36.1 MiB.",
+      "database_bytes": 37974016,
+      "message": "Active SQLite is 36.2 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
