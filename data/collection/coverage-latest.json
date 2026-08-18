@@ -9,16 +9,16 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 27.7545475,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 305.5,
+    "median_trigger_delay_seconds": 308.0,
     "missing_slots": 106,
     "observed_slots": 38,
     "p95_execution_seconds": 132.20071204999996,
     "runs": 38,
     "trigger_coverage": 0.2638888888888889
   },
-  "checked_at": "2026-08-18T11:09:33.964050+00:00",
+  "checked_at": "2026-08-18T11:45:50.527088+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 32428032,
+  "database_bytes": 33230848,
   "warning_count": 2,
   "warnings": [
     {
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
     }
