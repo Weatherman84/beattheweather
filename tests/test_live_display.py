@@ -80,10 +80,10 @@ def sample_nowcast():
 def test_forecast_chain_ends_with_unambiguous_champion_label():
     rows = forecast_chain_rows(sample_nowcast())
     assert [row["Stage"] for row in rows] == [
-        "Weighted models",
-        "Bias / regime base",
-        "Live weather adjusted",
-        "Champion expected maximum",
+        "Raw ensemble",
+        "Bias-corrected",
+        "Live weather-adjusted",
+        "Champion",
     ]
     assert rows[-1]["Forecast"] == "27.80 °C"
 

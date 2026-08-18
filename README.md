@@ -3,6 +3,31 @@
 Du musst **keine Befehle eingeben**, nichts programmieren und nichts auf deinem Computer
 installieren.
 
+## Neu in Version 10.7.9
+
+- **All-airport live trading overview** ist die neue Standardansicht. Sie zeigt für alle
+  sechs Airports Champion, letzten METAR, METAR-Maximum, Temperaturtrend, Forecast Chain,
+  OOS-Reliability und relevante Buckets in einem Durchgang.
+- **Refresh all airports** aktualisiert fällige Modelle sowie METAR, TAF und Polymarket
+  einmal pro Airport. Frische Modelle werden wiederverwendet; SQLite-Schreibvorgänge
+  bleiben seriell und ein Providerfehler löscht keinen letzten vollständigen Stand.
+- Reliability wird als **Exact Bucket / ±1 °C / MAE / N** ausgewiesen. Produktive
+  Reliability verwendet ausschließlich echte scheduled, pre-peak Snapshots mit finalem
+  Stations-Actual; Rekonstruktionen bleiben Research.
+- Relevante Buckets sind standardmäßig nach Temperatur statt Wahrscheinlichkeit sortiert.
+- Accuracy & Reliability verwendet einheitlich D−1 @20 LT, D0 @06 LT, D0 @10 LT und
+  First stored live snapshot after D0@10 sowie Raw ensemble, Bias-corrected, Live
+  weather-adjusted und Champion. TAF bleibt separate Guidance.
+- Market Comparison und Shadow Watcher sind in der normalen Navigation verborgen und
+  ihre schweren Tabellen werden bei normalen Trading-Desk-Aufrufen nicht geladen.
+- Ab 35 MiB startet auch der schnelle Collector die verifizierte Archivierung; 48 MiB
+  bleibt das harte Persistenzlimit.
+- Checkpoints erfassen den zugehörigen Marktstatus und die Modell-Auswahlgründe. Die neue
+  Post-Peak-Diagnostik ist strikt research-only und verändert keine Produktion.
+
+Kein Backfill erforderlich. Nach dem Upload Workflow 8 und danach Workflow 5 jeweils einmal
+manuell starten, anschließend Streamlit einmal neu booten.
+
 ## Was du brauchst
 
 - ein GitHub-Konto;

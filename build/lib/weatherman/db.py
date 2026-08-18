@@ -291,6 +291,12 @@ class ForecastSnapshot(Base):
         DateTime(timezone=True), nullable=True
     )
     source_provenance_json: Mapped[str] = mapped_column(Text, default="[]")
+    post_peak_diagnostic_json: Mapped[str] = mapped_column(Text, default="{}")
+    market_snapshot_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    market_snapshot_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    market_bucket_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     taf_report_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     taf_issue_time: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
@@ -673,6 +679,10 @@ def init_db() -> None:
                     "forecast_available_at": "DATETIME",
                     "forecast_fetched_at": "DATETIME",
                     "source_provenance_json": "TEXT DEFAULT '[]'",
+                    "post_peak_diagnostic_json": "TEXT DEFAULT '{}'",
+                    "market_snapshot_status": "VARCHAR(30)",
+                    "market_snapshot_at": "DATETIME",
+                    "market_bucket_count": "INTEGER",
                     "taf_report_id": "INTEGER",
                     "taf_issue_time": "DATETIME",
                     "taf_first_seen_at": "DATETIME",

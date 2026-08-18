@@ -17,11 +17,11 @@ def _sum_contributions(nowcast: object, names: tuple[str, ...]) -> float:
 
 def forecast_chain_rows(nowcast: object) -> list[dict[str, str]]:
     stages = [
-        ("Weighted models", _number(getattr(nowcast, "weighted_raw_mean", None))),
-        ("Bias / regime base", _number(getattr(getattr(nowcast, "corrected"), "mean"))),
-        ("Live weather adjusted", _number(getattr(nowcast, "metar_conditioned_mean", None))),
+        ("Raw ensemble", _number(getattr(nowcast, "weighted_raw_mean", None))),
+        ("Bias-corrected", _number(getattr(getattr(nowcast, "corrected"), "mean"))),
+        ("Live weather-adjusted", _number(getattr(nowcast, "metar_conditioned_mean", None))),
         (
-            "Champion expected maximum",
+            "Champion",
             _number(getattr(nowcast, "final_forecast_mean", None)),
         ),
     ]

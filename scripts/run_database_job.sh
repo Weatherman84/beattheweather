@@ -13,6 +13,7 @@ maximum_attempts=3
 database_path="data/weatherman.db"
 history_archive_path="data/history_archive"
 collection_report_path="data/collection"
+database_maintenance_threshold_bytes=$((35 * 1024 * 1024))
 database_size_limit_bytes=$((48 * 1024 * 1024))
 fast_database_job="${WEATHERMAN_FAST_DATABASE_JOB:-0}"
 
@@ -57,8 +58,8 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
     env PYTHONPATH=src python -m weatherman.cli audit-coverage
   fi
   database_size_bytes=$(wc -c < "$database_path")
-  if [[ "$fast_database_job" == "1" ]] && ((database_size_bytes >= database_size_limit_bytes)); then
-    echo "Fast collector reached the maintenance threshold; running verified retention now."
+  if [[ "$fast_database_job" == "1" ]] && ((database_size_bytes >= database_maintenance_threshold_bytes)); then
+    echo "Fast collector reached the 35-MiB maintenance threshold; running verified retention now."
     env PYTHONPATH=src python -m weatherman.cli maintain-database --retention-days 3
     env PYTHONPATH=src python -m weatherman.cli audit-coverage
     database_size_bytes=$(wc -c < "$database_path")

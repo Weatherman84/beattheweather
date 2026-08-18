@@ -1,8 +1,44 @@
 # Weatherman Project Handoff
 
-Stand: 16. August 2026
+Stand: 18. August 2026
 
-Gebaut: **v10.7.8**
+Gebaut: **v10.7.9**
+
+Ausgangsbasis: öffentliche v10.7.8, aktueller Collector-HEAD
+`18b17b7b5e10c4cc90168411b7b4961b535cdd05`.
+
+## v10.7.9 Ergebnis
+
+v10.7.9 baut den produktiven Trading Desk um die tatsächliche Nutzungsreihenfolge auf:
+Sechs-Airport-Übersicht, Ein-Klick-Gesamtrefresh, Kernmetriken, Forecast Chain,
+Reliability und temperatur-sortierte Buckets. Accuracy by Timing wurde auf eine kompakte
+Champion-Zeitpunktübersicht plus einklappbare Ladder reduziert und terminologisch
+vereinheitlicht.
+
+Stabilität und Datenqualität:
+
+- Der All-Airport-Pfad reduziert jeden Airport sofort auf kleine Dictionaries; sechs
+  historische DataFrame-Sätze werden nicht gleichzeitig im Streamlit-State gehalten.
+- Der globale Refresh fragt nur fällige Modelle neu ab, aktualisiert METAR/TAF/Markt,
+  isoliert Providerfehler je Airport und behält SQLite als Single Writer.
+- Verified Maintenance startet im Fast-Collector bereits ab 35 MiB; 48 MiB bleibt das
+  harte Limit.
+- Finale Stations-Actuals bleiben monoton geschützt; ein expliziter 48-Stunden-
+  Regressionstest verhindert eine Rückstufung durch provisional Actuals.
+- Checkpoints speichern Marktstatus/-zeit/-Bucketzahl sowie erwartete, verfügbare,
+  frische, verwendete und ausgeschlossene Modelle samt Ausschlussgrund.
+- Post-Peak-/Upper-Tail-Diagnostik speichert den Radiation-only-Kandidaten, Upper-Tail-
+  Masse, Trend, Restwärmung und Peakabstand ausschließlich als Research-Lineage.
+
+Nicht verändert wurden Champion-Formel, Gewichte, Biases, Anchors, Regimekoeffizienten,
+TAF-Wirkung, Day-/Peak-Lock, Promotion-/Safety-Gates und Wettlogik. Kein Challenger wurde
+promotet; Historical Replay bleibt eine separate Research-Version.
+
+Verifikation: 189 Tests gegen `src`, 189 Tests gegen den mechanischen `build/lib`-
+Spiegel, Ruff auf App/Source/Tests/Build, SQLite `quick_check=ok`. Kerntabellen-Row-Counts
+blieben bei der additiven Schema-Migration unverändert.
+
+---
 
 Ausgangsbasis: produktive **v10.7.7**, Code ab `336b033`; umgesetzt auf dem aktuellen
 Collector-Datenstand `04891c6`.

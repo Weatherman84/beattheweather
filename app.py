@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.7.8")
+discard_stale_weatherman_modules("10.7.9")
 
 import pandas as pd
 import plotly.express as px
@@ -26,6 +26,7 @@ from weatherman.analytics import (
     flat_bet_simulation,
     forecast_ladder_history,
     forecast_ladder_history_metrics,
+    forecast_ladder_oos_reliability,
     forecast_ladder_frame,
     forecast_scorecards,
     historical_d1_ladder,
@@ -36,7 +37,6 @@ from weatherman.analytics import (
     score_frame,
 )
 from weatherman.db import (
-    BasketSnapshot,
     DailyActual,
     Forecast,
     ForecastSnapshot,
@@ -46,7 +46,6 @@ from weatherman.db import (
     Observation,
     RegimeMemorySnapshot,
     Session,
-    ShadowEvaluation,
     SignalSnapshot,
     TafReport,
     init_db,
@@ -65,7 +64,12 @@ from weatherman.navigation import render_app_navigation
 from weatherman.live_ui import render_compact_live_forecast
 from weatherman.history import read_archive_live
 from weatherman.research import filter_target_window, market_timing_metrics
-from weatherman.service import collect_live_aviation, collect_live_trading_refresh
+from weatherman.service import (
+    collect_all_live_trading_refresh,
+    collect_live_aviation,
+    collect_live_trading_refresh,
+    live_trading_overview,
+)
 from weatherman.catalog import trading_airports
 from weatherman.settings import settings
 from weatherman.taf import (
@@ -73,6 +77,7 @@ from weatherman.taf import (
     taf_verification_frame,
     taf_verification_metrics,
 )
+from weatherman.terminology import EVIDENCE_GLOSSARY, FRESHNESS_GLOSSARY
 
 
 def last_update(frame: pd.DataFrame, column: str, timezone_name: str) -> str:
@@ -198,6 +203,143 @@ def cached_paired_d1_d0_reliability(
     )
 
 
+@st.cache_data(show_spinner=False, ttl=60)
+def cached_live_trading_overview(target_date, database_version: int) -> list[dict[str, object]]:
+    del database_version
+    return live_trading_overview(
+        {code: target_date for code in trading_airports()},
+    )
+
+
+def render_all_airports_overview(catalog: dict[str, dict], target_date) -> None:
+    """Render six reduced airport summaries without retaining their source frames."""
+    st.subheader("All-airport live trading overview")
+    st.caption(
+        "One decision view for every core airport. Historical detail remains on Airport detail; "
+        "this page keeps only compact summaries in memory."
+    )
+    if st.button("Refresh all airports", type="primary"):
+        with st.spinner("Refreshing due models, METAR, TAF and Polymarket for all airports…"):
+            result = collect_all_live_trading_refresh(
+                {code: target_date for code in catalog}
+            )
+        refresh_database_connections()
+        init_db()
+        st.cache_data.clear()
+        failed = list(result.get("failed_airports") or [])
+        message = (
+            f"{int(result['successful_airports'])}/{len(catalog)} airports completed in "
+            f"{float(result['elapsed_seconds']):.1f}s"
+        )
+        if failed:
+            st.warning(message + " · source errors: " + ", ".join(failed))
+        else:
+            st.success(message)
+
+    database_path = Path("data/weatherman.db")
+    database_version = database_path.stat().st_mtime_ns if database_path.exists() else 0
+    with st.spinner("Building compact live summaries…"):
+        rows = cached_live_trading_overview(target_date, database_version)
+    if not rows:
+        st.info("No live airport summaries are currently available.")
+        return
+
+    summary_rows = []
+    for row in rows:
+        zone = str(row.get("timezone") or "UTC")
+        metar_at = pd.to_datetime(row.get("latest_metar_at"), utc=True, errors="coerce")
+        summary_rows.append(
+            {
+                "Airport": f"{row['airport']} · {row['name']}",
+                "Champion": (
+                    f"{float(row['champion_c']):.1f} °C" if row.get("champion_c") is not None else "—"
+                ),
+                "Latest METAR": (
+                    f"{float(row['latest_metar_c']):.1f} °C" if row.get("latest_metar_c") is not None else "—"
+                ),
+                "METAR max": (
+                    f"{float(row['metar_max_c']):.0f} °C" if row.get("metar_max_c") is not None else "—"
+                ),
+                "Trend": (
+                    f"{float(row['temperature_trend_c_per_hour']):+.1f} °C/h"
+                    if row.get("temperature_trend_c_per_hour") is not None
+                    else "—"
+                ),
+                "METAR time": (
+                    pd.Timestamp(metar_at).tz_convert(zone).strftime("%H:%M LT")
+                    if pd.notna(metar_at)
+                    else "—"
+                ),
+                "Status": str(row.get("status") or "—"),
+            }
+        )
+    st.dataframe(pd.DataFrame(summary_rows), hide_index=True, width="stretch")
+
+    columns = st.columns(2)
+    for index, row in enumerate(rows):
+        with columns[index % 2]:
+            with st.container(border=True):
+                st.markdown(f"### {row['airport']} · {row['name']}")
+                if row.get("champion_c") is None:
+                    st.warning(str(row.get("status") or "No current forecast"))
+                    continue
+                if row.get("forecast_stale"):
+                    st.error("Model inputs stale · do not use for a live decision.")
+                chain, reliability = st.columns(2)
+                with chain:
+                    st.markdown("**Forecast chain**")
+                    chain_frame = pd.DataFrame(row.get("forecast_chain") or [])
+                    if not chain_frame.empty:
+                        chain_frame["Forecast"] = chain_frame.value_c.map(
+                            lambda value: f"{float(value):.1f} °C" if pd.notna(value) else "—"
+                        )
+                        st.dataframe(
+                            chain_frame[["stage", "Forecast"]].rename(
+                                columns={"stage": "Stage"}
+                            ),
+                            hide_index=True,
+                            width="stretch",
+                        )
+                with reliability:
+                    st.markdown("**Champion reliability**")
+                    reliability_frame = pd.DataFrame(row.get("reliability") or [])
+                    if reliability_frame.empty:
+                        st.caption("No scheduled final-Actual OOS cases yet.")
+                    else:
+                        reliability_frame["Checkpoint"] = reliability_frame.stage.str.replace(
+                            " · Champion", "", regex=False
+                        )
+                        reliability_frame["Exact"] = reliability_frame.exact_bucket.map(
+                            lambda value: f"{float(value):.0%}" if pd.notna(value) else "—"
+                        )
+                        reliability_frame["MAE"] = reliability_frame.mae.map(
+                            lambda value: f"{float(value):.2f} K" if pd.notna(value) else "—"
+                        )
+                        st.dataframe(
+                            reliability_frame[["Checkpoint", "Exact", "MAE", "n"]].rename(
+                                columns={"n": "N"}
+                            ),
+                            hide_index=True,
+                            width="stretch",
+                        )
+                st.markdown("**Relevant buckets · sorted by temperature**")
+                buckets = pd.DataFrame(row.get("relevant_buckets") or [])
+                if not buckets.empty:
+                    buckets["Bucket"] = buckets.bucket.map(lambda value: f"{int(value)} °C")
+                    buckets["Champion probability"] = buckets.probability.map(
+                        lambda value: f"{float(value):.1%}"
+                    )
+                    st.dataframe(
+                        buckets[["Bucket", "Champion probability"]],
+                        hide_index=True,
+                        width="stretch",
+                    )
+                st.caption(
+                    "Exact Bucket is shown as the hard hit rate; MAE and N keep small samples "
+                    "visible. Reliability excludes reconstructed and late/post-peak cases."
+                )
+
+
 st.set_page_config(page_title="Weatherman · Trading Desk", page_icon="🌡️", layout="wide")
 # A GitHub workflow can replace the SQLite file while Streamlit is still alive.
 # Reopening pooled handles on every rerun makes that new snapshot visible without
@@ -208,15 +350,30 @@ catalog = trading_airports()
 
 render_app_navigation(st)
 st.title("Weatherman · Trading Desk")
-airport = st.sidebar.selectbox(
-    "Airport", list(catalog), format_func=lambda code: f"{code} · {catalog[code]['name']}"
+view_mode = st.sidebar.radio(
+    "Trading Desk view",
+    ["All airports", "Airport detail"],
+    index=0,
 )
-timezone_name = catalog[airport]["timezone"]
-target = st.sidebar.date_input("Target date", value=datetime.now(ZoneInfo(timezone_name)).date())
-critical_window = critical_window_labels(catalog[airport], target)
-if critical_window is not None:
-    st.sidebar.caption(
-        f"Critical window · {critical_window[0]} airport local · {critical_window[1]} Austria"
+if view_mode == "Airport detail":
+    airport = st.sidebar.selectbox(
+        "Airport", list(catalog), format_func=lambda code: f"{code} · {catalog[code]['name']}"
+    )
+    timezone_name = catalog[airport]["timezone"]
+    target = st.sidebar.date_input(
+        "Target date", value=datetime.now(ZoneInfo(timezone_name)).date()
+    )
+    critical_window = critical_window_labels(catalog[airport], target)
+    if critical_window is not None:
+        st.sidebar.caption(
+            f"Critical window · {critical_window[0]} airport local · "
+            f"{critical_window[1]} Austria"
+        )
+else:
+    airport = next(iter(catalog))
+    timezone_name = "Europe/Vienna"
+    target = st.sidebar.date_input(
+        "Target date", value=datetime.now(ZoneInfo("Europe/Vienna")).date()
     )
 
 coverage_report_path = Path("data/collection/coverage-latest.json")
@@ -229,7 +386,7 @@ if coverage_report_path.exists():
         relevant_warnings = [
             item
             for item in coverage_report.get("warnings", [])
-            if item.get("airport") in {None, airport}
+            if view_mode == "All airports" or item.get("airport") in {None, airport}
         ]
         active_warnings = [
             item for item in relevant_warnings if item.get("active", True)
@@ -283,6 +440,15 @@ if coverage_report_path.exists():
                 if cadence.get("diagnosis"):
                     st.caption(str(cadence["diagnosis"]))
                 st.caption(str(cadence.get("measurement", "")))
+
+if view_mode == "All airports":
+    render_all_airports_overview(catalog, target)
+    with st.expander("Timing, evidence and freshness glossary", expanded=False):
+        for label, explanation in EVIDENCE_GLOSSARY.items():
+            st.write(f"**{label}** – {explanation}")
+        for label, explanation in FRESHNESS_GLOSSARY.items():
+            st.write(f"**{label}** – {explanation}")
+    st.stop()
 
 
 @st.fragment(run_every=60)
@@ -367,8 +533,10 @@ if st.sidebar.button("Refresh live trading data", type="primary"):
         st.cache_data.clear()
         requested_models = int(result["models_requested"])
         refreshed_models = int(result["models_refreshed"])
+        reused_models = int(result.get("models_reused", 0))
         saved = (
             f"Refreshed {refreshed_models}/{requested_models} model(s), "
+            f"reused {reused_models} still-fresh model(s), "
             f"{result['observations']} METAR report(s), "
             f"{result['taf_reports']} TAF revision(s) and "
             f"{result['market_prices']} Polymarket bucket(s) in "
@@ -456,16 +624,10 @@ with Session() as session:
         session.bind,
         filters={**history_filter, "target_date": target},
     )
-    all_shadow_evaluations = read_archive_live(
-        ShadowEvaluation,
-        session.bind,
-        filters={**history_filter, "target_date": target},
-    )
-    all_basket_snapshots = read_archive_live(
-        BasketSnapshot,
-        session.bind,
-        filters={**history_filter, "target_date": target},
-    )
+    # Heavy paper-trading views are hidden in v10.7.9. Keep their persisted data
+    # untouched, but do not load it during a normal Trading Desk rerun.
+    all_shadow_evaluations = pd.DataFrame()
+    all_basket_snapshots = pd.DataFrame()
     all_forecast_snapshots = read_archive_live(
         ForecastSnapshot, session.bind, filters=history_filter
     )
@@ -530,8 +692,17 @@ st.caption(
         f"({timezone_name} local time)"
     )
 
+st.markdown(
+    """
+    <style>
+    div[data-testid="stTabs"] button[data-baseweb="tab"]:nth-child(2),
+    div[data-testid="stTabs"] button[data-baseweb="tab"]:nth-child(3) {display: none;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 tab_live, tab_market, tab_shadow, tab_accuracy = st.tabs(
-    ["Live forecast", "Market comparison", "Shadow watcher", "Accuracy by timing"]
+    ["Live forecast", "Market comparison", "Shadow watcher", "Accuracy & reliability"]
 )
 tab_performance = tab_airports = tab_simulation = tab_data = None
 
@@ -641,6 +812,19 @@ with tab_live:
             live_signals=strongest_live_signals,
             recommendations_enabled=settings.edge_recommendations_enabled,
         )
+        live_reliability_history = forecast_ladder_history(
+            all_forecast_snapshots,
+            actuals,
+            timezone_name=timezone_name,
+            expected_checkpoint_models=list(
+                catalog[airport].get("research_models", catalog[airport].get("models", []))
+            ),
+        )
+        live_reliability = forecast_ladder_oos_reliability(live_reliability_history)
+        if not live_reliability.empty:
+            live_reliability = live_reliability[
+                live_reliability.stage.str.endswith("· Champion")
+            ].copy()
 
         if live_nowcast.forecast_data_stale:
             st.error(
@@ -677,6 +861,7 @@ with tab_live:
             timezone_name=timezone_name,
             actuals=actuals,
             regime_memory_snapshots=all_regime_memory_snapshots,
+            reliability=live_reliability,
         )
 
         # The previous table-heavy renderer remains below for one release as an
@@ -1700,12 +1885,12 @@ with tab_accuracy:
         f1, f2, f3 = st.columns([1.3, 1, 1.8])
         history_scope = f1.selectbox(
             "Evidence filter",
-            ["All available days", "Regular OOS snapshots only"],
+            ["Regular OOS snapshots only", "All available days"],
             key=f"ladder_scope_{airport}",
         )
         include_reconstructed = f2.checkbox(
             "Include reconstructed",
-            value=True,
+            value=False,
             key=f"ladder_reconstructed_{airport}",
         )
         selected_range = f3.date_input(
@@ -1735,7 +1920,11 @@ with tab_accuracy:
         if selected_history.empty:
             st.info("No days match the selected evidence and date filters.")
         else:
-            summary = forecast_ladder_history_metrics(selected_history)
+            summary = (
+                forecast_ladder_oos_reliability(selected_history)
+                if history_scope == "Regular OOS snapshots only"
+                else forecast_ladder_history_metrics(selected_history)
+            )
             summary_display = summary.copy()
             summary_display["bias"] = summary_display.bias.map(
                 lambda value: f"{float(value):+.2f} °C" if pd.notna(value) else "—"
@@ -1743,13 +1932,50 @@ with tab_accuracy:
             summary_display["mae"] = summary_display.mae.map(
                 lambda value: f"{float(value):.2f} °C" if pd.notna(value) else "—"
             )
+            for column in ("exact_bucket", "within_1c"):
+                summary_display[column] = summary_display[column].map(
+                    lambda value: f"{float(value):.1%}" if pd.notna(value) else "—"
+                )
+            champion_display = summary_display[
+                summary_display.stage.str.endswith("· Champion")
+            ].copy()
+            st.markdown("#### Champion reliability by checkpoint")
             st.dataframe(
-                summary_display.rename(
-                    columns={"stage": "Forecast stage", "bias": "Bias", "mae": "MAE", "n": "N"}
+                champion_display[
+                    ["stage", "exact_bucket", "within_1c", "mae", "bias", "n"]
+                ].rename(
+                    columns={
+                        "stage": "Checkpoint",
+                        "exact_bucket": "Exact bucket",
+                        "within_1c": "Within ±1 °C",
+                        "bias": "Bias",
+                        "mae": "MAE",
+                        "n": "N",
+                    }
                 ),
                 hide_index=True,
                 width="stretch",
             )
+            if int(pd.to_numeric(champion_display.n, errors="coerce").max() or 0) < 30:
+                st.caption(
+                    "Small sample. Exact Bucket is the hard hit rate; ±1 °C, MAE and N "
+                    "must be read alongside it."
+                )
+            with st.expander("Forecast-chain reliability · all stages", expanded=False):
+                st.dataframe(
+                    summary_display.rename(
+                        columns={
+                            "stage": "Forecast stage",
+                            "bias": "Bias",
+                            "mae": "MAE",
+                            "exact_bucket": "Exact bucket",
+                            "within_1c": "Within ±1 °C",
+                            "n": "N",
+                        }
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
             champion_summary = summary[
                 summary.stage.str.contains("Champion", regex=False) & (summary.n > 0)
             ].copy()
@@ -1779,7 +2005,12 @@ with tab_accuracy:
                 freshness = str(row.get(f"{prefix}_freshness") or "unavailable")
                 age = row.get(f"{prefix}_source_age_minutes")
                 age_text = f"{float(age):.0f} min" if pd.notna(age) else "age n/a"
-                return f"{evidence} · {freshness} · {age_text}"
+                forecast_time = row.get(f"{prefix}_forecast_local_time") or "—"
+                metar_time = row.get(f"{prefix}_metar_local_time") or "—"
+                return (
+                    f"{evidence} · {freshness} · {age_text} "
+                    f"(Forecast {forecast_time} LT · METAR {metar_time} LT)"
+                )
 
             detail_rows = []
             for _, history_row in selected_history.iterrows():
@@ -1819,7 +2050,11 @@ with tab_accuracy:
                         history_row, "d0_10_champion_c"
                     ),
                     "D0@10 evidence": evidence_text(history_row, "d0_10"),
-                    "First Live local": history_row.live_local_time or "—",
+                    "First stored live snapshot after D0@10": (
+                        f"{history_row.live_local_time} LT"
+                        if history_row.live_local_time
+                        else "—"
+                    ),
                     "Live Raw (error)": forecast_with_error(history_row, "live_raw_c"),
                     "Live Bias (error)": forecast_with_error(history_row, "live_bias_c"),
                     "Live METAR (error)": forecast_with_error(history_row, "live_metar_c"),
@@ -1836,6 +2071,29 @@ with tab_accuracy:
                 "misses cannot cancel. OOS here means evaluation-eligible stored production "
                 "evidence and does not increment promotion counters."
             )
+
+    with st.expander("Timing, evidence and freshness glossary", expanded=False):
+        st.write(
+            "**D−1 @20 LT**, **D0 @06 LT** and **D0 @10 LT** are airport-local fixed "
+            "checkpoints. **First stored live snapshot after D0@10** is the first stored, "
+            "pre-peak production snapshot after the 10:00 checkpoint; its exact local "
+            "forecast and METAR timestamps are shown in the daily table."
+        )
+        st.write(
+            "**Raw ensemble**, **Bias-corrected**, **Live weather-adjusted** and "
+            "**Champion** are the synchronized Forecast Chain stages. TAF remains separate "
+            "guidance and is not labelled as a final forecast stage."
+        )
+        for label, explanation in EVIDENCE_GLOSSARY.items():
+            st.write(f"**{label}** – {explanation}")
+        for label, explanation in FRESHNESS_GLOSSARY.items():
+            st.write(f"**{label}** – {explanation}")
+
+    st.caption(
+        "The former duplicate timing charts, paired table and 'Final incl. TAF' view are hidden "
+        "in v10.7.9. The complete chronological ladder above remains the audit trail."
+    )
+    st.stop()
 
     accuracy_window = st.selectbox(
         "Evaluation window",

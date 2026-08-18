@@ -11,7 +11,13 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from sqlalchemy import func, select
 
-from .analytics import DayStatus, detect_market_model_conflict, market_edges
+from .analytics import (
+    DayStatus,
+    detect_market_model_conflict,
+    forecast_ladder_history,
+    forecast_ladder_oos_reliability,
+    market_edges,
+)
 from .catalog import market_city_index, research_airports, trading_airports
 from .db import (
     AirportMarketUniverse,
@@ -33,6 +39,7 @@ from .db import (
 )
 from .history import read_archive_live
 from .nowcast import build_live_nowcast, complete_metar_actuals
+from .post_peak_diagnostics import post_peak_diagnostic
 from .regime_memory import enrich_nowcast_with_regime_memory
 from .regime_profiles import continuous_regime_profiles
 from .providers import (
@@ -664,6 +671,16 @@ def _checkpoint_provenance(
                 0.0, (cutoff - effective).total_seconds() / 60
             ),
             "relevant_to_checkpoint": str(row.model) in expected,
+            "selection_status": (
+                "eligible-for-checkpoint"
+                if str(row.model) in expected
+                else "available-not-expected"
+            ),
+            "exclusion_reason": (
+                None
+                if str(row.model) in expected
+                else "extra model outside checkpoint expectation set"
+            ),
             "provenance_status": row.provenance_status,
         }
         for effective, row in selected_all
@@ -1014,21 +1031,33 @@ def _live_snapshot_provenance(nowcast, airport: dict) -> dict[str, object]:
         return pd.Timestamp(value).isoformat()
 
     for row in frame.itertuples():
+        model = str(row.model)
+        age = getattr(row, "age_minutes", None)
+        age_value = float(age) if age is not None and not pd.isna(age) else None
+        if model in used:
+            exclusion_reason = None
+            selection_status = "used"
+        elif model not in expected:
+            exclusion_reason = "extra model outside configured Champion set"
+            selection_status = "available-not-expected"
+        elif age_value is not None and age_value > settings.maximum_live_model_age_minutes:
+            exclusion_reason = "stale at this checkpoint"
+            selection_status = "excluded"
+        else:
+            exclusion_reason = "not selected by current Champion input filter"
+            selection_status = "excluded"
         provenance.append(
             {
-                "model": str(row.model),
+                "model": model,
                 "source": getattr(row, "source", None),
                 "model_run_at": timestamp_text(getattr(row, "model_run_at", None)),
                 "available_at": timestamp_text(getattr(row, "available_at", None)),
                 "fetched_at": timestamp_text(getattr(row, "fetched_at", None)),
-                "age_minutes": (
-                    float(row.age_minutes)
-                    if getattr(row, "age_minutes", None) is not None
-                    and not pd.isna(row.age_minutes)
-                    else None
-                ),
-                "used_by_champion": str(row.model) in used,
-                "expected": str(row.model) in expected,
+                "age_minutes": age_value,
+                "used_by_champion": model in used,
+                "expected": model in expected,
+                "selection_status": selection_status,
+                "exclusion_reason": exclusion_reason,
             }
         )
     coverage = min(1.0, len(relevant_available) / len(expected)) if expected else 0.0
@@ -1251,10 +1280,44 @@ def _record_forecast_snapshot(
         "forecast_available_at": None,
         "forecast_fetched_at": None,
         "source_provenance_json": "[]",
+        "post_peak_diagnostic_json": json.dumps(
+            post_peak_diagnostic(nowcast, captured_at), separators=(",", ":")
+        ),
+        "market_snapshot_status": None,
+        "market_snapshot_at": None,
+        "market_bucket_count": None,
     }
-    row.update(_live_snapshot_provenance(nowcast, airport))
+    live_lineage = _live_snapshot_provenance(nowcast, airport)
+    row.update(live_lineage)
     if checkpoint_metadata:
         row.update(checkpoint_metadata)
+        # Checkpoint availability and actual Champion selection answer different
+        # questions. Preserve the causal availability list while adding the
+        # actual used/excluded decision from the frozen nowcast.
+        row["used_model_count"] = live_lineage.get("used_model_count")
+        row["used_models_json"] = live_lineage.get("used_models_json", "[]")
+        try:
+            checkpoint_sources = json.loads(
+                str(checkpoint_metadata.get("source_provenance_json") or "[]")
+            )
+            live_sources = {
+                str(item.get("model")): item
+                for item in json.loads(str(live_lineage.get("source_provenance_json") or "[]"))
+            }
+            for source in checkpoint_sources:
+                selection = live_sources.get(str(source.get("model")), {})
+                source["used_by_champion"] = bool(selection.get("used_by_champion", False))
+                source["selection_status"] = selection.get(
+                    "selection_status", source.get("selection_status")
+                )
+                source["exclusion_reason"] = selection.get(
+                    "exclusion_reason", source.get("exclusion_reason")
+                )
+            row["source_provenance_json"] = json.dumps(
+                checkpoint_sources, separators=(",", ":")
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
     return _upsert_batch(
         session,
         ForecastSnapshot,
@@ -1956,6 +2019,8 @@ def collect_research_checkpoints(
         "actuals": 0,
         "checkpoints_reconstructed": 0,
         "checkpoints_missing_inputs": 0,
+        "checkpoint_market_snapshots": 0,
+        "checkpoint_market_missing": 0,
     }
     if sync_universe:
         try:
@@ -2118,13 +2183,58 @@ def collect_research_checkpoints(
                     if metadata["checkpoint_status"] == "unavailable":
                         counts["checkpoints_missing_inputs"] += 1
                         continue
+                    market_rows: list[dict] = []
+                    market_status = "not-requested-reconstructed"
+                    market_snapshot_at = None
+                    if not bool(metadata["checkpoint_reconstructed"]):
+                        try:
+                            market_rows = list(polymarket_prices(airport, target) or [])
+                        except Exception as exc:
+                            market_status = f"provider-error:{type(exc).__name__}"
+                            counts["checkpoint_market_missing"] += 1
+                            print(f"WARN {code}/{label} checkpoint market: {exc}")
+                        else:
+                            if market_rows:
+                                counts["checkpoint_market_snapshots"] += _upsert_batch(
+                                    session,
+                                    MarketSnapshot,
+                                    market_rows,
+                                    lambda item: {
+                                        "market_id": item["market_id"],
+                                        "captured_at": item["captured_at"],
+                                    },
+                                    lambda item: {
+                                        "airport": code,
+                                        **{
+                                            key: value
+                                            for key, value in item.items()
+                                            if key not in {"market_id", "captured_at"}
+                                        },
+                                    },
+                                    f"{code}/{label} checkpoint market/{target}",
+                                )
+                                market_status = "stored-at-checkpoint"
+                                market_snapshot_at = max(
+                                    _as_utc(row.get("captured_at", cutoff))
+                                    for row in market_rows
+                                )
+                            else:
+                                market_status = "missing-at-checkpoint"
+                                counts["checkpoint_market_missing"] += 1
+                    metadata.update(
+                        {
+                            "market_snapshot_status": market_status,
+                            "market_snapshot_at": market_snapshot_at,
+                            "market_bucket_count": len(market_rows),
+                        }
+                    )
                     nowcast = _build_nowcast_from_session(
                         session,
                         code,
                         airport,
                         target,
                         cutoff,
-                        [],
+                        market_rows,
                     )
                     if nowcast is None:
                         counts["checkpoints_missing_inputs"] += 1
@@ -2227,34 +2337,55 @@ def collect_live_trading_refresh(
     if airport_code not in catalog:
         raise KeyError(f"Unknown airport: {airport_code}")
     airport = catalog[airport_code]
+    refresh_time = datetime.now(timezone.utc)
     local_today = datetime.now(ZoneInfo(airport["timezone"])).date()
     days = max(3, min(16, (target - local_today).days + 1))
     models = list(dict.fromkeys(str(model) for model in airport.get("models", [])))
 
-    tasks: dict[str, tuple[Callable, tuple, dict]] = {}
-    for model in models:
-        tasks[f"forecast/{model}"] = (
-            open_meteo_forecast,
-            (airport, model, days),
-            {
-                "attempts": 1,
-                "timeout": 7,
-                "metadata_attempts": 1,
-                "metadata_timeout": 5,
-            },
+    with Session() as session:
+        open_meteo_due = _source_refresh_due(
+            session,
+            airport_code=airport_code,
+            source="open-meteo",
+            target=target,
+            as_of=refresh_time,
+            maximum_age_minutes=settings.live_open_meteo_refresh_minutes,
         )
-        tasks[f"hourly/{model}"] = (
-            open_meteo_hourly,
-            (airport, model, days),
+        meteoblue_due = bool(settings.meteoblue_api_key) and _source_refresh_due(
+            session,
+            airport_code=airport_code,
+            source="meteoblue",
+            target=target,
+            as_of=refresh_time,
+            maximum_age_minutes=settings.live_meteoblue_refresh_minutes,
+        )
+
+    tasks: dict[str, tuple[Callable, tuple, dict]] = {}
+    if open_meteo_due:
+        for model in models:
+            tasks[f"forecast/{model}"] = (
+                open_meteo_forecast,
+                (airport, model, days),
+                {
+                    "attempts": 1,
+                    "timeout": 7,
+                    "metadata_attempts": 1,
+                    "metadata_timeout": 5,
+                },
+            )
+            tasks[f"hourly/{model}"] = (
+                open_meteo_hourly,
+                (airport, model, days),
+                {"attempts": 1, "timeout": 7},
+            )
+    if meteoblue_due:
+        tasks["forecast/meteoblue"] = (
+            meteoblue_forecast,
+            (airport,),
             {"attempts": 1, "timeout": 7},
         )
     tasks.update(
         {
-            "forecast/meteoblue": (
-                meteoblue_forecast,
-                (airport,),
-                {"attempts": 1, "timeout": 7},
-            ),
             "metar": (
                 recent_metars,
                 (airport_code,),
@@ -2310,7 +2441,11 @@ def collect_live_trading_refresh(
         "observations": 0,
         "taf_reports": 0,
         "market_prices": 0,
-        "models_requested": len(models) + int(bool(settings.meteoblue_api_key)),
+        "models_configured": len(models) + int(bool(settings.meteoblue_api_key)),
+        "models_requested": (len(models) if open_meteo_due else 0)
+        + int(meteoblue_due),
+        "models_reused": (0 if open_meteo_due else len(models))
+        + int(bool(settings.meteoblue_api_key) and not meteoblue_due),
         "models_refreshed": 0,
         "errors": errors,
     }
@@ -2398,6 +2533,157 @@ def collect_live_trading_refresh(
     counts["models_refreshed"] = len(target_models)
     counts["elapsed_seconds"] = round(time.perf_counter() - started, 2)
     return counts
+
+
+def collect_all_live_trading_refresh(
+    targets: dict[str, date] | None = None,
+) -> dict[str, object]:
+    """Refresh every Trading Desk airport once while keeping SQLite writes serial."""
+    started = time.perf_counter()
+    catalog = trading_airports()
+    results: dict[str, dict[str, object]] = {}
+    for code, airport in catalog.items():
+        target = (targets or {}).get(code)
+        if target is None:
+            target = datetime.now(ZoneInfo(airport["timezone"])).date()
+        try:
+            results[code] = collect_live_trading_refresh(code, target)
+        except Exception as exc:
+            results[code] = {
+                "errors": {"refresh": f"{type(exc).__name__}: {exc}"},
+                "elapsed_seconds": 0.0,
+                "models_requested": 0,
+                "models_refreshed": 0,
+                "models_reused": 0,
+                "observations": 0,
+                "taf_reports": 0,
+                "market_prices": 0,
+            }
+    failed = [code for code, result in results.items() if result.get("errors")]
+    return {
+        "airports": results,
+        "successful_airports": len(results) - len(failed),
+        "failed_airports": failed,
+        "elapsed_seconds": round(time.perf_counter() - started, 2),
+    }
+
+
+def live_trading_overview(
+    targets: dict[str, date] | None = None,
+    *,
+    as_of: datetime | None = None,
+) -> list[dict[str, object]]:
+    """Build small, serialisable summaries for all six Trading Desk airports.
+
+    Airport data are read and reduced one airport at a time. The caller retains
+    only the compact dictionaries, not six copies of historical DataFrames.
+    """
+    captured_at = _as_utc(as_of or datetime.now(timezone.utc))
+    catalog = trading_airports()
+    rows: list[dict[str, object]] = []
+    with Session() as session:
+        for code, airport in catalog.items():
+            target = (targets or {}).get(code)
+            if target is None:
+                target = captured_at.astimezone(ZoneInfo(airport["timezone"])).date()
+            market_frame = read_archive_live(
+                MarketSnapshot,
+                session.connection(),
+                filters={"airport": code, "target_date": target},
+            )
+            if not market_frame.empty:
+                market_frame["captured_at"] = pd.to_datetime(
+                    market_frame.captured_at, utc=True, errors="coerce"
+                )
+                market_frame = market_frame.sort_values("captured_at").drop_duplicates(
+                    "market_id", keep="last"
+                )
+            market_rows = market_frame.where(market_frame.notna(), None).to_dict("records")
+            nowcast = _build_nowcast_from_session(
+                session,
+                code,
+                airport,
+                target,
+                captured_at,
+                market_rows,
+            )
+            if nowcast is None:
+                rows.append(
+                    {
+                        "airport": code,
+                        "name": airport["name"],
+                        "target_date": target,
+                        "status": "No current forecast",
+                    }
+                )
+                continue
+
+            snapshots = read_archive_live(
+                ForecastSnapshot,
+                session.connection(),
+                filters={"airport": code},
+            )
+            actuals = read_archive_live(
+                DailyActual,
+                session.connection(),
+                filters={"airport": code},
+            )
+            history = forecast_ladder_history(
+                snapshots,
+                actuals,
+                timezone_name=airport["timezone"],
+                expected_checkpoint_models=list(
+                    airport.get("research_models", airport.get("models", []))
+                ),
+            )
+            reliability = forecast_ladder_oos_reliability(history)
+            champion_reliability = (
+                reliability[reliability.stage.str.endswith("· Champion")]
+                .where(lambda frame: frame.notna(), None)
+                .to_dict("records")
+                if not reliability.empty
+                else []
+            )
+            ranked_buckets = sorted(
+                dict(nowcast.probabilities).items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:5]
+            relevant_buckets = [
+                {"bucket": int(bucket), "probability": float(probability)}
+                for bucket, probability in sorted(ranked_buckets)
+            ]
+            def optional_float(value: object) -> float | None:
+                return float(value) if value is not None and not pd.isna(value) else None
+
+            rows.append(
+                {
+                    "airport": code,
+                    "name": airport["name"],
+                    "timezone": airport["timezone"],
+                    "target_date": target,
+                    "status": nowcast.day_status.label,
+                    "champion_c": float(nowcast.final_forecast_mean),
+                    "latest_metar_c": optional_float(nowcast.current_observed_temp),
+                    "latest_metar_at": nowcast.latest_observation_at,
+                    "metar_max_c": optional_float(nowcast.observed_max),
+                    "temperature_trend_c_per_hour": optional_float(nowcast.heating_rate),
+                    "forecast_stale": bool(nowcast.forecast_data_stale),
+                    "stale_models": list(nowcast.stale_models),
+                    "forecast_chain": [
+                        {"stage": "Raw ensemble", "value_c": float(nowcast.raw_model_mean)},
+                        {"stage": "Bias-corrected", "value_c": float(nowcast.corrected.mean)},
+                        {
+                            "stage": "Live weather-adjusted",
+                            "value_c": optional_float(nowcast.metar_conditioned_mean),
+                        },
+                        {"stage": "Champion", "value_c": float(nowcast.final_forecast_mean)},
+                    ],
+                    "reliability": champion_reliability,
+                    "relevant_buckets": relevant_buckets,
+                }
+            )
+    return rows
 
 
 def collect_aviation_journal(

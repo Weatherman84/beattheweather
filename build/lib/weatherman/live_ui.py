@@ -163,13 +163,18 @@ def _bucket_table(
                 "Status": comparison.signal,
             }
         )
-    return result.sort_values(
-        "Uncalibrated Champion probability", ascending=False
-    ).reset_index(drop=True)
+    result["_bucket_order"] = pd.to_numeric(
+        result["Bucket"].astype(str).str.extract(r"(-?\d+(?:\.\d+)?)")[0],
+        errors="coerce",
+    )
+    result["_relevance_rank"] = result["Uncalibrated Champion probability"].rank(
+        method="first", ascending=False
+    )
+    return result.sort_values("_bucket_order", ascending=True).reset_index(drop=True)
 
 
 def _format_bucket_table(frame: pd.DataFrame) -> pd.DataFrame:
-    shown = frame.copy()
+    shown = frame.drop(columns=["_bucket_order", "_relevance_rank"], errors="ignore").copy()
     for column in (
         "Uncalibrated Champion probability",
         "YES ask",
@@ -249,6 +254,7 @@ def render_compact_live_forecast(
     timezone_name: str,
     actuals: pd.DataFrame,
     regime_memory_snapshots: pd.DataFrame,
+    reliability: pd.DataFrame | None = None,
 ) -> None:
     """Render the three-level live page: action, explanation, diagnostics."""
     probabilities = dict(getattr(nowcast, "probabilities"))
@@ -351,14 +357,60 @@ def render_compact_live_forecast(
     ))
     f8.metric("Day status", day_status.label)
     st.caption(f"Expected model peak {peak_label}. {day_status.explanation}")
+    calculated_local = pd.Timestamp.now(tz=timezone_name)
+    metar_local = pd.to_datetime(
+        getattr(nowcast, "latest_observation_at", None), utc=True, errors="coerce"
+    )
+    metar_label = (
+        pd.Timestamp(metar_local).tz_convert(timezone_name).strftime("%H:%M LT")
+        if pd.notna(metar_local)
+        else "not available"
+    )
+    st.caption(
+        f"Forecast calculated {calculated_local:%H:%M} LT · latest METAR used {metar_label}."
+    )
     if not top_market_is_exact:
         st.caption(
             "The Polymarket leader can differ from the most likely exact temperature because "
             "an open end bucket aggregates several integer outcomes."
         )
 
-    st.markdown("**Forecast chain**")
-    st.dataframe(pd.DataFrame(forecast_chain_rows(nowcast)), hide_index=True, width="stretch")
+    chain_column, reliability_column = st.columns([1.45, 1.0])
+    with chain_column:
+        st.markdown("**Forecast chain**")
+        st.dataframe(
+            pd.DataFrame(forecast_chain_rows(nowcast)), hide_index=True, width="stretch"
+        )
+    with reliability_column:
+        st.markdown("**Champion reliability by checkpoint**")
+        if reliability is None or reliability.empty:
+            st.caption("No final-Actual scheduled OOS cases are available yet.")
+        else:
+            shown_reliability = reliability.copy()
+            shown_reliability["Checkpoint"] = shown_reliability.stage.str.replace(
+                " · Champion", "", regex=False
+            )
+            shown_reliability["Exact bucket"] = shown_reliability.exact_bucket.map(
+                lambda value: f"{float(value):.0%}" if pd.notna(value) else "—"
+            )
+            shown_reliability["±1 °C"] = shown_reliability.within_1c.map(
+                lambda value: f"{float(value):.0%}" if pd.notna(value) else "—"
+            )
+            shown_reliability["MAE"] = shown_reliability.mae.map(
+                lambda value: f"{float(value):.2f} K" if pd.notna(value) else "—"
+            )
+            st.dataframe(
+                shown_reliability[["Checkpoint", "Exact bucket", "±1 °C", "MAE", "n"]]
+                .rename(columns={"n": "N"}),
+                hide_index=True,
+                width="stretch",
+            )
+            maximum_n = int(pd.to_numeric(shown_reliability.n, errors="coerce").max() or 0)
+            if maximum_n < 30:
+                st.caption(
+                    "Small sample: Exact Bucket is the primary hard hit rate; MAE and N prevent "
+                    "a few cases from looking more reliable than they are."
+                )
     st.caption(
         "The Champion expected maximum is the mean of the final bucket distribution after model "
         "weighting, historical bias, active live regimes, live weather, TAF and day-status "
@@ -403,7 +455,7 @@ def render_compact_live_forecast(
         all_buckets["Status"] = "METAR guard"
     elif nowcast.forecast_data_stale:
         all_buckets["Status"] = "Models stale"
-    relevant = all_buckets.head(5)
+    relevant = all_buckets.nsmallest(5, "_relevance_rank").sort_values("_bucket_order")
     st.dataframe(_format_bucket_table(relevant), hide_index=True, width="stretch")
     st.caption(
         "Uncalibrated Champion probability is the final production distribution for each bucket; "

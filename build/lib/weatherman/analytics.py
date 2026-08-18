@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .terminology import checkpoint_stage_label
+
 from .actual_quality import settlement_grade_actuals
 
 
@@ -754,19 +756,35 @@ def _checkpoint_lineage_view(
 
 
 FORECAST_LADDER_HISTORY_STAGES: dict[str, str] = {
-    "d1_champion_c": "D-1 Champion",
-    "d0_06_raw_c": "D0@06 Raw",
-    "d0_06_bias_c": "D0@06 Bias",
-    "d0_06_metar_c": "D0@06 METAR",
-    "d0_06_champion_c": "D0@06 Champion",
-    "d0_10_raw_c": "D0@10 Raw",
-    "d0_10_bias_c": "D0@10 Bias",
-    "d0_10_metar_c": "D0@10 METAR",
-    "d0_10_champion_c": "D0@10 Champion",
-    "live_raw_c": "First Live Raw",
-    "live_bias_c": "First Live Bias",
-    "live_metar_c": "First Live METAR",
-    "live_champion_c": "First Live Champion",
+    "d1_champion_c": checkpoint_stage_label("d1", "champion"),
+    "d0_06_raw_c": checkpoint_stage_label("d0_06", "raw"),
+    "d0_06_bias_c": checkpoint_stage_label("d0_06", "bias"),
+    "d0_06_metar_c": checkpoint_stage_label("d0_06", "metar"),
+    "d0_06_champion_c": checkpoint_stage_label("d0_06", "champion"),
+    "d0_10_raw_c": checkpoint_stage_label("d0_10", "raw"),
+    "d0_10_bias_c": checkpoint_stage_label("d0_10", "bias"),
+    "d0_10_metar_c": checkpoint_stage_label("d0_10", "metar"),
+    "d0_10_champion_c": checkpoint_stage_label("d0_10", "champion"),
+    "live_raw_c": checkpoint_stage_label("live", "raw"),
+    "live_bias_c": checkpoint_stage_label("live", "bias"),
+    "live_metar_c": checkpoint_stage_label("live", "metar"),
+    "live_champion_c": checkpoint_stage_label("live", "champion"),
+}
+
+_LADDER_EVIDENCE_PREFIX: dict[str, str] = {
+    "d1_champion_c": "d1",
+    "d0_06_raw_c": "d0_06",
+    "d0_06_bias_c": "d0_06",
+    "d0_06_metar_c": "d0_06",
+    "d0_06_champion_c": "d0_06",
+    "d0_10_raw_c": "d0_10",
+    "d0_10_bias_c": "d0_10",
+    "d0_10_metar_c": "d0_10",
+    "d0_10_champion_c": "d0_10",
+    "live_raw_c": "live",
+    "live_bias_c": "live",
+    "live_metar_c": "live",
+    "live_champion_c": "live",
 }
 
 
@@ -899,6 +917,21 @@ def forecast_ladder_history(
                 if selected is not None
                 else None
             )
+            result[f"{prefix}_forecast_local_time"] = (
+                pd.to_datetime(selected.get("captured_at"), utc=True)
+                .tz_convert(timezone_name)
+                .strftime("%H:%M")
+                if selected is not None and pd.notna(selected.get("captured_at"))
+                else None
+            )
+            latest_metar_at = selected.get("latest_metar_at") if selected is not None else None
+            result[f"{prefix}_metar_local_time"] = (
+                pd.to_datetime(latest_metar_at, utc=True)
+                .tz_convert(timezone_name)
+                .strftime("%H:%M")
+                if latest_metar_at is not None and pd.notna(latest_metar_at)
+                else None
+            )
         result["live_local_time"] = (
             pd.Timestamp(live.captured_at).tz_convert(timezone_name).strftime("%H:%M")
             if live is not None and pd.notna(live.captured_at)
@@ -933,7 +966,9 @@ def forecast_ladder_history(
 def forecast_ladder_history_metrics(history: pd.DataFrame) -> pd.DataFrame:
     """Summarise each ladder stage without allowing signed errors to cancel MAE."""
     if history.empty:
-        return pd.DataFrame(columns=["stage", "bias", "mae", "n"])
+        return pd.DataFrame(
+            columns=["stage", "bias", "mae", "exact_bucket", "within_1c", "n"]
+        )
     rows: list[dict[str, object]] = []
     for forecast_column, label in FORECAST_LADDER_HISTORY_STAGES.items():
         error_column = f"{forecast_column.removesuffix('_c')}_error_c"
@@ -943,7 +978,34 @@ def forecast_ladder_history_metrics(history: pd.DataFrame) -> pd.DataFrame:
                 "stage": label,
                 "bias": float(errors.mean()) if not errors.empty else None,
                 "mae": float(errors.abs().mean()) if not errors.empty else None,
+                "exact_bucket": float((errors.abs() < 0.5).mean()) if not errors.empty else None,
+                "within_1c": float((errors.abs() <= 1.0).mean()) if not errors.empty else None,
                 "n": int(len(errors)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def forecast_ladder_oos_reliability(history: pd.DataFrame) -> pd.DataFrame:
+    """Score each stage only on its own real, pre-peak scheduled evidence."""
+    if history.empty:
+        return forecast_ladder_history_metrics(history)
+    rows: list[dict[str, object]] = []
+    for forecast_column, label in FORECAST_LADDER_HISTORY_STAGES.items():
+        prefix = _LADDER_EVIDENCE_PREFIX[forecast_column]
+        evidence = history.get(f"{prefix}_evidence", pd.Series(index=history.index, dtype=object))
+        selected = history[evidence.astype(str).eq("scheduled")]
+        error_column = f"{forecast_column.removesuffix('_c')}_error_c"
+        errors = pd.to_numeric(selected.get(error_column), errors="coerce").dropna()
+        rows.append(
+            {
+                "stage": label,
+                "bias": float(errors.mean()) if not errors.empty else None,
+                "mae": float(errors.abs().mean()) if not errors.empty else None,
+                "exact_bucket": float((errors.abs() < 0.5).mean()) if not errors.empty else None,
+                "within_1c": float((errors.abs() <= 1.0).mean()) if not errors.empty else None,
+                "n": int(len(errors)),
+                "evidence": "scheduled final-Actual OOS",
             }
         )
     return pd.DataFrame(rows)

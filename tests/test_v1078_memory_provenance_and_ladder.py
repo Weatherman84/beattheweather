@@ -230,7 +230,9 @@ def test_ladder_history_uses_final_actual_and_first_live_snapshot() -> None:
     assert row.live_local_time == "12:00"
     assert not bool(row.regular_oos)
     metrics = forecast_ladder_history_metrics(history)
-    live = metrics[metrics.stage == "First Live Champion"].iloc[0]
+    live = metrics[
+        metrics.stage == "First stored live snapshot after D0@10 · Champion"
+    ].iloc[0]
     assert live.n == 1
     assert round(float(live.bias), 2) == -0.2
     assert round(float(live.mae), 2) == 0.2
