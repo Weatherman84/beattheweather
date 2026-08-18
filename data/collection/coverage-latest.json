@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 2,
+  "active_warning_count": 3,
   "archive_partitions": 662,
   "archive_rows": 516924,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 142,
+    "expected_slots": 141,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 26.072485999999998,
+    "median_execution_seconds": 26.243795,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 305.5,
-    "missing_slots": 106,
+    "median_trigger_delay_seconds": 311.5,
+    "missing_slots": 105,
     "observed_slots": 36,
     "p95_execution_seconds": 135.66089675,
     "runs": 36,
-    "trigger_coverage": 0.2535211267605634
+    "trigger_coverage": 0.2553191489361702
   },
-  "checked_at": "2026-08-18T16:47:42.330160+00:00",
+  "checked_at": "2026-08-18T17:14:42.304461+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 37478400,
-  "warning_count": 3,
+  "database_bytes": 37597184,
+  "warning_count": 4,
   "warnings": [
     {
       "active": false,
@@ -35,8 +35,17 @@
     },
     {
       "active": true,
-      "database_bytes": 37478400,
-      "message": "Active SQLite is 35.7 MiB.",
+      "age_minutes": 192.4,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 192 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "database_bytes": 37597184,
+      "message": "Active SQLite is 35.9 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
