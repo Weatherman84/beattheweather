@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 3,
+  "active_warning_count": 4,
   "archive_partitions": 662,
   "archive_rows": 516924,
   "archive_status": "deferred_to_daily_verification",
@@ -12,14 +12,14 @@
     "median_trigger_delay_seconds": 311.5,
     "missing_slots": 105,
     "observed_slots": 36,
-    "p95_execution_seconds": 135.66089675,
+    "p95_execution_seconds": 163.43768825,
     "runs": 36,
     "trigger_coverage": 0.2553191489361702
   },
-  "checked_at": "2026-08-18T17:14:42.304461+00:00",
+  "checked_at": "2026-08-18T17:51:31.876949+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 37597184,
-  "warning_count": 4,
+  "database_bytes": 37789696,
+  "warning_count": 5,
   "warnings": [
     {
       "active": false,
@@ -35,17 +35,26 @@
     },
     {
       "active": true,
-      "age_minutes": 192.4,
-      "airport": "LTFM",
+      "age_minutes": 182.4,
+      "airport": "EPWA",
       "data_type": "market",
-      "message": "LTFM: market is 192 minutes old.",
+      "message": "EPWA: market is 182 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "database_bytes": 37597184,
-      "message": "Active SQLite is 35.9 MiB.",
+      "age_minutes": 229.2,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 229 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "database_bytes": 37789696,
+      "message": "Active SQLite is 36.0 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
