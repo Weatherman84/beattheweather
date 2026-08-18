@@ -16,9 +16,9 @@
     "runs": 38,
     "trigger_coverage": 0.2638888888888889
   },
-  "checked_at": "2026-08-18T10:44:13.862709+00:00",
+  "checked_at": "2026-08-18T11:09:33.964050+00:00",
   "collector_version": "10.7.8",
-  "database_bytes": 31891456,
+  "database_bytes": 32428032,
   "warning_count": 2,
   "warnings": [
     {
