@@ -5,20 +5,20 @@
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 144,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 30.8554825,
+    "median_execution_seconds": 30.658068,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 295.0,
-    "missing_slots": 105,
+    "missing_slots": 106,
     "observed_slots": 38,
     "p95_execution_seconds": 161.8455991,
     "runs": 38,
-    "trigger_coverage": 0.26573426573426573
+    "trigger_coverage": 0.2638888888888889
   },
-  "checked_at": "2026-08-19T15:17:06.273195+00:00",
+  "checked_at": "2026-08-19T15:52:44.320906+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 37490688,
+  "database_bytes": 37785600,
   "warning_count": 4,
   "warnings": [
     {
@@ -29,23 +29,23 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
     {
       "active": true,
-      "age_minutes": 219.0,
+      "age_minutes": 254.7,
       "airport": "LTFM",
       "data_type": "forecast",
-      "message": "LTFM: forecast is 219 minutes old.",
+      "message": "LTFM: forecast is 255 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "database_bytes": 37490688,
-      "message": "Active SQLite is 35.8 MiB.",
+      "database_bytes": 37785600,
+      "message": "Active SQLite is 36.0 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
