@@ -1,44 +1,37 @@
 {
-  "active_warning_count": 2,
-  "archive_partitions": 662,
-  "archive_rows": 516924,
+  "active_warning_count": 1,
+  "archive_partitions": 673,
+  "archive_rows": 548579,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 134,
+    "expected_slots": 143,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 26.268662,
+    "median_execution_seconds": 26.243795,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 268.0,
-    "missing_slots": 97,
-    "observed_slots": 37,
-    "p95_execution_seconds": 163.07260699999998,
-    "runs": 37,
-    "trigger_coverage": 0.27611940298507465
+    "median_trigger_delay_seconds": 275.0,
+    "missing_slots": 105,
+    "observed_slots": 38,
+    "p95_execution_seconds": 162.70752574999997,
+    "runs": 38,
+    "trigger_coverage": 0.26573426573426573
   },
-  "checked_at": "2026-08-18T23:56:12.576791+00:00",
+  "checked_at": "2026-08-19T01:26:40.383975+00:00",
   "collector_version": "10.7.9",
-  "database_bytes": 37498880,
-  "warning_count": 3,
+  "database_bytes": 27344896,
+  "warning_count": 2,
   "warnings": [
     {
       "active": false,
-      "message": "Historical 24-hour collector gap: 60 minutes.",
+      "message": "Historical 24-hour collector gap: 90 minutes.",
       "severity": "warning",
       "type": "collector_historical_gap"
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 90 minutes.",
       "severity": "error",
       "type": "collector_gap"
-    },
-    {
-      "active": true,
-      "database_bytes": 37498880,
-      "message": "Active SQLite is 35.8 MiB.",
-      "severity": "error",
-      "type": "database_growth"
     }
   ]
 }
