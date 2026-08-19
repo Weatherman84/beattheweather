@@ -16,9 +16,9 @@
     "runs": 37,
     "trigger_coverage": 0.2624113475177305
   },
-  "checked_at": "2026-08-19T11:07:16.340833+00:00",
+  "checked_at": "2026-08-19T11:38:42.233703+00:00",
   "collector_version": "10.7.9",
-  "database_bytes": 33722368,
+  "database_bytes": 34578432,
   "warning_count": 2,
   "warnings": [
     {
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
     }
