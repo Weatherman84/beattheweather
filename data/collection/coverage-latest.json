@@ -7,7 +7,7 @@
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
     "expected_slots": 141,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 30.264641,
+    "median_execution_seconds": 30.480065,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 282.0,
     "missing_slots": 104,
@@ -16,9 +16,9 @@
     "runs": 37,
     "trigger_coverage": 0.2624113475177305
   },
-  "checked_at": "2026-08-19T04:20:49.990906+00:00",
+  "checked_at": "2026-08-19T05:03:18.973845+00:00",
   "collector_version": "10.7.9",
-  "database_bytes": 28303360,
+  "database_bytes": 28786688,
   "warning_count": 2,
   "warnings": [
     {
