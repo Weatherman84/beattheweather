@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 7,
+  "active_warning_count": 4,
   "archive_partitions": 662,
   "archive_rows": 516924,
   "archive_status": "verified",
@@ -9,17 +9,17 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 30.314067,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 288.5,
+    "median_trigger_delay_seconds": 291.0,
     "missing_slots": 106,
     "observed_slots": 38,
     "p95_execution_seconds": 130.18769724999996,
     "runs": 38,
     "trigger_coverage": 0.2638888888888889
   },
-  "checked_at": "2026-08-19T19:49:59.148531+00:00",
+  "checked_at": "2026-08-19T20:23:57.268025+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 38645760,
-  "warning_count": 8,
+  "database_bytes": 38653952,
+  "warning_count": 5,
   "warnings": [
     {
       "active": false,
@@ -35,52 +35,25 @@
     },
     {
       "active": true,
-      "age_minutes": 309.2,
+      "age_minutes": 343.2,
       "airport": "EPWA",
       "data_type": "forecast",
-      "message": "EPWA: forecast is 309 minutes old.",
+      "message": "EPWA: forecast is 343 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 201.9,
-      "airport": "LTAC",
-      "data_type": "market",
-      "message": "LTAC: market is 202 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 491.9,
-      "airport": "LTFM",
-      "data_type": "forecast",
-      "message": "LTFM: forecast is 492 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 201.1,
-      "airport": "LTFM",
-      "data_type": "market",
-      "message": "LTFM: market is 201 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 274.1,
+      "age_minutes": 308.1,
       "airport": "EDDM",
       "data_type": "forecast",
-      "message": "EDDM: forecast is 274 minutes old.",
+      "message": "EDDM: forecast is 308 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "database_bytes": 38645760,
+      "database_bytes": 38653952,
       "message": "Active SQLite is 36.9 MiB.",
       "severity": "error",
       "type": "database_growth"
