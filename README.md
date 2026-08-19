@@ -3,6 +3,20 @@
 Du musst **keine Befehle eingeben**, nichts programmieren und nichts auf deinem Computer
 installieren.
 
+## Hotfix 10.7.9.1
+
+- All-airport Overview und Airport detail verwenden denselben zentralen aktuellen
+  Nowcast-Builder und damit denselben Championwert.
+- Der irrtümlich in der Overview verwendete historische Checkpoint-/Replay-Ladepfad
+  wurde entfernt. Die Forecast-Engine selbst bleibt unverändert.
+- Der Overview-Cache beträgt nur noch 15 Sekunden und wird bei jeder Datenbankänderung
+  beziehungsweise jedem manuellen Refresh sofort durch einen neuen Cache-Key ersetzt.
+- Airport detail zeigt im oberen KPI-Bereich den ersten gespeicherten Live-Champion
+  nach D0@10 inklusive Forecast- und verwendetem METAR-Zeitstempel.
+
+Kein Workflow- oder Datenbackfill erforderlich. Nach dem Upload genügt ein einmaliger
+Streamlit-Reboot und danach `Refresh all airports`.
+
 ## Neu in Version 10.7.9
 
 - **All-airport live trading overview** ist die neue Standardansicht. Sie zeigt für alle

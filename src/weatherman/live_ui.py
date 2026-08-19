@@ -255,6 +255,7 @@ def render_compact_live_forecast(
     actuals: pd.DataFrame,
     regime_memory_snapshots: pd.DataFrame,
     reliability: pd.DataFrame | None = None,
+    first_live_champion: dict[str, object] | None = None,
 ) -> None:
     """Render the three-level live page: action, explanation, diagnostics."""
     probabilities = dict(getattr(nowcast, "probabilities"))
@@ -369,6 +370,36 @@ def render_compact_live_forecast(
     st.caption(
         f"Forecast calculated {calculated_local:%H:%M} LT · latest METAR used {metar_label}."
     )
+    if first_live_champion is None:
+        st.caption("First stored live Champion after D0@10: not stored yet for this target day.")
+    else:
+        first_forecast_at = pd.to_datetime(
+            first_live_champion.get("forecast_at"), utc=True, errors="coerce"
+        )
+        first_metar_at = pd.to_datetime(
+            first_live_champion.get("latest_metar_at"), utc=True, errors="coerce"
+        )
+        first_forecast_label = (
+            pd.Timestamp(first_forecast_at).tz_convert(timezone_name).strftime("%H:%M LT")
+            if pd.notna(first_forecast_at)
+            else "—"
+        )
+        first_metar_label = (
+            pd.Timestamp(first_metar_at).tz_convert(timezone_name).strftime("%H:%M LT")
+            if pd.notna(first_metar_at)
+            else "—"
+        )
+        live1, live2, live3 = st.columns(3)
+        live1.metric(
+            "First stored live Champion after D0@10",
+            _temperature(first_live_champion.get("champion_c")),
+        )
+        live2.metric("Forecast timestamp", first_forecast_label)
+        live3.metric("METAR used", first_metar_label)
+        st.caption(
+            f"Evidence {first_live_champion.get('evidence', 'missing')} · "
+            f"freshness {first_live_champion.get('freshness', 'unavailable')}."
+        )
     if not top_market_is_exact:
         st.caption(
             "The Polymarket leader can differ from the most likely exact temperature because "

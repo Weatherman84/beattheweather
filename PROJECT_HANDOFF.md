@@ -2,10 +2,24 @@
 
 Stand: 18. August 2026
 
-Gebaut: **v10.7.9**
+Gebaut: **v10.7.9.1**
 
 Ausgangsbasis: öffentliche v10.7.8, aktueller Collector-HEAD
 `18b17b7b5e10c4cc90168411b7b4961b535cdd05`.
+
+## v10.7.9.1 Synchronisations-Hotfix
+
+- Overview und Airport detail rufen denselben zentralen aktuellen Nowcast-Builder auf.
+- Der Overview-Pfad verwendet nicht mehr die historische kausale Checkpoint-
+  Rekonstruktion, die abweichende Run-Zeitstempel und Modellselektionen erzeugen konnte.
+- Der Cache ist auf 15 Sekunden begrenzt und zusätzlich an die Datenbankversion gebunden.
+- Der erste gespeicherte Live-Champion nach D0@10 erscheint mit Forecast- und METAR-
+  Zeitstempel im oberen KPI-Bereich der Airport-Detailseite.
+- Keine Forecast-, Bias-, Regime-, TAF-, Lock- oder Wahrscheinlichkeitsformel wurde
+  verändert.
+
+Regression: Overview und Detail lieferten beim selben `as_of` für LEMD exakt denselben
+Championwert; 191 Tests sind in beiden Codepfaden erforderlich.
 
 ## v10.7.9 Ergebnis
 

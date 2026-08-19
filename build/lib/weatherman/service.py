@@ -831,6 +831,74 @@ def sync_airport_universe(*, include_closed: bool = False) -> dict[str, int]:
     return {"cities": len(events), "mapped": mapped, "unmapped": unknown}
 
 
+def build_current_live_nowcast(
+    *,
+    airport: dict,
+    target: date,
+    captured_at: datetime,
+    forecasts: pd.DataFrame,
+    actuals: pd.DataFrame,
+    observations: pd.DataFrame,
+    hourly: pd.DataFrame,
+    markets: pd.DataFrame,
+    tafs: pd.DataFrame,
+    snapshots: pd.DataFrame,
+    variants: pd.DataFrame,
+    prior_terminal_status: DayStatus | None = None,
+):
+    """Build the one canonical current Champion used by every Streamlit view."""
+    regime_profiles = continuous_regime_profiles(airport)
+    nowcast = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=actuals,
+        observations=observations,
+        hourly=hourly,
+        markets=markets,
+        tafs=tafs,
+        timezone_name=airport["timezone"],
+        target=target,
+        as_of=captured_at,
+        wind_profile=airport.get("heat_wind_profile"),
+        routine_metar_minutes=airport.get("metar_minutes"),
+        pre_metar_guard_minutes=airport.get("pre_metar_guard_minutes", 7),
+        critical_window_local=airport.get("critical_window_local"),
+        post_convective_profile=regime_profiles["post_convective"],
+        heat_regime_profile=regime_profiles["heat"],
+        phase_amplitude_profile=regime_profiles["phase"],
+        maritime_advection_profile=regime_profiles["maritime_advection"],
+        maritime_low_range_profile=regime_profiles["maritime_low_range"],
+        live_adjustment_guardrails=airport.get("live_adjustment_guardrails"),
+        recent_warm_bias_profile=airport.get("recent_warm_bias_challenger"),
+        future_reheating_profile=airport.get("future_reheating"),
+        prior_terminal_status=prior_terminal_status,
+        maximum_model_age_minutes=settings.maximum_live_model_age_minutes,
+    )
+    if nowcast is None:
+        return None
+    memory_config = dict(airport.get("regime_memory") or {})
+    memory_config.setdefault(
+        "allow_promoted",
+        settings.regime_memory_auto_promotion_enabled
+        or settings.regime_memory_allow_promoted,
+    )
+    memory_config.setdefault(
+        "minimum_oos_days",
+        settings.regime_memory_minimum_oos_days,
+    )
+    return enrich_nowcast_with_regime_memory(
+        nowcast,
+        snapshots,
+        actuals,
+        observations,
+        variants,
+        airport_profile=airport,
+        timezone_name=airport["timezone"],
+        target=target,
+        as_of=captured_at,
+        config=memory_config,
+    )
+
+
 def _build_nowcast_from_session(
     session,
     code: str,
@@ -929,52 +997,19 @@ def _build_nowcast_from_session(
                 remaining_heating_c=0.0,
                 explanation="Terminal state restored from the prior causal snapshot.",
             )
-    regime_profiles = continuous_regime_profiles(airport)
-    nowcast = build_live_nowcast(
+    return build_current_live_nowcast(
+        airport=airport,
+        target=target,
+        captured_at=captured_at,
         forecasts=forecasts,
         actuals=actuals,
         observations=observations,
         hourly=hourly,
         markets=pd.DataFrame(market_rows),
         tafs=tafs,
-        timezone_name=airport["timezone"],
-        target=target,
-        as_of=captured_at,
-        wind_profile=airport.get("heat_wind_profile"),
-        routine_metar_minutes=airport.get("metar_minutes"),
-        pre_metar_guard_minutes=airport.get("pre_metar_guard_minutes", 7),
-        critical_window_local=airport.get("critical_window_local"),
-        post_convective_profile=regime_profiles["post_convective"],
-        heat_regime_profile=regime_profiles["heat"],
-        phase_amplitude_profile=regime_profiles["phase"],
-        maritime_advection_profile=regime_profiles["maritime_advection"],
-        maritime_low_range_profile=regime_profiles["maritime_low_range"],
-        live_adjustment_guardrails=airport.get("live_adjustment_guardrails"),
-        recent_warm_bias_profile=airport.get("recent_warm_bias_challenger"),
-        future_reheating_profile=airport.get("future_reheating"),
+        snapshots=snapshots,
+        variants=variants,
         prior_terminal_status=prior_terminal_status,
-    )
-    memory_config = dict(airport.get("regime_memory") or {})
-    memory_config.setdefault(
-        "allow_promoted",
-        settings.regime_memory_auto_promotion_enabled
-        or settings.regime_memory_allow_promoted,
-    )
-    memory_config.setdefault(
-        "minimum_oos_days",
-        settings.regime_memory_minimum_oos_days,
-    )
-    return enrich_nowcast_with_regime_memory(
-        nowcast,
-        snapshots,
-        actuals,
-        observations,
-        variants,
-        airport_profile=airport,
-        timezone_name=airport["timezone"],
-        target=target,
-        as_of=captured_at,
-        config=memory_config,
     )
 
 
@@ -2568,6 +2603,59 @@ def collect_all_live_trading_refresh(
     }
 
 
+def _current_nowcast_from_session(
+    session,
+    *,
+    code: str,
+    airport: dict,
+    target: date,
+    captured_at: datetime,
+    market_frame: pd.DataFrame,
+):
+    """Load exactly the same current-data window as Airport detail."""
+    target_zone = ZoneInfo(airport["timezone"])
+    target_start_utc = datetime(
+        target.year, target.month, target.day, tzinfo=target_zone
+    ).astimezone(timezone.utc)
+    target_end_utc = target_start_utc + timedelta(days=1)
+    connection = session.connection()
+    forecasts = read_archive_live(
+        Forecast,
+        connection,
+        filters={"airport": code},
+        minimums={"target_date": target - timedelta(days=90)},
+    )
+    actuals = read_archive_live(DailyActual, connection, filters={"airport": code})
+    observations = read_archive_live(Observation, connection, filters={"airport": code})
+    hourly = read_archive_live(
+        HourlyForecast,
+        connection,
+        filters={"airport": code},
+        minimums={"valid_at": target_start_utc},
+        maximums={"valid_at": target_end_utc},
+    )
+    tafs = read_archive_live(TafReport, connection, filters={"airport": code})
+    snapshots = read_archive_live(
+        ForecastSnapshot, connection, filters={"airport": code}
+    )
+    variants = read_archive_live(
+        ForecastVariantSnapshot, connection, filters={"airport": code}
+    )
+    return build_current_live_nowcast(
+        airport=airport,
+        target=target,
+        captured_at=captured_at,
+        forecasts=forecasts,
+        actuals=actuals,
+        observations=observations,
+        hourly=hourly,
+        markets=market_frame,
+        tafs=tafs,
+        snapshots=snapshots,
+        variants=variants,
+    )
+
+
 def live_trading_overview(
     targets: dict[str, date] | None = None,
     *,
@@ -2598,14 +2686,13 @@ def live_trading_overview(
                 market_frame = market_frame.sort_values("captured_at").drop_duplicates(
                     "market_id", keep="last"
                 )
-            market_rows = market_frame.where(market_frame.notna(), None).to_dict("records")
-            nowcast = _build_nowcast_from_session(
+            nowcast = _current_nowcast_from_session(
                 session,
-                code,
-                airport,
-                target,
-                captured_at,
-                market_rows,
+                code=code,
+                airport=airport,
+                target=target,
+                captured_at=captured_at,
+                market_frame=market_frame,
             )
             if nowcast is None:
                 rows.append(
@@ -2613,6 +2700,7 @@ def live_trading_overview(
                         "airport": code,
                         "name": airport["name"],
                         "target_date": target,
+                        "calculated_at": captured_at,
                         "status": "No current forecast",
                     }
                 )
@@ -2662,6 +2750,7 @@ def live_trading_overview(
                     "name": airport["name"],
                     "timezone": airport["timezone"],
                     "target_date": target,
+                    "calculated_at": captured_at,
                     "status": nowcast.day_status.label,
                     "champion_c": float(nowcast.final_forecast_mean),
                     "latest_metar_c": optional_float(nowcast.current_observed_temp),

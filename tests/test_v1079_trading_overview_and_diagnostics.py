@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from weatherman import service
 from weatherman.analytics import (
+    first_stored_live_champion,
     forecast_ladder_history,
     forecast_ladder_oos_reliability,
 )
@@ -206,3 +207,61 @@ def test_live_lineage_records_model_exclusion_reason() -> None:
     assert provenance["fresh"]["exclusion_reason"] is None
     assert provenance["stale"]["exclusion_reason"] == "stale at this checkpoint"
     assert provenance["extra"]["selection_status"] == "available-not-expected"
+
+
+def test_first_live_champion_does_not_require_a_final_actual() -> None:
+    snapshots = pd.DataFrame(
+        [
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 8, 19),
+                "captured_at": datetime(2026, 8, 19, 8, 30, tzinfo=timezone.utc),
+                "timing": "D0 morning",
+                "checkpoint_label": "D0 @10",
+                "final_forecast_c": 37.0,
+            },
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 8, 19),
+                "captured_at": datetime(2026, 8, 19, 10, 5, tzinfo=timezone.utc),
+                "timing": "D0 live",
+                "checkpoint_label": None,
+                "final_forecast_c": 38.2,
+                "latest_metar_at": datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc),
+                "expected_peak_at": datetime(2026, 8, 19, 15, tzinfo=timezone.utc),
+                "hours_to_peak": 4.9,
+                "freshness_status": "fresh",
+                "source_age_at_checkpoint_minutes": 12.0,
+            },
+            {
+                "airport": "LEMD",
+                "target_date": date(2026, 8, 19),
+                "captured_at": datetime(2026, 8, 19, 11, 5, tzinfo=timezone.utc),
+                "timing": "D0 live",
+                "checkpoint_label": None,
+                "final_forecast_c": 39.0,
+                "latest_metar_at": datetime(2026, 8, 19, 11, 0, tzinfo=timezone.utc),
+                "expected_peak_at": datetime(2026, 8, 19, 15, tzinfo=timezone.utc),
+                "hours_to_peak": 3.9,
+            },
+        ]
+    )
+    first = first_stored_live_champion(
+        snapshots,
+        target=date(2026, 8, 19),
+        timezone_name="Europe/Madrid",
+    )
+    assert first is not None
+    assert first["champion_c"] == 38.2
+    assert first["forecast_at"] == datetime(2026, 8, 19, 10, 5, tzinfo=timezone.utc)
+    assert first["latest_metar_at"] == datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc)
+    assert first["evidence"] == "scheduled"
+
+
+def test_overview_and_detail_use_the_same_canonical_nowcast_builder() -> None:
+    app = (ROOT / "app.py").read_text(encoding="utf-8")
+    source = (ROOT / "src" / "weatherman" / "service.py").read_text(encoding="utf-8")
+    assert "live_nowcast = build_current_live_nowcast(" in app
+    assert "return build_current_live_nowcast(" in source
+    assert "nowcast = _current_nowcast_from_session(" in source
+    assert "@st.cache_data(show_spinner=False, ttl=15)" in app

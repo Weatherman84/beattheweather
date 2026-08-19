@@ -808,6 +808,50 @@ def _ladder_evidence(row: pd.Series | None, *, live: bool = False) -> str:
     return "missing"
 
 
+def first_stored_live_champion(
+    snapshots: pd.DataFrame,
+    *,
+    target: date,
+    timezone_name: str,
+) -> dict[str, object] | None:
+    """Return the first stored D0-live Champion after 10:00 airport local time."""
+    if snapshots.empty:
+        return None
+    frame = snapshots.copy()
+    frame["target_date"] = pd.to_datetime(frame.target_date, errors="coerce").dt.date
+    frame["captured_at"] = pd.to_datetime(frame.captured_at, utc=True, errors="coerce")
+    selected = frame[
+        (frame.target_date == target)
+        & frame.timing.fillna("").astype(str).str.startswith("D0 live")
+    ].copy()
+    if "checkpoint_label" in selected:
+        selected = selected[selected.checkpoint_label.fillna("").astype(str).eq("")]
+    if selected.empty:
+        return None
+    selected["captured_local"] = selected.captured_at.dt.tz_convert(timezone_name)
+    selected = selected[
+        (selected.captured_local.dt.date == target)
+        & (selected.captured_local.dt.hour >= 10)
+    ]
+    if selected.empty:
+        return None
+    row = selected.sort_values("captured_at").iloc[0]
+    value = pd.to_numeric(row.get("final_forecast_c"), errors="coerce")
+    if pd.isna(value):
+        return None
+    latest_metar = pd.to_datetime(row.get("latest_metar_at"), utc=True, errors="coerce")
+    return {
+        "champion_c": float(value),
+        "forecast_at": pd.Timestamp(row.captured_at).to_pydatetime(),
+        "latest_metar_at": (
+            pd.Timestamp(latest_metar).to_pydatetime() if pd.notna(latest_metar) else None
+        ),
+        "evidence": _ladder_evidence(row, live=True),
+        "freshness": str(row.get("freshness_status") or "unavailable"),
+        "source_age_minutes": row.get("source_age_at_checkpoint_minutes"),
+    }
+
+
 def forecast_ladder_history(
     snapshots: pd.DataFrame,
     actuals: pd.DataFrame,

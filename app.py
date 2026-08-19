@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.7.9")
+discard_stale_weatherman_modules("10.7.9.1")
 
 import pandas as pd
 import plotly.express as px
@@ -24,6 +24,7 @@ from weatherman.analytics import (
     detect_market_model_conflict,
     fixed_decision_snapshots,
     flat_bet_simulation,
+    first_stored_live_champion,
     forecast_ladder_history,
     forecast_ladder_history_metrics,
     forecast_ladder_oos_reliability,
@@ -57,15 +58,13 @@ from weatherman.decision import (
     hedge_outcome_table,
     latest_prior_probabilities,
 )
-from weatherman.nowcast import build_live_nowcast
-from weatherman.regime_memory import enrich_nowcast_with_regime_memory
-from weatherman.regime_profiles import continuous_regime_profiles
 from weatherman.navigation import render_app_navigation
 from weatherman.live_ui import render_compact_live_forecast
 from weatherman.history import read_archive_live
 from weatherman.research import filter_target_window, market_timing_metrics
 from weatherman.service import (
     collect_all_live_trading_refresh,
+    build_current_live_nowcast,
     collect_live_aviation,
     collect_live_trading_refresh,
     live_trading_overview,
@@ -203,7 +202,7 @@ def cached_paired_d1_d0_reliability(
     )
 
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=15)
 def cached_live_trading_overview(target_date, database_version: int) -> list[dict[str, object]]:
     del database_version
     return live_trading_overview(
@@ -248,6 +247,7 @@ def render_all_airports_overview(catalog: dict[str, dict], target_date) -> None:
     for row in rows:
         zone = str(row.get("timezone") or "UTC")
         metar_at = pd.to_datetime(row.get("latest_metar_at"), utc=True, errors="coerce")
+        calculated_at = pd.to_datetime(row.get("calculated_at"), utc=True, errors="coerce")
         summary_rows.append(
             {
                 "Airport": f"{row['airport']} · {row['name']}",
@@ -268,6 +268,11 @@ def render_all_airports_overview(catalog: dict[str, dict], target_date) -> None:
                 "METAR time": (
                     pd.Timestamp(metar_at).tz_convert(zone).strftime("%H:%M LT")
                     if pd.notna(metar_at)
+                    else "—"
+                ),
+                "Calculated": (
+                    pd.Timestamp(calculated_at).tz_convert(zone).strftime("%H:%M:%S LT")
+                    if pd.notna(calculated_at)
                     else "—"
                 ),
                 "Status": str(row.get("status") or "—"),
@@ -712,58 +717,18 @@ trade_decision = None
 prior_probabilities: dict[str, float] = {}
 with tab_live:
     live_as_of = datetime.now(ZoneInfo("UTC"))
-    regime_profiles = continuous_regime_profiles(catalog[airport])
-    live_nowcast = build_live_nowcast(
+    live_nowcast = build_current_live_nowcast(
+        airport=catalog[airport],
+        target=target,
+        captured_at=live_as_of,
         forecasts=forecasts,
         actuals=actuals,
         observations=observations,
         hourly=hourly,
         markets=latest_markets,
         tafs=tafs,
-        timezone_name=timezone_name,
-        target=target,
-        as_of=live_as_of,
-        wind_profile=catalog[airport].get("heat_wind_profile"),
-        routine_metar_minutes=catalog[airport].get("metar_minutes"),
-        pre_metar_guard_minutes=catalog[airport].get(
-            "pre_metar_guard_minutes", 7
-        ),
-        critical_window_local=catalog[airport].get("critical_window_local"),
-        post_convective_profile=regime_profiles["post_convective"],
-        heat_regime_profile=regime_profiles["heat"],
-        phase_amplitude_profile=regime_profiles["phase"],
-        maritime_advection_profile=regime_profiles["maritime_advection"],
-        maritime_low_range_profile=regime_profiles["maritime_low_range"],
-        live_adjustment_guardrails=catalog[airport].get(
-            "live_adjustment_guardrails"
-        ),
-        recent_warm_bias_profile=catalog[airport].get(
-            "recent_warm_bias_challenger"
-        ),
-        future_reheating_profile=catalog[airport].get("future_reheating"),
-        maximum_model_age_minutes=settings.maximum_live_model_age_minutes,
-    )
-    memory_config = dict(catalog[airport].get("regime_memory") or {})
-    memory_config.setdefault(
-        "allow_promoted",
-        settings.regime_memory_auto_promotion_enabled
-        or settings.regime_memory_allow_promoted,
-    )
-    memory_config.setdefault(
-        "minimum_oos_days",
-        settings.regime_memory_minimum_oos_days,
-    )
-    live_nowcast = enrich_nowcast_with_regime_memory(
-        live_nowcast,
-        all_forecast_snapshots,
-        actuals,
-        observations,
-        all_forecast_variants,
-        airport_profile=catalog[airport],
-        timezone_name=timezone_name,
-        target=target,
-        as_of=live_as_of,
-        config=memory_config,
+        snapshots=all_forecast_snapshots,
+        variants=all_forecast_variants,
     )
     if live_nowcast is None:
         st.info(
@@ -825,6 +790,11 @@ with tab_live:
             live_reliability = live_reliability[
                 live_reliability.stage.str.endswith("· Champion")
             ].copy()
+        first_live = first_stored_live_champion(
+            all_forecast_snapshots,
+            target=target,
+            timezone_name=timezone_name,
+        )
 
         if live_nowcast.forecast_data_stale:
             st.error(
@@ -862,6 +832,7 @@ with tab_live:
             actuals=actuals,
             regime_memory_snapshots=all_regime_memory_snapshots,
             reliability=live_reliability,
+            first_live_champion=first_live,
         )
 
         # The previous table-heavy renderer remains below for one release as an
