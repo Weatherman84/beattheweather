@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 40198144,
-    "generated_at": "2026-08-20T23:23:31.795086+00:00",
+    "database_bytes": 40222720,
+    "generated_at": "2026-08-20T23:51:17.084133+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -85,7 +85,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 151552,
+        "bytes": 155648,
         "index": "ix_collection_coverage_run_id",
         "table": "collection_coverage"
       },
@@ -525,7 +525,7 @@
         "table": "taf_reports"
       },
       {
-        "bytes": 24576,
+        "bytes": 28672,
         "index": "sqlite_autoindex_taf_reports_1",
         "table": "taf_reports"
       },
@@ -551,17 +551,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 3350528,
+        "bytes": 3354624,
         "data_bytes": 2494464,
-        "index_bytes": 856064,
-        "rows": 5287,
+        "index_bytes": 860160,
+        "rows": 5299,
         "table": "collection_coverage"
       },
       {
-        "bytes": 4403200,
-        "data_bytes": 4341760,
+        "bytes": 4407296,
+        "data_bytes": 4345856,
         "index_bytes": 61440,
-        "rows": 307,
+        "rows": 308,
         "table": "collection_runs"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 253952,
         "data_bytes": 147456,
         "index_bytes": 106496,
-        "rows": 854,
+        "rows": 860,
         "table": "observations"
       },
       {
@@ -649,10 +649,10 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 331776,
-        "data_bytes": 266240,
-        "index_bytes": 65536,
-        "rows": 88,
+        "bytes": 348160,
+        "data_bytes": 278528,
+        "index_bytes": 69632,
+        "rows": 92,
         "table": "taf_reports"
       }
     ]
@@ -663,8 +663,8 @@
   "archive_total_rows": 579736,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 40230912,
-    "generated_at": "2026-08-20T23:22:52.108842+00:00",
+    "database_bytes": 40255488,
+    "generated_at": "2026-08-20T23:50:34.269405+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -747,7 +747,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 151552,
+        "bytes": 155648,
         "index": "ix_collection_coverage_run_id",
         "table": "collection_coverage"
       },
@@ -1187,7 +1187,7 @@
         "table": "taf_reports"
       },
       {
-        "bytes": 24576,
+        "bytes": 28672,
         "index": "sqlite_autoindex_taf_reports_1",
         "table": "taf_reports"
       },
@@ -1213,17 +1213,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 3375104,
+        "bytes": 3379200,
         "data_bytes": 2494464,
-        "index_bytes": 880640,
-        "rows": 5287,
+        "index_bytes": 884736,
+        "rows": 5299,
         "table": "collection_coverage"
       },
       {
-        "bytes": 4403200,
-        "data_bytes": 4341760,
+        "bytes": 4407296,
+        "data_bytes": 4345856,
         "index_bytes": 61440,
-        "rows": 307,
+        "rows": 308,
         "table": "collection_runs"
       },
       {
@@ -1279,7 +1279,7 @@
         "bytes": 262144,
         "data_bytes": 147456,
         "index_bytes": 114688,
-        "rows": 854,
+        "rows": 860,
         "table": "observations"
       },
       {
@@ -1311,16 +1311,16 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 331776,
-        "data_bytes": 266240,
-        "index_bytes": 65536,
-        "rows": 88,
+        "bytes": 348160,
+        "data_bytes": 278528,
+        "index_bytes": 69632,
+        "rows": 92,
         "table": "taf_reports"
       }
     ]
   },
-  "database_bytes": 40198144,
-  "database_bytes_before": 40230912,
+  "database_bytes": 40222720,
+  "database_bytes_before": 40255488,
   "database_bytes_saved": 32768,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,

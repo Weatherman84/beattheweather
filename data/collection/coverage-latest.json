@@ -5,20 +5,20 @@
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 142,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 30.562138,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 315.0,
-    "missing_slots": 109,
+    "median_trigger_delay_seconds": 305.5,
+    "missing_slots": 108,
     "observed_slots": 34,
     "p95_execution_seconds": 126.60783114999997,
     "runs": 34,
-    "trigger_coverage": 0.23776223776223776
+    "trigger_coverage": 0.23943661971830985
   },
-  "checked_at": "2026-08-20T23:23:32.615329+00:00",
+  "checked_at": "2026-08-20T23:51:17.909905+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 40198144,
+  "database_bytes": 40222720,
   "warning_count": 4,
   "warnings": [
     {
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -41,8 +41,8 @@
     },
     {
       "active": true,
-      "database_bytes": 40198144,
-      "message": "Active SQLite is 38.3 MiB.",
+      "database_bytes": 40222720,
+      "message": "Active SQLite is 38.4 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
