@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 2,
+  "active_warning_count": 3,
   "archive_partitions": 662,
   "archive_rows": 516924,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 141,
+    "expected_slots": 140,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 29.779744,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 312.0,
-    "missing_slots": 106,
+    "missing_slots": 105,
     "observed_slots": 35,
     "p95_execution_seconds": 125.89799069999997,
     "runs": 35,
-    "trigger_coverage": 0.24822695035460993
+    "trigger_coverage": 0.25
   },
-  "checked_at": "2026-08-20T17:29:02.938494+00:00",
+  "checked_at": "2026-08-20T17:59:27.116643+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 39923712,
-  "warning_count": 3,
+  "database_bytes": 40017920,
+  "warning_count": 4,
   "warnings": [
     {
       "active": false,
@@ -29,14 +29,23 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
     {
       "active": true,
-      "database_bytes": 39923712,
-      "message": "Active SQLite is 38.1 MiB.",
+      "age_minutes": 233.5,
+      "airport": "LTFM",
+      "data_type": "forecast",
+      "message": "LTFM: forecast is 234 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "database_bytes": 40017920,
+      "message": "Active SQLite is 38.2 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
