@@ -16,9 +16,9 @@
     "runs": 36,
     "trigger_coverage": 0.2553191489361702
   },
-  "checked_at": "2026-08-20T13:23:14.270679+00:00",
+  "checked_at": "2026-08-20T14:07:16.584813+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 37392384,
+  "database_bytes": 38236160,
   "warning_count": 3,
   "warnings": [
     {
@@ -29,14 +29,14 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 60 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
     {
       "active": true,
-      "database_bytes": 37392384,
-      "message": "Active SQLite is 35.7 MiB.",
+      "database_bytes": 38236160,
+      "message": "Active SQLite is 36.5 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
