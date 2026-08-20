@@ -2125,14 +2125,18 @@ def build_live_nowcast(
     current["is_fresh"] = current.age_minutes <= freshness_limit
     fresh_current = current[current.is_fresh].copy()
     forecast_data_stale = len(fresh_current) < 2
-    if not forecast_data_stale:
-        selected_models = set(fresh_current.model.astype(str))
-        current["used_in_forecast"] = current.model.astype(str).isin(selected_models)
-        forecast_current = fresh_current
-    else:
-        current["used_in_forecast"] = True
-        forecast_current = current.copy()
+    # A stale row is diagnostic evidence, never a production forecast input.  The
+    # former fallback to ``current`` when fewer than two fresh feeds were present
+    # made old Meteoblue/Open-Meteo rows part of the Champion while simultaneously
+    # labelling them stale in provenance.  Keep the two concepts consistent: one
+    # fresh model may still produce a visibly blocked diagnostic nowcast, while no
+    # fresh model means there is no defensible current nowcast at all.
+    selected_models = set(fresh_current.model.astype(str))
+    current["used_in_forecast"] = current.model.astype(str).isin(selected_models)
     model_freshness = current.copy()
+    if fresh_current.empty:
+        return None
+    forecast_current = fresh_current
     stale_models = tuple(
         model_freshness.loc[~model_freshness.is_fresh, "model"].astype(str).tolist()
     )

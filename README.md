@@ -3,6 +3,31 @@
 Du musst **keine Befehle eingeben**, nichts programmieren und nichts auf deinem Computer
 installieren.
 
+## Neu in Version 10.7.10
+
+- **Stale-Source-Hard-Guard:** Modelle über der 90-Minuten-Grenze dürfen weder im
+  Live-Champion noch in einem festen Checkpoint verwendet werden. Sind null frische
+  Modelle vorhanden, wird kein Champion berechnet; bei nur einem frischen Modell bleibt
+  die diagnostische Vorschau sichtbar, aber Trading ist gesperrt.
+- Expected, available, fresh und tatsächlich vom Champion verwendete Modelle werden
+  getrennt gespeichert. Anzeige und Championberechnung verwenden dieselbe Auswahl.
+- **Verlustsichere Archivierung:** Wenn der schnelle Collector an der 35-MiB-Schwelle
+  Wartung startet, werden SQLite und alle neu erzeugten, verifizierten Archivpartitionen
+  zwingend gemeinsam committed. Unstaged Archive brechen den Persistenzvorgang ab.
+- Die fehlenden UTC-Tagespartitionen vom 16. und 17. August wurden aus zwei früheren,
+  per Git committeten SQLite-Ständen rekonstruiert. 62.812 deduplizierte Zeilen wurden
+  wiederhergestellt und im Recovery-Bericht dokumentiert.
+- **Meteoblue Free-Tier:** maximal ein geplanter Abruf je Airport und Lokaltag, frühestens
+  ab 09:00 Uhr lokal. Erfolgreiche und fehlgeschlagene Versuche zählen zum Tagesbudget;
+  429-/Quota-Fehler lösen einen 24-Stunden-Cooldown aus. Wiederholtes Refresh-Klicken
+  umgeht diesen Schutz nicht.
+- Open-Meteo, METAR, TAF und Polymarket bleiben vom Meteoblue-Budget unabhängig.
+- Forecast-Gewichte, Biases, Regimekoeffizienten, TAF-Stufe, Day-/Peak-Lock und
+  Wettlogik bleiben unverändert. Post-Peak und Reheating bleiben Replay/Research-only.
+
+Nach dem Upload zuerst den grünen Test abwarten, dann Workflow 8 und Workflow 5 jeweils
+einmal manuell starten und erst danach Streamlit einmal rebooten.
+
 ## Hotfix 10.7.9.1
 
 - All-airport Overview und Airport detail verwenden denselben zentralen aktuellen
@@ -599,8 +624,9 @@ erhalten; es ist kein vollständiger neuer 49-Airport-Backfill nötig.
 - Workflow 5 lädt von 06:00 Uhr Flughafenzeit bis zum Ende des kritischen Fensters
   automatisch fällige Modellvorhersagen nach. Der Shadow Watcher rechnet dadurch nicht
   mehr nur mit dem letzten dreistündlichen Forecast-Snapshot.
-- Open-Meteo-Modelle werden spätestens nach 30 Minuten erneut abgefragt; meteoblue
-  spätestens nach 60 Minuten, um API-Credits kontrolliert zu verwenden.
+- Open-Meteo-Modelle werden spätestens nach 30 Minuten erneut abgefragt. Meteoblue
+  besitzt ab v10.7.10 ein persistentes Tagesbudget von höchstens einem Abruf je Airport
+  und Lokaltag sowie einen 24-Stunden-Cooldown bei Quotenfehlern.
 - Jeder Modellabruf zeigt sein tatsächliches Alter und ob er in den Live-Konsens
   eingegangen ist.
 - Modelle mit einem Abrufalter über 90 Minuten werden aus einem ausreichend großen

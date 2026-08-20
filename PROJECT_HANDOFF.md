@@ -1,11 +1,36 @@
 # Weatherman Project Handoff
 
-Stand: 18. August 2026
+Stand: 20. August 2026
 
-Gebaut: **v10.7.9.1**
+Gebaut: **v10.7.10**
 
-Ausgangsbasis: öffentliche v10.7.8, aktueller Collector-HEAD
-`18b17b7b5e10c4cc90168411b7b4961b535cdd05`.
+Ausgangsbasis: öffentliche v10.7.9.1, geprüfter Collector-HEAD
+`e845f55b3cb2cee8c7fec7b0e67ef6a4c45b8d8d`; nachfolgende reine Datencommits
+werden beim Upload nicht durch eine Paketdatenbank überschrieben.
+
+## v10.7.10 Stabilitäts- und Datenfix
+
+- Ein stale Forecast ist ausnahmslos diagnostisch und kann nicht mehr in den Champion
+  zurückfallen. Bei null frischen Modellen existiert kein Live-Champion; bei einem
+  frischen Modell bleibt die Vorschau stale/handelsgesperrt.
+- Checkpoints speichern expected, available, fresh und used getrennt. Der in der
+  Provenance gezeigte `used_by_champion`-Status stammt aus derselben Auswahl wie die
+  tatsächliche Berechnung.
+- Der schnelle Collector persistiert bei schwellenbedingter Maintenance Datenbank und
+  verifizierte Archive atomar. Ein nicht gestagtes Archiv verhindert den Commit.
+- Der bestätigte Verlustpfad wurde rückwirkend repariert: UTC 16. und 17. August wurden
+  aus den committeten SQLite-Ständen `cd912130` und `a7f796e9` wiederhergestellt.
+  62.812 eindeutige Zeilen ergänzen 26 Tagespartitionen; das Gesamtarchiv enthält
+  danach 579.736 hash- und roundtrip-verifizierte Zeilen.
+- Meteoblue verwendet ohne neuen Key ausschließlich das bestehende Free-Tier: ein
+  Versuch pro Airport/Lokaltag ab 09:00, persistente Zählung erfolgreicher und
+  fehlgeschlagener Versuche und 24 Stunden Cooldown nach 429/Quota/Credit-Fehlern.
+  Open-Meteo, METAR, TAF und Polymarket sind davon entkoppelt.
+- Post-Peak Upper Tail, Munich Late Heating und Reheating-Klassifikation bleiben
+  Research-only und werden erst in v10.8.0 replayt.
+
+Produktive Forecast-Gewichte, Biases, Regimekoeffizienten, TAF-Stufe, Day-/Peak-Lock,
+Promotion-Gates und Wettlogik sind unverändert.
 
 ## v10.7.9.1 Synchronisations-Hotfix
 
@@ -192,7 +217,7 @@ späteren Abrufzeitpunkt.
 
 1. Paketinhalt hochladen und grünen Test abwarten.
 2. Workflow **5 - Consolidated ten-minute collector** einmal manuell starten.
-3. Im Coverage-Bereich einen neuen v10.7.8-Lauf mit getrennten Zeitstempeln prüfen.
+3. Im Coverage-Bereich einen neuen v10.7.10-Lauf mit getrennten Zeitstempeln prüfen.
 4. Workflow **8 - Daily archive verification and SQLite maintenance** starten.
 5. Streamlit einmal neu booten und Trading Desk/Checkpoint-Anzeige prüfen.
 6. Den manuellen Live-Refresh für mindestens zwei Airports testen.
@@ -201,14 +226,14 @@ Workflow 1, Workflow 7 und ein Jahres-Backfill sind nicht erforderlich.
 
 ## Rollback
 
-Der Release ist code-seitig durch erneutes Hochladen des letzten v10.7.7-Pakets
-rückrollbar. Die neuen SQLite-Spalten sind additiv und werden von v10.7.7 ignoriert;
+Der Release ist code-seitig durch erneutes Hochladen des letzten v10.7.9.1-Pakets
+rückrollbar. Die neue SQLite-Spalte ist additiv und wird von v10.7.9.1 ignoriert;
 ein Datenbank-Downgrade oder Löschen von Spalten ist nicht erforderlich. Vor dem Upload
 bleibt die aktuelle Repository-/DB-Version der Wiederherstellungspunkt.
 
 ## Empfehlung für v10.8.0
 
-Nach produktiver Abnahme von v10.7.8 kann ein strikt isolierter 30-Tage-Pilot für
+Nach produktiver Abnahme von v10.7.10 kann ein strikt isolierter 30-Tage-Pilot für
 Madrid und München beginnen. Voraussetzung ist, dass die neue Collector-Lineage über
 mehrere reale Läufe valide ist und der Readiness-Bericht die Pilotinputs je Zeitpunkt
 als historisch-kausal oder ausdrücklich `reconstructed-research` klassifiziert. Ein

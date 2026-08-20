@@ -4,9 +4,11 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
+from weatherman import service
 from weatherman.db import (
     Base,
     BasketSnapshot,
+    CollectionCoverage,
     DailyActual,
     Forecast,
     ForecastVariantSnapshot,
@@ -22,6 +24,7 @@ from weatherman.service import (
     _record_shadow_evaluations,
     _record_signal_snapshots,
     _record_strategy_snapshots,
+    _meteoblue_poll_policy,
     _source_refresh_due,
     _restore_stored_station_actuals,
     _store_reanalysis_actuals,
@@ -197,6 +200,113 @@ def test_live_provider_refresh_age_is_checked_against_real_fetch_time():
             as_of=now + timedelta(minutes=2),
             maximum_age_minutes=60,
         )
+
+
+def test_meteoblue_free_tier_budget_counts_successful_daily_call(monkeypatch):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine)
+    now = datetime(2026, 8, 20, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        service,
+        "settings",
+        SimpleNamespace(
+            meteoblue_api_key="configured",
+            meteoblue_url_template="configured",
+            meteoblue_preferred_local_hour=9,
+            meteoblue_daily_call_limit=1,
+            meteoblue_rate_limit_cooldown_hours=24,
+        ),
+    )
+    with session_factory() as session:
+        session.add(
+            Forecast(
+                airport="EHAM",
+                model="meteoblue",
+                run_at=now,
+                fetched_at=now,
+                target_date=now.date(),
+                max_temp_c=21.0,
+                source="meteoblue",
+                horizon="D0-morning",
+            )
+        )
+        session.commit()
+        due, status = _meteoblue_poll_policy(
+            session,
+            airport_code="EHAM",
+            airport={"timezone": "Europe/Amsterdam"},
+            as_of=now + timedelta(hours=2),
+        )
+    assert not due
+    assert status == "daily-budget-reused"
+
+
+def test_meteoblue_rate_limit_enters_persistent_cooldown(monkeypatch):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine)
+    now = datetime(2026, 8, 20, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        service,
+        "settings",
+        SimpleNamespace(
+            meteoblue_api_key="configured",
+            meteoblue_url_template="configured",
+            meteoblue_preferred_local_hour=9,
+            meteoblue_daily_call_limit=1,
+            meteoblue_rate_limit_cooldown_hours=24,
+        ),
+    )
+    with session_factory() as session:
+        session.add(
+            CollectionCoverage(
+                run_id="rate-limited",
+                airport="EHAM",
+                data_type="meteoblue",
+                status="source_or_parser_failed",
+                scheduled_at=now - timedelta(hours=2),
+                rows_read=0,
+                rows_written=0,
+                attempts=1,
+                reason="HTTPStatusError: 429 quota exceeded",
+            )
+        )
+        session.commit()
+        due, status = _meteoblue_poll_policy(
+            session,
+            airport_code="LTAC",
+            airport={"timezone": "Europe/Amsterdam"},
+            as_of=now,
+        )
+    assert not due
+    assert status == "rate-limited-cooldown"
+
+
+def test_meteoblue_waits_for_preferred_daily_window(monkeypatch):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine)
+    monkeypatch.setattr(
+        service,
+        "settings",
+        SimpleNamespace(
+            meteoblue_api_key="configured",
+            meteoblue_url_template="configured",
+            meteoblue_preferred_local_hour=9,
+            meteoblue_daily_call_limit=1,
+            meteoblue_rate_limit_cooldown_hours=24,
+        ),
+    )
+    with session_factory() as session:
+        due, status = _meteoblue_poll_policy(
+            session,
+            airport_code="EHAM",
+            airport={"timezone": "Europe/Amsterdam"},
+            as_of=datetime(2026, 8, 20, 6, tzinfo=timezone.utc),
+        )
+    assert not due
+    assert status == "awaiting-daily-window"
 
 
 def test_forecast_refresh_begins_at_six_airport_local_time():

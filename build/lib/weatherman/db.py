@@ -275,6 +275,7 @@ class ForecastSnapshot(Base):
     expected_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     available_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fresh_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     used_model_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_coverage_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
     expected_models_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -669,6 +670,7 @@ def init_db() -> None:
                     "expected_model_count": "INTEGER",
                     "source_model_count": "INTEGER",
                     "available_model_count": "INTEGER",
+                    "fresh_model_count": "INTEGER",
                     "used_model_count": "INTEGER",
                     "source_coverage_ratio": "FLOAT",
                     "expected_models_json": "TEXT DEFAULT '[]'",

@@ -100,6 +100,7 @@ def test_foreign_models_cannot_inflate_coverage_or_stale_freshness() -> None:
     assert metadata["expected_model_count"] == 1
     assert metadata["source_model_count"] == 1
     assert metadata["available_model_count"] == 2
+    assert metadata["fresh_model_count"] == 1
     assert metadata["source_coverage_ratio"] == 1.0
     assert metadata["source_age_at_checkpoint_minutes"] == 15
     assert metadata["freshness_status"] == "fresh"
@@ -140,6 +141,7 @@ def test_live_provenance_separates_expected_available_and_used() -> None:
     )
     assert metadata["expected_model_count"] == 2  # configured model + meteoblue
     assert metadata["available_model_count"] == 2
+    assert metadata["fresh_model_count"] == 1
     assert metadata["used_model_count"] == 1
     assert json.loads(str(metadata["used_models_json"])) == ["ecmwf"]
     assert json.loads(str(metadata["extra_models_json"])) == ["foreign"]
@@ -242,6 +244,7 @@ def test_v1078_schema_and_production_research_guard() -> None:
     names = {column.name for column in ForecastSnapshot.__table__.columns}
     assert {
         "available_model_count",
+        "fresh_model_count",
         "used_model_count",
         "expected_models_json",
         "available_models_json",

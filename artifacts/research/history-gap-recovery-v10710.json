@@ -1,0 +1,176 @@
+{
+  "archive_partition_count": 688,
+  "archive_total_rows": 579736,
+  "method": "exact UTC partitions from committed SQLite snapshots",
+  "sources": [
+    {
+      "commit": "cd912130803cf0d124eb1dcf8aef4dcf7d0db4b7",
+      "tables": {
+        "collection_coverage": {
+          "archive_rows": 549448,
+          "files_changed": 1,
+          "rows_added": 824,
+          "source_rows": 824
+        },
+        "collection_runs": {
+          "archive_rows": 548624,
+          "files_changed": 1,
+          "rows_added": 45,
+          "source_rows": 45
+        },
+        "forecast_snapshots": {
+          "archive_rows": 545487,
+          "files_changed": 1,
+          "rows_added": 123,
+          "source_rows": 123
+        },
+        "forecast_variant_snapshots": {
+          "archive_rows": 546178,
+          "files_changed": 1,
+          "rows_added": 691,
+          "source_rows": 691
+        },
+        "forecasts": {
+          "archive_rows": 544594,
+          "files_changed": 1,
+          "rows_added": 1416,
+          "source_rows": 1416
+        },
+        "hourly_forecasts": {
+          "archive_rows": 543178,
+          "files_changed": 1,
+          "rows_added": 26254,
+          "source_rows": 26254
+        },
+        "market_snapshots": {
+          "archive_rows": 545364,
+          "files_changed": 1,
+          "rows_added": 770,
+          "source_rows": 770
+        },
+        "observations": {
+          "archive_rows": 548549,
+          "files_changed": 1,
+          "rows_added": 288,
+          "source_rows": 288
+        },
+        "regime_memory_snapshots": {
+          "archive_rows": 546301,
+          "files_changed": 1,
+          "rows_added": 123,
+          "source_rows": 123
+        },
+        "shadow_evaluations": {
+          "archive_rows": 548261,
+          "files_changed": 1,
+          "rows_added": 770,
+          "source_rows": 770
+        },
+        "signal_snapshots": {
+          "archive_rows": 547071,
+          "files_changed": 1,
+          "rows_added": 770,
+          "source_rows": 770
+        },
+        "strategy_snapshots": {
+          "archive_rows": 547491,
+          "files_changed": 1,
+          "rows_added": 420,
+          "source_rows": 420
+        },
+        "taf_reports": {
+          "archive_rows": 548579,
+          "files_changed": 1,
+          "rows_added": 30,
+          "source_rows": 30
+        }
+      },
+      "utc_date": "2026-08-16"
+    },
+    {
+      "commit": "a7f796e9259e2a2864cb93a38e32a3377968d355",
+      "tables": {
+        "collection_coverage": {
+          "archive_rows": 579736,
+          "files_changed": 1,
+          "rows_added": 676,
+          "source_rows": 676
+        },
+        "collection_runs": {
+          "archive_rows": 579060,
+          "files_changed": 1,
+          "rows_added": 36,
+          "source_rows": 36
+        },
+        "forecast_snapshots": {
+          "archive_rows": 576486,
+          "files_changed": 1,
+          "rows_added": 109,
+          "source_rows": 109
+        },
+        "forecast_variant_snapshots": {
+          "archive_rows": 577085,
+          "files_changed": 1,
+          "rows_added": 599,
+          "source_rows": 599
+        },
+        "forecasts": {
+          "archive_rows": 575783,
+          "files_changed": 1,
+          "rows_added": 1472,
+          "source_rows": 1472
+        },
+        "hourly_forecasts": {
+          "archive_rows": 574311,
+          "files_changed": 1,
+          "rows_added": 24863,
+          "source_rows": 24863
+        },
+        "market_snapshots": {
+          "archive_rows": 576377,
+          "files_changed": 1,
+          "rows_added": 594,
+          "source_rows": 594
+        },
+        "observations": {
+          "archive_rows": 578994,
+          "files_changed": 1,
+          "rows_added": 288,
+          "source_rows": 288
+        },
+        "regime_memory_snapshots": {
+          "archive_rows": 577194,
+          "files_changed": 1,
+          "rows_added": 109,
+          "source_rows": 109
+        },
+        "shadow_evaluations": {
+          "archive_rows": 578706,
+          "files_changed": 1,
+          "rows_added": 594,
+          "source_rows": 594
+        },
+        "signal_snapshots": {
+          "archive_rows": 577788,
+          "files_changed": 1,
+          "rows_added": 594,
+          "source_rows": 594
+        },
+        "strategy_snapshots": {
+          "archive_rows": 578112,
+          "files_changed": 1,
+          "rows_added": 324,
+          "source_rows": 324
+        },
+        "taf_reports": {
+          "archive_rows": 579024,
+          "files_changed": 1,
+          "rows_added": 30,
+          "source_rows": 30
+        }
+      },
+      "utc_date": "2026-08-17"
+    }
+  ],
+  "status": "recovered-and-verified"
+}

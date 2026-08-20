@@ -680,6 +680,7 @@ def _checkpoint_lineage_view(
             "coverage_ratio": None,
             "expected_model_count": len(expected_models or []),
             "available_model_count": 0,
+            "fresh_model_count": 0,
             "used_model_count": 0,
         }
     expected = {str(model) for model in (expected_models or []) if str(model)}
@@ -721,6 +722,14 @@ def _checkpoint_lineage_view(
             "coverage_ratio": coverage,
             "expected_model_count": len(expected),
             "available_model_count": len(available),
+            "fresh_model_count": len(
+                {
+                    str(item.get("model"))
+                    for item in relevant
+                    if item.get("age_at_cutoff_minutes") is not None
+                    and float(item["age_at_cutoff_minutes"]) <= 90
+                }
+            ),
             "used_model_count": int(
                 row.get("used_model_count")
                 if pd.notna(row.get("used_model_count"))
@@ -745,6 +754,11 @@ def _checkpoint_lineage_view(
             if pd.notna(row.get("available_model_count"))
             else row.get("source_model_count", 0)
             or 0
+        ),
+        "fresh_model_count": int(
+            row.get("fresh_model_count")
+            if pd.notna(row.get("fresh_model_count"))
+            else 0
         ),
         "used_model_count": int(
             row.get("used_model_count")

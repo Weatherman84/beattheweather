@@ -50,7 +50,7 @@ def test_stale_meteoblue_is_omitted_when_current_models_are_available():
     assert not bool(meteoblue.used_in_forecast)
 
 
-def test_all_old_models_keep_diagnostics_visible_but_mark_forecast_stale():
+def test_all_old_models_cannot_create_a_live_champion():
     as_of = datetime(2026, 7, 30, 8, tzinfo=timezone.utc)
     target = as_of.date()
     forecasts = pd.DataFrame(
@@ -78,11 +78,53 @@ def test_all_old_models_keep_diagnostics_visible_but_mark_forecast_stale():
         target=target,
         as_of=as_of,
     )
+    assert result is None
+
+
+def test_one_fresh_model_is_diagnostic_only_and_stale_model_is_never_used():
+    as_of = datetime(2026, 7, 30, 8, tzinfo=timezone.utc)
+    target = as_of.date()
+    forecasts = pd.DataFrame(
+        [
+            {
+                "airport": "EHAM",
+                "model": "ecmwf",
+                "run_at": as_of - timedelta(minutes=20),
+                "fetched_at": as_of - timedelta(minutes=20),
+                "target_date": target,
+                "max_temp_c": 28.0,
+                "source": "open-meteo",
+                "horizon": "D0-morning",
+            },
+            {
+                "airport": "EHAM",
+                "model": "meteoblue",
+                "run_at": as_of - timedelta(hours=40),
+                "fetched_at": as_of - timedelta(hours=40),
+                "target_date": target,
+                "max_temp_c": 35.0,
+                "source": "meteoblue",
+                "horizon": "D0-morning",
+            },
+        ]
+    )
+    result = build_live_nowcast(
+        forecasts=forecasts,
+        actuals=pd.DataFrame(),
+        observations=pd.DataFrame(),
+        hourly=pd.DataFrame(),
+        markets=pd.DataFrame(),
+        timezone_name="Europe/Amsterdam",
+        target=target,
+        as_of=as_of,
+    )
     assert result is not None
     assert result.forecast_data_stale
-    assert result.fresh_model_count == 0
-    assert result.forecast_confidence <= 40
-    assert set(result.current.model) == {"ecmwf", "icon_eu"}
+    assert result.fresh_model_count == 1
+    assert result.raw_model_mean == 28.0
+    assert set(result.current.model) == {"ecmwf"}
+    stale = result.model_freshness[result.model_freshness.model == "meteoblue"].iloc[0]
+    assert not bool(stale.used_in_forecast)
 
 
 def test_shared_nowcast_locks_completed_evening_peak():

@@ -16,6 +16,7 @@ collection_report_path="data/collection"
 database_maintenance_threshold_bytes=$((35 * 1024 * 1024))
 database_size_limit_bytes=$((48 * 1024 * 1024))
 fast_database_job="${WEATHERMAN_FAST_DATABASE_JOB:-0}"
+maintenance_ran=0
 
 run_job() {
   local segment=()
@@ -55,12 +56,14 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
     env PYTHONPATH=src python -m weatherman.cli audit-coverage --fast
   else
     env PYTHONPATH=src python -m weatherman.cli maintain-database --retention-days 3
+    maintenance_ran=1
     env PYTHONPATH=src python -m weatherman.cli audit-coverage
   fi
   database_size_bytes=$(wc -c < "$database_path")
   if [[ "$fast_database_job" == "1" ]] && ((database_size_bytes >= database_maintenance_threshold_bytes)); then
     echo "Fast collector reached the 35-MiB maintenance threshold; running verified retention now."
     env PYTHONPATH=src python -m weatherman.cli maintain-database --retention-days 3
+    maintenance_ran=1
     env PYTHONPATH=src python -m weatherman.cli audit-coverage
     database_size_bytes=$(wc -c < "$database_path")
   fi
@@ -75,8 +78,17 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
     exit 1
   fi
   git add -f "$database_path"
-  if [[ "$fast_database_job" != "1" ]] && [[ -d "$history_archive_path" ]]; then
+  # The compact database and every archive partition created by the same
+  # maintenance pass are one atomic persistence unit.  Previously the fast path
+  # pruned SQLite at 35 MiB but did not stage its new archives; git restore then
+  # discarded them and created a permanent archive/live gap.
+  if [[ "$maintenance_ran" == "1" ]] && [[ -d "$history_archive_path" ]]; then
     git add -f "$history_archive_path"
+    if ! git diff --quiet -- "$history_archive_path"; then
+      echo "History archive still has unstaged changes after verified maintenance." >&2
+      echo "Refusing to persist a compact database without its matching archive." >&2
+      exit 1
+    fi
   fi
   if [[ -d "$collection_report_path" ]]; then
     git add -f "$collection_report_path"

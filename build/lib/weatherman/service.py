@@ -22,6 +22,7 @@ from .catalog import market_city_index, research_airports, trading_airports
 from .db import (
     AirportMarketUniverse,
     BasketSnapshot,
+    CollectionCoverage,
     DailyActual,
     Forecast,
     ForecastSnapshot,
@@ -300,6 +301,90 @@ def _source_refresh_due(
     return age >= timedelta(minutes=max(1, maximum_age_minutes))
 
 
+def _meteoblue_poll_policy(
+    session,
+    *,
+    airport_code: str,
+    airport: dict,
+    as_of: datetime,
+) -> tuple[bool, str]:
+    """Enforce a persistent free-tier budget before any Meteoblue request.
+
+    Forecast rows account for successful calls and collection coverage accounts for
+    failed calls.  This prevents a quota error from being retried by every ten-minute
+    collector invocation.  The policy is intentionally per airport/local day because
+    each coordinate requires its own Meteoblue request.
+    """
+    if not settings.meteoblue_api_key or not settings.meteoblue_url_template:
+        return False, "not-configured"
+    if session.info.get("meteoblue_rate_limited"):
+        return False, "rate-limited-cooldown"
+
+    local_as_of = _as_utc(as_of).astimezone(ZoneInfo(airport["timezone"]))
+    preferred_hour = max(0, min(23, settings.meteoblue_preferred_local_hour))
+    local_start = local_as_of.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_utc = local_start.astimezone(timezone.utc)
+    end_utc = (local_start + timedelta(days=1)).astimezone(timezone.utc)
+
+    successful_today = session.scalar(
+        select(func.count(Forecast.id)).where(
+            Forecast.airport == airport_code,
+            Forecast.source == "meteoblue",
+            Forecast.fetched_at >= start_utc,
+            Forecast.fetched_at < end_utc,
+        )
+    )
+    if int(successful_today or 0) > 0:
+        return False, "daily-budget-reused"
+
+    cooldown_start = _as_utc(as_of) - timedelta(
+        hours=max(1, settings.meteoblue_rate_limit_cooldown_hours)
+    )
+    recent_rate_limits = list(
+        session.scalars(
+            select(CollectionCoverage)
+            .where(
+                CollectionCoverage.data_type == "meteoblue",
+                CollectionCoverage.scheduled_at >= cooldown_start,
+            )
+            .order_by(CollectionCoverage.scheduled_at.desc())
+        )
+    )
+    rate_limit_markers = ("429", "rate limit", "quota", "credit")
+    for attempt in recent_rate_limits:
+        scheduled = _as_utc(attempt.scheduled_at)
+        reason = str(attempt.reason or "").casefold()
+        if scheduled >= cooldown_start and any(marker in reason for marker in rate_limit_markers):
+            return False, "rate-limited-cooldown"
+
+    recent_attempts = list(
+        session.scalars(
+            select(CollectionCoverage).where(
+                CollectionCoverage.airport == airport_code,
+                CollectionCoverage.data_type == "meteoblue",
+                CollectionCoverage.scheduled_at >= start_utc,
+            )
+        )
+    )
+
+    attempts_today = sum(
+        1
+        for attempt in recent_attempts
+        if start_utc <= _as_utc(attempt.scheduled_at) < end_utc
+        and str(attempt.status) not in {
+            "awaiting-daily-window",
+            "budget-skipped",
+            "daily-budget-reused",
+            "rate-limited-cooldown",
+        }
+    )
+    if attempts_today >= max(0, settings.meteoblue_daily_call_limit):
+        return False, "budget-skipped"
+    if local_as_of.hour < preferred_hour:
+        return False, "awaiting-daily-window"
+    return True, "requested"
+
+
 def _store_current_provider_forecasts(
     session,
     *,
@@ -359,13 +444,11 @@ def _store_current_provider_forecasts(
                 },
             )
 
-    meteoblue_due = _source_refresh_due(
+    meteoblue_due, meteoblue_policy = _meteoblue_poll_policy(
         session,
         airport_code=airport_code,
-        source="meteoblue",
-        target=local_target,
+        airport=airport,
         as_of=as_of,
-        maximum_age_minutes=settings.live_meteoblue_refresh_minutes,
     )
     if meteoblue_due:
         counts["meteoblue_polls"] = 1
@@ -380,6 +463,14 @@ def _store_current_provider_forecasts(
 
     task_results: dict[str, list[dict]] = {}
     task_metrics: dict[str, dict[str, object]] = {}
+    if settings.meteoblue_api_key and not meteoblue_due:
+        task_metrics["meteoblue/daily"] = {
+            "status": "skipped",
+            "duration_seconds": 0.0,
+            "rows_read": 0,
+            "attempts": 0,
+            "reason": meteoblue_policy,
+        }
 
     def fetch(
         function: Callable, args: tuple, kwargs: dict
@@ -417,6 +508,11 @@ def _store_current_provider_forecasts(
                 }
                 if error:
                     print(f"WARN {airport_code}/{label}: {error}")
+                    if label == "meteoblue/daily" and any(
+                        marker in error.casefold()
+                        for marker in ("429", "rate limit", "quota", "credit")
+                    ):
+                        session.info["meteoblue_rate_limited"] = True
 
     for label, rows in task_results.items():
         if label.startswith("open-meteo/hourly/"):
@@ -484,12 +580,18 @@ def _store_current_provider_forecasts(
         failures = [
             metric for metric in provider_metrics.values() if metric["status"] != "success"
         ]
+        skipped = [
+            metric for metric in provider_metrics.values() if metric["status"] == "skipped"
+        ]
+        skipped_reason = str(skipped[0].get("reason")) if skipped else None
         counts["provider_coverage"].append(
             {
                 "airport": airport_code,
                 "data_type": provider,
                 "status": (
-                    "source_or_parser_failed"
+                    skipped_reason
+                    if len(skipped) == len(provider_metrics)
+                    else "source_or_parser_failed"
                     if len(failures) == len(provider_metrics)
                     else "partial_provider_failure"
                     if failures
@@ -510,10 +612,15 @@ def _store_current_provider_forecasts(
                     float(metric["duration_seconds"])
                     for metric in provider_metrics.values()
                 ),
-                "attempts": len(provider_metrics),
+                "attempts": sum(
+                    int(metric.get("attempts", 0))
+                    for metric in provider_metrics.values()
+                ),
                 "metrics": provider_metrics,
                 "reason": "; ".join(
-                    str(metric["reason"]) for metric in failures if metric.get("reason")
+                    str(metric["reason"])
+                    for metric in failures
+                    if metric.get("reason")
                 )
                 or None,
             }
@@ -602,6 +709,12 @@ def _checkpoint_provenance(
         str(model) for model in (expected_models or latest_by_model) if str(model)
     }
     selected = [item for item in selected_all if str(item[1].model) in expected]
+    fresh_selected = [
+        item
+        for item in selected
+        if max(0.0, (cutoff - item[0]).total_seconds() / 60)
+        <= settings.maximum_live_model_age_minutes
+    ]
     available_models = {str(item[1].model) for item in selected_all}
     relevant_models = {str(item[1].model) for item in selected}
     extra_models = available_models - expected
@@ -708,6 +821,7 @@ def _checkpoint_provenance(
         "expected_model_count": len(expected),
         "source_model_count": source_models,
         "available_model_count": len(available_models),
+        "fresh_model_count": len(fresh_selected),
         "source_coverage_ratio": coverage_ratio,
         "expected_models_json": json.dumps(sorted(expected), separators=(",", ":")),
         "available_models_json": json.dumps(
@@ -1026,6 +1140,14 @@ def _live_snapshot_provenance(nowcast, airport: dict) -> dict[str, object]:
     available = set(frame.model.dropna().astype(str))
     used = set(nowcast.current.model.dropna().astype(str))
     relevant_available = available & expected
+    if "is_fresh" in frame:
+        fresh_mask = frame["is_fresh"].astype(bool)
+    else:
+        fresh_mask = (
+            pd.to_numeric(frame.get("age_minutes"), errors="coerce")
+            <= settings.maximum_live_model_age_minutes
+        )
+    fresh = set(frame.loc[fresh_mask, "model"].dropna().astype(str)) & expected
     extra = available - expected
     used_rows = frame[frame.model.astype(str).isin(used)].copy()
     ages = sorted(
@@ -1113,6 +1235,7 @@ def _live_snapshot_provenance(nowcast, airport: dict) -> dict[str, object]:
         "expected_model_count": len(expected),
         "source_model_count": len(relevant_available),
         "available_model_count": len(available),
+        "fresh_model_count": len(fresh),
         "used_model_count": len(used),
         "source_coverage_ratio": coverage,
         "expected_models_json": json.dumps(sorted(expected), separators=(",", ":")),
@@ -1305,6 +1428,7 @@ def _record_forecast_snapshot(
         "expected_model_count": None,
         "source_model_count": None,
         "available_model_count": None,
+        "fresh_model_count": None,
         "used_model_count": None,
         "source_coverage_ratio": None,
         "expected_models_json": "[]",
@@ -2386,13 +2510,11 @@ def collect_live_trading_refresh(
             as_of=refresh_time,
             maximum_age_minutes=settings.live_open_meteo_refresh_minutes,
         )
-        meteoblue_due = bool(settings.meteoblue_api_key) and _source_refresh_due(
+        meteoblue_due, meteoblue_policy = _meteoblue_poll_policy(
             session,
             airport_code=airport_code,
-            source="meteoblue",
-            target=target,
+            airport=airport,
             as_of=refresh_time,
-            maximum_age_minutes=settings.live_meteoblue_refresh_minutes,
         )
 
     tasks: dict[str, tuple[Callable, tuple, dict]] = {}
@@ -2482,6 +2604,7 @@ def collect_live_trading_refresh(
         "models_reused": (0 if open_meteo_due else len(models))
         + int(bool(settings.meteoblue_api_key) and not meteoblue_due),
         "models_refreshed": 0,
+        "meteoblue_status": meteoblue_policy,
         "errors": errors,
     }
     with Session() as session:
@@ -2559,6 +2682,31 @@ def collect_live_trading_refresh(
             },
             f"{airport_code}/dashboard Polymarket/{target}",
         )
+        if meteoblue_due:
+            meteoblue_error = errors.get("forecast/meteoblue")
+            meteoblue_rows = results.get("forecast/meteoblue", [])
+            session.add(
+                CollectionCoverage(
+                    run_id=(
+                        f"streamlit-{airport_code}-"
+                        f"{refresh_time.strftime('%Y%m%dT%H%M%S%f')}"
+                    ),
+                    airport=airport_code,
+                    data_type="meteoblue",
+                    status=(
+                        "source_or_parser_failed"
+                        if meteoblue_error
+                        else "stored-local-refresh"
+                    ),
+                    scheduled_at=refresh_time,
+                    latest_source_at=refresh_time if meteoblue_rows else None,
+                    rows_read=len(meteoblue_rows),
+                    rows_written=len(meteoblue_rows),
+                    source_age_minutes=0.0 if meteoblue_rows else None,
+                    attempts=1,
+                    reason=meteoblue_error,
+                )
+            )
         session.commit()
     target_models = {
         str(row["model"])

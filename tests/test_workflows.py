@@ -60,7 +60,17 @@ def test_full_archive_maintenance_is_daily_not_part_of_every_fast_poll() -> None
     assert "scripts/run_database_job.sh" in workflow
     assert "fast_database_job" in helper
     assert "audit-coverage --fast" in helper
-    assert 'if [[ "$fast_database_job" != "1" ]]' in helper
+    assert 'if [[ "$maintenance_ran" == "1" ]]' in helper
+    assert 'git diff --quiet -- "$history_archive_path"' in helper
+
+
+def test_fast_threshold_maintenance_persists_archive_with_compact_database() -> None:
+    helper = (ROOT / "scripts" / "run_database_job.sh").read_text()
+    threshold = helper.index("Fast collector reached the 35-MiB maintenance threshold")
+    maintenance_flag = helper.index("maintenance_ran=1", threshold)
+    archive_stage = helper.index('git add -f "$history_archive_path"', maintenance_flag)
+    database_commit = helper.index("git commit -m", archive_stage)
+    assert threshold < maintenance_flag < archive_stage < database_commit
 
 
 def test_research_schedule_does_not_compete_with_ten_minute_database_writer() -> None:

@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 from runtime_bootstrap import discard_stale_weatherman_modules
 
-discard_stale_weatherman_modules("10.7.9.1")
+discard_stale_weatherman_modules("10.7.10")
 
 import pandas as pd
 import plotly.express as px
@@ -230,6 +230,17 @@ def render_all_airports_overview(catalog: dict[str, dict], target_date) -> None:
             f"{int(result['successful_airports'])}/{len(catalog)} airports completed in "
             f"{float(result['elapsed_seconds']):.1f}s"
         )
+        meteoblue_states = [
+            str(item.get("meteoblue_status") or "not-configured")
+            for item in dict(result.get("airports") or {}).values()
+        ]
+        if meteoblue_states:
+            state_counts = {
+                state: meteoblue_states.count(state) for state in sorted(set(meteoblue_states))
+            }
+            message += " · Meteoblue " + ", ".join(
+                f"{state} {count}" for state, count in state_counts.items()
+            )
         if failed:
             st.warning(message + " · source errors: " + ", ".join(failed))
         else:
@@ -539,13 +550,15 @@ if st.sidebar.button("Refresh live trading data", type="primary"):
         requested_models = int(result["models_requested"])
         refreshed_models = int(result["models_refreshed"])
         reused_models = int(result.get("models_reused", 0))
+        meteoblue_status = str(result.get("meteoblue_status") or "not-configured")
         saved = (
             f"Refreshed {refreshed_models}/{requested_models} model(s), "
             f"reused {reused_models} still-fresh model(s), "
             f"{result['observations']} METAR report(s), "
             f"{result['taf_reports']} TAF revision(s) and "
             f"{result['market_prices']} Polymarket bucket(s) in "
-            f"{result['elapsed_seconds']:.1f}s."
+            f"{result['elapsed_seconds']:.1f}s. "
+            f"Meteoblue: {meteoblue_status}."
         )
         errors = dict(result.get("errors") or {})
         error_note = (
@@ -732,9 +745,10 @@ with tab_live:
     )
     if live_nowcast is None:
         st.info(
-            "No current forecast is stored for this date. Forecasts are persisted by "
-            "the controlled GitHub collector. Refresh live trading data requests the "
-            "current models, METAR, TAF and Polymarket prices for this airport and date."
+            "No eligible fresh forecast is available for this date. Stored stale models "
+            "are excluded from the Champion. Refresh live trading data requests due "
+            "Open-Meteo models plus METAR, TAF and Polymarket; Meteoblue follows its "
+            "separate free-tier budget."
         )
     else:
         current = live_nowcast.current
@@ -1248,9 +1262,10 @@ with tab_live:
             st.caption(
                 "Workflow 5 now checks current model data every ten minutes from 06:00 airport "
                 "local time through the end of the critical window. Open-Meteo providers are "
-                "refetched after 30 minutes and meteoblue after 60 minutes. A stale provider is "
-                "omitted; with fewer than two fresh models all trade signals are blocked. The "
-                "sidebar button still performs an immediate full fetch for this airport."
+                "refetched after 30 minutes. Meteoblue is requested at most once per airport "
+                "and local day after 09:00 to protect the free-tier budget. A stale provider is "
+                "always excluded; with fewer than two fresh models all trade signals are blocked. "
+                "The sidebar button refreshes every other due live source immediately."
             )
             chart = current[["model", "max_temp_c", "corrected_max"]].melt(
                 id_vars="model", var_name="forecast", value_name="temperature_c"

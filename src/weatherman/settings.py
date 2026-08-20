@@ -27,7 +27,16 @@ class Settings:
         os.getenv("LIVE_OPEN_METEO_REFRESH_MINUTES", "30")
     )
     live_meteoblue_refresh_minutes: int = int(
-        os.getenv("LIVE_METEOBLUE_REFRESH_MINUTES", "60")
+        os.getenv("LIVE_METEOBLUE_REFRESH_MINUTES", "1440")
+    )
+    meteoblue_daily_call_limit: int = int(
+        os.getenv("METEOBLUE_DAILY_CALL_LIMIT", "1")
+    )
+    meteoblue_preferred_local_hour: int = int(
+        os.getenv("METEOBLUE_PREFERRED_LOCAL_HOUR", "9")
+    )
+    meteoblue_rate_limit_cooldown_hours: int = int(
+        os.getenv("METEOBLUE_RATE_LIMIT_COOLDOWN_HOURS", "24")
     )
     maximum_live_model_age_minutes: int = int(
         os.getenv("MAXIMUM_LIVE_MODEL_AGE_MINUTES", "90")
