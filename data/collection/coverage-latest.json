@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 5,
+  "active_warning_count": 4,
   "archive_partitions": 662,
   "archive_rows": 516924,
   "archive_status": "verified",
@@ -16,10 +16,10 @@
     "runs": 35,
     "trigger_coverage": 0.24475524475524477
   },
-  "checked_at": "2026-08-20T19:38:29.751599+00:00",
+  "checked_at": "2026-08-20T20:03:40.883493+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 40108032,
-  "warning_count": 6,
+  "database_bytes": 40116224,
+  "warning_count": 5,
   "warnings": [
     {
       "active": false,
@@ -29,41 +29,32 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
     {
       "active": true,
-      "age_minutes": 284.8,
+      "age_minutes": 310.0,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 285 minutes old.",
+      "message": "EHAM: forecast is 310 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 284.7,
+      "age_minutes": 309.9,
       "airport": "EPWA",
       "data_type": "forecast",
-      "message": "EPWA: forecast is 285 minutes old.",
+      "message": "EPWA: forecast is 310 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 332.6,
-      "airport": "LTFM",
-      "data_type": "forecast",
-      "message": "LTFM: forecast is 333 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "database_bytes": 40108032,
-      "message": "Active SQLite is 38.2 MiB.",
+      "database_bytes": 40116224,
+      "message": "Active SQLite is 38.3 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
