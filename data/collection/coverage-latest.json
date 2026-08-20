@@ -5,20 +5,20 @@
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 142,
+    "expected_slots": 141,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 30.562138,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 315.0,
-    "missing_slots": 108,
+    "missing_slots": 107,
     "observed_slots": 34,
     "p95_execution_seconds": 126.60783114999997,
     "runs": 34,
-    "trigger_coverage": 0.23943661971830985
+    "trigger_coverage": 0.24113475177304963
   },
-  "checked_at": "2026-08-20T22:01:19.955010+00:00",
+  "checked_at": "2026-08-20T22:18:00.680572+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 40161280,
+  "database_bytes": 40169472,
   "warning_count": 4,
   "warnings": [
     {
@@ -41,7 +41,7 @@
     },
     {
       "active": true,
-      "database_bytes": 40161280,
+      "database_bytes": 40169472,
       "message": "Active SQLite is 38.3 MiB.",
       "severity": "error",
       "type": "database_growth"
