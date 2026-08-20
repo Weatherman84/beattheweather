@@ -9,16 +9,16 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 26.697731,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 315.5,
+    "median_trigger_delay_seconds": 309.5,
     "missing_slots": 107,
     "observed_slots": 36,
     "p95_execution_seconds": 122.446504,
     "runs": 36,
     "trigger_coverage": 0.2517482517482518
   },
-  "checked_at": "2026-08-20T14:55:08.022928+00:00",
+  "checked_at": "2026-08-20T15:34:46.715013+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 38965248,
+  "database_bytes": 39243776,
   "warning_count": 4,
   "warnings": [
     {
@@ -35,17 +35,17 @@
     },
     {
       "active": true,
-      "age_minutes": 232.7,
+      "age_minutes": 272.4,
       "airport": "EDDM",
       "data_type": "forecast",
-      "message": "EDDM: forecast is 233 minutes old.",
+      "message": "EDDM: forecast is 272 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "database_bytes": 38965248,
-      "message": "Active SQLite is 37.2 MiB.",
+      "database_bytes": 39243776,
+      "message": "Active SQLite is 37.4 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
