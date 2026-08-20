@@ -7,18 +7,18 @@
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
     "expected_slots": 143,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 26.697731,
+    "median_execution_seconds": 27.5799315,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 309.5,
+    "median_trigger_delay_seconds": 315.5,
     "missing_slots": 107,
     "observed_slots": 36,
     "p95_execution_seconds": 122.446504,
     "runs": 36,
     "trigger_coverage": 0.2517482517482518
   },
-  "checked_at": "2026-08-20T15:34:46.715013+00:00",
+  "checked_at": "2026-08-20T16:05:19.523457+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 39243776,
+  "database_bytes": 39526400,
   "warning_count": 4,
   "warnings": [
     {
@@ -29,23 +29,23 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
     {
       "active": true,
-      "age_minutes": 272.4,
+      "age_minutes": 302.9,
       "airport": "EDDM",
       "data_type": "forecast",
-      "message": "EDDM: forecast is 272 minutes old.",
+      "message": "EDDM: forecast is 303 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "database_bytes": 39243776,
-      "message": "Active SQLite is 37.4 MiB.",
+      "database_bytes": 39526400,
+      "message": "Active SQLite is 37.7 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
