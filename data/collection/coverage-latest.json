@@ -1,25 +1,25 @@
 {
   "active_warning_count": 3,
-  "archive_partitions": 662,
-  "archive_rows": 516924,
+  "archive_partitions": 688,
+  "archive_rows": 579736,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 144,
+    "expected_slots": 138,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 29.779744,
+    "median_execution_seconds": 31.344532,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 319.0,
-    "missing_slots": 109,
-    "observed_slots": 35,
-    "p95_execution_seconds": 125.89799069999997,
-    "runs": 35,
-    "trigger_coverage": 0.24305555555555555
+    "missing_slots": 105,
+    "observed_slots": 33,
+    "p95_execution_seconds": 127.31767159999998,
+    "runs": 33,
+    "trigger_coverage": 0.2391304347826087
   },
-  "checked_at": "2026-08-20T21:13:48.090326+00:00",
-  "collector_version": "10.7.9.1",
-  "database_bytes": 40144896,
-  "warning_count": 4,
+  "checked_at": "2026-08-20T21:52:36.598039+00:00",
+  "collector_version": "10.7.10",
+  "database_bytes": 40148992,
+  "warning_count": 5,
   "warnings": [
     {
       "active": false,
@@ -29,19 +29,25 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
     {
       "active": true,
+      "message": "No collector run has been stored for 46 minutes.",
+      "severity": "error",
+      "type": "collector_missing_recent"
+    },
+    {
+      "active": false,
       "message": "Run github-32415402224-1 started 15 minutes late.",
       "severity": "warning",
       "type": "collector_late"
     },
     {
       "active": true,
-      "database_bytes": 40144896,
+      "database_bytes": 40148992,
       "message": "Active SQLite is 38.3 MiB.",
       "severity": "error",
       "type": "database_growth"
