@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 2,
-  "archive_partitions": 662,
-  "archive_rows": 516924,
+  "active_warning_count": 1,
+  "archive_partitions": 673,
+  "archive_rows": 546500,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 135,
+    "expected_slots": 139,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 30.406593,
+    "median_execution_seconds": 30.333121,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 291.0,
-    "missing_slots": 99,
-    "observed_slots": 36,
-    "p95_execution_seconds": 133.73338075,
-    "runs": 36,
-    "trigger_coverage": 0.26666666666666666
+    "median_trigger_delay_seconds": 292.0,
+    "missing_slots": 102,
+    "observed_slots": 37,
+    "p95_execution_seconds": 131.96053899999984,
+    "runs": 37,
+    "trigger_coverage": 0.26618705035971224
   },
-  "checked_at": "2026-08-19T23:47:51.284450+00:00",
+  "checked_at": "2026-08-20T00:27:12.017754+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 38760448,
-  "warning_count": 3,
+  "database_bytes": 29323264,
+  "warning_count": 2,
   "warnings": [
     {
       "active": false,
@@ -29,16 +29,9 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
-    },
-    {
-      "active": true,
-      "database_bytes": 38760448,
-      "message": "Active SQLite is 37.0 MiB.",
-      "severity": "error",
-      "type": "database_growth"
     }
   ]
 }
