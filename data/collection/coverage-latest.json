@@ -5,20 +5,20 @@
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 142,
+    "expected_slots": 143,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 29.779744,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 319.0,
-    "missing_slots": 107,
+    "median_trigger_delay_seconds": 327.0,
+    "missing_slots": 108,
     "observed_slots": 35,
     "p95_execution_seconds": 125.89799069999997,
     "runs": 35,
-    "trigger_coverage": 0.24647887323943662
+    "trigger_coverage": 0.24475524475524477
   },
-  "checked_at": "2026-08-20T18:59:27.667313+00:00",
+  "checked_at": "2026-08-20T19:38:29.751599+00:00",
   "collector_version": "10.7.9.1",
-  "database_bytes": 40099840,
+  "database_bytes": 40108032,
   "warning_count": 6,
   "warnings": [
     {
@@ -35,34 +35,34 @@
     },
     {
       "active": true,
-      "age_minutes": 245.7,
+      "age_minutes": 284.8,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 246 minutes old.",
+      "message": "EHAM: forecast is 285 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 245.7,
+      "age_minutes": 284.7,
       "airport": "EPWA",
       "data_type": "forecast",
-      "message": "EPWA: forecast is 246 minutes old.",
+      "message": "EPWA: forecast is 285 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "age_minutes": 293.5,
+      "age_minutes": 332.6,
       "airport": "LTFM",
       "data_type": "forecast",
-      "message": "LTFM: forecast is 294 minutes old.",
+      "message": "LTFM: forecast is 333 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
     {
       "active": true,
-      "database_bytes": 40099840,
+      "database_bytes": 40108032,
       "message": "Active SQLite is 38.2 MiB.",
       "severity": "error",
       "type": "database_growth"
