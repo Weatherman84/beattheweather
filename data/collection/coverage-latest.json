@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 3,
+  "active_warning_count": 4,
   "archive_partitions": 699,
   "archive_rows": 612878,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 142,
+    "expected_slots": 143,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 32.679230000000004,
+    "median_execution_seconds": 34.417696500000005,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 323.0,
-    "missing_slots": 108,
+    "median_trigger_delay_seconds": 329.5,
+    "missing_slots": 109,
     "observed_slots": 34,
     "p95_execution_seconds": 175.1856542,
     "runs": 34,
-    "trigger_coverage": 0.23943661971830985
+    "trigger_coverage": 0.23776223776223776
   },
-  "checked_at": "2026-08-21T04:26:18.668987+00:00",
+  "checked_at": "2026-08-21T05:05:13.113389+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 30490624,
-  "warning_count": 5,
+  "database_bytes": 31133696,
+  "warning_count": 6,
   "warnings": [
     {
       "active": false,
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 60 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -38,6 +38,15 @@
       "message": "Run github-32415402224-1 started 15 minutes late.",
       "severity": "warning",
       "type": "collector_late"
+    },
+    {
+      "active": true,
+      "airport": "EPWA",
+      "checkpoint": "D0 @06",
+      "message": "EPWA: D0 @06 is missing for 2026-08-21.",
+      "severity": "error",
+      "target_date": "2026-08-21",
+      "type": "checkpoint_missing"
     },
     {
       "active": true,
