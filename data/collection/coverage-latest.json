@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 4,
+  "active_warning_count": 5,
   "archive_partitions": 699,
   "archive_rows": 612878,
   "archive_status": "deferred_to_daily_verification",
@@ -16,10 +16,10 @@
     "runs": 34,
     "trigger_coverage": 0.23776223776223776
   },
-  "checked_at": "2026-08-21T05:05:13.113389+00:00",
+  "checked_at": "2026-08-21T05:47:36.001053+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 31133696,
-  "warning_count": 6,
+  "database_bytes": 31662080,
+  "warning_count": 7,
   "warnings": [
     {
       "active": false,
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -41,12 +41,12 @@
     },
     {
       "active": true,
-      "airport": "EPWA",
-      "checkpoint": "D0 @06",
-      "message": "EPWA: D0 @06 is missing for 2026-08-21.",
-      "severity": "error",
-      "target_date": "2026-08-21",
-      "type": "checkpoint_missing"
+      "age_minutes": 190.2,
+      "airport": "LTAC",
+      "data_type": "market",
+      "message": "LTAC: market is 190 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
@@ -56,6 +56,15 @@
       "severity": "error",
       "target_date": "2026-08-21",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 190.1,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 190 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
