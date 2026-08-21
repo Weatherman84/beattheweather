@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39030784,
-    "generated_at": "2026-08-21T20:23:21.541920+00:00",
+    "database_bytes": 39047168,
+    "generated_at": "2026-08-21T20:56:07.629358+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -551,17 +551,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 3788800,
-        "data_bytes": 2834432,
+        "bytes": 3792896,
+        "data_bytes": 2838528,
         "index_bytes": 954368,
-        "rows": 5916,
+        "rows": 5928,
         "table": "collection_coverage"
       },
       {
-        "bytes": 4997120,
-        "data_bytes": 4935680,
+        "bytes": 5001216,
+        "data_bytes": 4939776,
         "index_bytes": 61440,
-        "rows": 336,
+        "rows": 337,
         "table": "collection_runs"
       },
       {
@@ -614,10 +614,10 @@
         "table": "market_snapshots"
       },
       {
-        "bytes": 229376,
-        "data_bytes": 131072,
+        "bytes": 233472,
+        "data_bytes": 135168,
         "index_bytes": 98304,
-        "rows": 818,
+        "rows": 825,
         "table": "observations"
       },
       {
@@ -649,10 +649,10 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 335872,
-        "data_bytes": 270336,
+        "bytes": 339968,
+        "data_bytes": 274432,
         "index_bytes": 65536,
-        "rows": 86,
+        "rows": 87,
         "table": "taf_reports"
       }
     ]
@@ -663,8 +663,8 @@
   "archive_total_rows": 612878,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39067648,
-    "generated_at": "2026-08-21T20:22:39.716194+00:00",
+    "database_bytes": 39084032,
+    "generated_at": "2026-08-21T20:55:26.050423+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -1213,17 +1213,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 3821568,
-        "data_bytes": 2834432,
+        "bytes": 3825664,
+        "data_bytes": 2838528,
         "index_bytes": 987136,
-        "rows": 5916,
+        "rows": 5928,
         "table": "collection_coverage"
       },
       {
-        "bytes": 4997120,
-        "data_bytes": 4935680,
+        "bytes": 5001216,
+        "data_bytes": 4939776,
         "index_bytes": 61440,
-        "rows": 336,
+        "rows": 337,
         "table": "collection_runs"
       },
       {
@@ -1276,10 +1276,10 @@
         "table": "market_snapshots"
       },
       {
-        "bytes": 233472,
-        "data_bytes": 131072,
+        "bytes": 237568,
+        "data_bytes": 135168,
         "index_bytes": 102400,
-        "rows": 818,
+        "rows": 825,
         "table": "observations"
       },
       {
@@ -1311,16 +1311,16 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 335872,
-        "data_bytes": 270336,
+        "bytes": 339968,
+        "data_bytes": 274432,
         "index_bytes": 65536,
-        "rows": 86,
+        "rows": 87,
         "table": "taf_reports"
       }
     ]
   },
-  "database_bytes": 39030784,
-  "database_bytes_before": 39067648,
+  "database_bytes": 39047168,
+  "database_bytes_before": 39084032,
   "database_bytes_saved": 36864,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
