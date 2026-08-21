@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 14,
+  "active_warning_count": 7,
   "archive_partitions": 699,
   "archive_rows": 612878,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 141,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 41.089946,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 311.0,
-    "missing_slots": 108,
+    "median_trigger_delay_seconds": 310.0,
+    "missing_slots": 106,
     "observed_slots": 35,
     "p95_execution_seconds": 194.09433089999987,
     "runs": 35,
-    "trigger_coverage": 0.24475524475524477
+    "trigger_coverage": 0.24822695035460993
   },
-  "checked_at": "2026-08-21T20:56:08.446223+00:00",
+  "checked_at": "2026-08-21T21:22:16.847442+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 39047168,
-  "warning_count": 15,
+  "database_bytes": 39059456,
+  "warning_count": 8,
   "warnings": [
     {
       "active": false,
@@ -35,39 +35,12 @@
     },
     {
       "active": true,
-      "age_minutes": 198.8,
-      "airport": "LEMD",
-      "data_type": "market",
-      "message": "LEMD: market is 199 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
       "airport": "LEMD",
       "checkpoint": "D-1 @20",
       "message": "LEMD: D-1 @20 is missing for 2026-08-22.",
       "severity": "error",
       "target_date": "2026-08-22",
       "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "age_minutes": 351.7,
-      "airport": "EHAM",
-      "data_type": "forecast",
-      "message": "EHAM: forecast is 352 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
-      "age_minutes": 198.1,
-      "airport": "EHAM",
-      "data_type": "market",
-      "message": "EHAM: market is 198 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     },
     {
       "active": true,
@@ -80,38 +53,11 @@
     },
     {
       "active": true,
-      "age_minutes": 197.3,
-      "airport": "EPWA",
-      "data_type": "market",
-      "message": "EPWA: market is 197 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
       "airport": "EPWA",
       "checkpoint": "D-1 @20",
       "message": "EPWA: D-1 @20 is missing for 2026-08-22.",
       "severity": "error",
       "target_date": "2026-08-22",
-      "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "airport": "LTAC",
-      "checkpoint": "D0 @06",
-      "message": "LTAC: D0 @06 is missing for 2026-08-21.",
-      "severity": "error",
-      "target_date": "2026-08-21",
-      "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "airport": "LTFM",
-      "checkpoint": "D0 @06",
-      "message": "LTFM: D0 @06 is missing for 2026-08-21.",
-      "severity": "error",
-      "target_date": "2026-08-21",
       "type": "checkpoint_missing"
     },
     {
@@ -125,15 +71,6 @@
     },
     {
       "active": true,
-      "age_minutes": 195.7,
-      "airport": "EDDM",
-      "data_type": "market",
-      "message": "EDDM: market is 196 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
       "airport": "EDDM",
       "checkpoint": "D-1 @20",
       "message": "EDDM: D-1 @20 is missing for 2026-08-22.",
@@ -143,7 +80,7 @@
     },
     {
       "active": true,
-      "database_bytes": 39047168,
+      "database_bytes": 39059456,
       "message": "Active SQLite is 37.2 MiB.",
       "severity": "error",
       "type": "database_growth"
