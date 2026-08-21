@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39059456,
-    "generated_at": "2026-08-21T21:22:16.034294+00:00",
+    "database_bytes": 39067648,
+    "generated_at": "2026-08-21T21:50:08.202696+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -551,17 +551,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 3801088,
-        "data_bytes": 2838528,
+        "bytes": 3805184,
+        "data_bytes": 2842624,
         "index_bytes": 962560,
-        "rows": 5940,
+        "rows": 5952,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5005312,
-        "data_bytes": 4943872,
+        "bytes": 5009408,
+        "data_bytes": 4947968,
         "index_bytes": 61440,
-        "rows": 338,
+        "rows": 339,
         "table": "collection_runs"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 233472,
         "data_bytes": 135168,
         "index_bytes": 98304,
-        "rows": 830,
+        "rows": 836,
         "table": "observations"
       },
       {
@@ -663,8 +663,8 @@
   "archive_total_rows": 612878,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39092224,
-    "generated_at": "2026-08-21T21:21:32.342336+00:00",
+    "database_bytes": 39104512,
+    "generated_at": "2026-08-21T21:49:34.314783+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -757,7 +757,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 172032,
+        "bytes": 176128,
         "index": "ix_collection_coverage_status",
         "table": "collection_coverage"
       },
@@ -1213,17 +1213,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 3829760,
-        "data_bytes": 2838528,
-        "index_bytes": 991232,
-        "rows": 5940,
+        "bytes": 3837952,
+        "data_bytes": 2842624,
+        "index_bytes": 995328,
+        "rows": 5952,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5005312,
-        "data_bytes": 4943872,
+        "bytes": 5009408,
+        "data_bytes": 4947968,
         "index_bytes": 61440,
-        "rows": 338,
+        "rows": 339,
         "table": "collection_runs"
       },
       {
@@ -1279,7 +1279,7 @@
         "bytes": 237568,
         "data_bytes": 135168,
         "index_bytes": 102400,
-        "rows": 830,
+        "rows": 836,
         "table": "observations"
       },
       {
@@ -1319,9 +1319,9 @@
       }
     ]
   },
-  "database_bytes": 39059456,
-  "database_bytes_before": 39092224,
-  "database_bytes_saved": 32768,
+  "database_bytes": 39067648,
+  "database_bytes_before": 39104512,
+  "database_bytes_saved": 36864,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
   "database_warning_bytes": 36700160,
