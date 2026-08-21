@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 4,
+  "active_warning_count": 3,
   "archive_partitions": 699,
   "archive_rows": 612878,
   "archive_status": "deferred_to_daily_verification",
@@ -12,14 +12,14 @@
     "median_trigger_delay_seconds": 323.0,
     "missing_slots": 108,
     "observed_slots": 34,
-    "p95_execution_seconds": 148.6531801499999,
+    "p95_execution_seconds": 175.1856542,
     "runs": 34,
     "trigger_coverage": 0.23943661971830985
   },
-  "checked_at": "2026-08-21T03:39:46.415708+00:00",
+  "checked_at": "2026-08-21T04:26:18.668987+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 30179328,
-  "warning_count": 6,
+  "database_bytes": 30490624,
+  "warning_count": 5,
   "warnings": [
     {
       "active": false,
@@ -38,15 +38,6 @@
       "message": "Run github-32415402224-1 started 15 minutes late.",
       "severity": "warning",
       "type": "collector_late"
-    },
-    {
-      "active": true,
-      "age_minutes": 766.0,
-      "airport": "EHAM",
-      "data_type": "forecast",
-      "message": "EHAM: forecast is 766 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     },
     {
       "active": true,
