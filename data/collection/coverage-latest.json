@@ -9,16 +9,16 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 38.491917,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 321.5,
+    "median_trigger_delay_seconds": 310.5,
     "missing_slots": 108,
     "observed_slots": 34,
     "p95_execution_seconds": 180.1331929,
     "runs": 34,
     "trigger_coverage": 0.23943661971830985
   },
-  "checked_at": "2026-08-21T13:36:58.936317+00:00",
+  "checked_at": "2026-08-21T14:25:37.663871+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 37216256,
+  "database_bytes": 37990400,
   "warning_count": 6,
   "warnings": [
     {
@@ -59,8 +59,8 @@
     },
     {
       "active": true,
-      "database_bytes": 37216256,
-      "message": "Active SQLite is 35.5 MiB.",
+      "database_bytes": 37990400,
+      "message": "Active SQLite is 36.2 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
