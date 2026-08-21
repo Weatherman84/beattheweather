@@ -5,20 +5,20 @@
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 144,
+    "expected_slots": 143,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 41.089946,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 311.0,
-    "missing_slots": 109,
+    "missing_slots": 108,
     "observed_slots": 35,
     "p95_execution_seconds": 194.09433089999987,
     "runs": 35,
-    "trigger_coverage": 0.24305555555555555
+    "trigger_coverage": 0.24475524475524477
   },
-  "checked_at": "2026-08-21T19:54:56.756919+00:00",
+  "checked_at": "2026-08-21T20:23:22.425769+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 39022592,
+  "database_bytes": 39030784,
   "warning_count": 12,
   "warnings": [
     {
@@ -50,10 +50,10 @@
     },
     {
       "active": true,
-      "age_minutes": 290.5,
+      "age_minutes": 318.9,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 290 minutes old.",
+      "message": "EHAM: forecast is 319 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -113,7 +113,7 @@
     },
     {
       "active": true,
-      "database_bytes": 39022592,
+      "database_bytes": 39030784,
       "message": "Active SQLite is 37.2 MiB.",
       "severity": "error",
       "type": "database_growth"
