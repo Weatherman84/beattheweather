@@ -5,20 +5,20 @@
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 141,
+    "expected_slots": 144,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 41.244384999999994,
+    "median_execution_seconds": 41.089946,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 325.0,
-    "missing_slots": 107,
-    "observed_slots": 34,
-    "p95_execution_seconds": 196.4011830499999,
-    "runs": 34,
-    "trigger_coverage": 0.24113475177304963
+    "median_trigger_delay_seconds": 311.0,
+    "missing_slots": 109,
+    "observed_slots": 35,
+    "p95_execution_seconds": 194.09433089999987,
+    "runs": 35,
+    "trigger_coverage": 0.24305555555555555
   },
-  "checked_at": "2026-08-21T19:31:47.191650+00:00",
+  "checked_at": "2026-08-21T19:54:56.756919+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 39018496,
+  "database_bytes": 39022592,
   "warning_count": 12,
   "warnings": [
     {
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -50,10 +50,10 @@
     },
     {
       "active": true,
-      "age_minutes": 267.3,
+      "age_minutes": 290.5,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 267 minutes old.",
+      "message": "EHAM: forecast is 290 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -113,7 +113,7 @@
     },
     {
       "active": true,
-      "database_bytes": 39018496,
+      "database_bytes": 39022592,
       "message": "Active SQLite is 37.2 MiB.",
       "severity": "error",
       "type": "database_growth"
