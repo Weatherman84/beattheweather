@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 5,
+  "active_warning_count": 4,
   "archive_partitions": 699,
   "archive_rows": 612878,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 144,
+    "expected_slots": 143,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 39.764652999999996,
+    "median_execution_seconds": 38.491917,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 335.5,
-    "missing_slots": 110,
+    "missing_slots": 109,
     "observed_slots": 34,
     "p95_execution_seconds": 180.1331929,
     "runs": 34,
-    "trigger_coverage": 0.2361111111111111
+    "trigger_coverage": 0.23776223776223776
   },
-  "checked_at": "2026-08-21T09:46:00.404937+00:00",
+  "checked_at": "2026-08-21T10:15:55.466872+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 34021376,
-  "warning_count": 7,
+  "database_bytes": 34279424,
+  "warning_count": 6,
   "warnings": [
     {
       "active": false,
@@ -41,10 +41,10 @@
     },
     {
       "active": true,
-      "age_minutes": 370.0,
+      "age_minutes": 400.0,
       "airport": "LEMD",
       "data_type": "market",
-      "message": "LEMD: market is 370 minutes old.",
+      "message": "LEMD: market is 400 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -65,15 +65,6 @@
       "severity": "error",
       "target_date": "2026-08-21",
       "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "age_minutes": 366.3,
-      "airport": "EDDM",
-      "data_type": "market",
-      "message": "EDDM: market is 366 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     }
   ]
 }
