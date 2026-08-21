@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39096320,
-    "generated_at": "2026-08-21T22:52:08.798953+00:00",
+    "database_bytes": 39108608,
+    "generated_at": "2026-08-21T23:22:15.682555+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -525,7 +525,7 @@
         "table": "taf_reports"
       },
       {
-        "bytes": 24576,
+        "bytes": 28672,
         "index": "sqlite_autoindex_taf_reports_1",
         "table": "taf_reports"
       },
@@ -554,14 +554,14 @@
         "bytes": 3813376,
         "data_bytes": 2850816,
         "index_bytes": 962560,
-        "rows": 5976,
+        "rows": 5988,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5017600,
-        "data_bytes": 4956160,
+        "bytes": 5021696,
+        "data_bytes": 4960256,
         "index_bytes": 61440,
-        "rows": 341,
+        "rows": 342,
         "table": "collection_runs"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 245760,
         "data_bytes": 139264,
         "index_bytes": 106496,
-        "rows": 848,
+        "rows": 854,
         "table": "observations"
       },
       {
@@ -649,10 +649,10 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 339968,
-        "data_bytes": 274432,
-        "index_bytes": 65536,
-        "rows": 87,
+        "bytes": 348160,
+        "data_bytes": 278528,
+        "index_bytes": 69632,
+        "rows": 89,
         "table": "taf_reports"
       }
     ]
@@ -663,8 +663,8 @@
   "archive_total_rows": 612878,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39137280,
-    "generated_at": "2026-08-21T22:51:24.063177+00:00",
+    "database_bytes": 39149568,
+    "generated_at": "2026-08-21T23:21:30.164007+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -1187,7 +1187,7 @@
         "table": "taf_reports"
       },
       {
-        "bytes": 24576,
+        "bytes": 28672,
         "index": "sqlite_autoindex_taf_reports_1",
         "table": "taf_reports"
       },
@@ -1216,14 +1216,14 @@
         "bytes": 3846144,
         "data_bytes": 2850816,
         "index_bytes": 995328,
-        "rows": 5976,
+        "rows": 5988,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5017600,
-        "data_bytes": 4956160,
+        "bytes": 5021696,
+        "data_bytes": 4960256,
         "index_bytes": 61440,
-        "rows": 341,
+        "rows": 342,
         "table": "collection_runs"
       },
       {
@@ -1279,7 +1279,7 @@
         "bytes": 253952,
         "data_bytes": 139264,
         "index_bytes": 114688,
-        "rows": 848,
+        "rows": 854,
         "table": "observations"
       },
       {
@@ -1311,16 +1311,16 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 339968,
-        "data_bytes": 274432,
-        "index_bytes": 65536,
-        "rows": 87,
+        "bytes": 348160,
+        "data_bytes": 278528,
+        "index_bytes": 69632,
+        "rows": 89,
         "table": "taf_reports"
       }
     ]
   },
-  "database_bytes": 39096320,
-  "database_bytes_before": 39137280,
+  "database_bytes": 39108608,
+  "database_bytes_before": 39149568,
   "database_bytes_saved": 40960,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
