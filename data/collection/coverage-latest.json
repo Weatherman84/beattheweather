@@ -16,9 +16,9 @@
     "runs": 34,
     "trigger_coverage": 0.23943661971830985
   },
-  "checked_at": "2026-08-21T14:25:37.663871+00:00",
+  "checked_at": "2026-08-21T15:05:54.811044+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 37990400,
+  "database_bytes": 38547456,
   "warning_count": 6,
   "warnings": [
     {
@@ -59,8 +59,8 @@
     },
     {
       "active": true,
-      "database_bytes": 37990400,
-      "message": "Active SQLite is 36.2 MiB.",
+      "database_bytes": 38547456,
+      "message": "Active SQLite is 36.8 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
