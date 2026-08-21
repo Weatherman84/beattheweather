@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 4,
+  "active_warning_count": 5,
   "archive_partitions": 699,
   "archive_rows": 612878,
   "archive_status": "verified",
@@ -12,14 +12,14 @@
     "median_trigger_delay_seconds": 356.0,
     "missing_slots": 108,
     "observed_slots": 34,
-    "p95_execution_seconds": 180.1331929,
+    "p95_execution_seconds": 196.4011830499999,
     "runs": 34,
     "trigger_coverage": 0.23943661971830985
   },
-  "checked_at": "2026-08-21T16:59:28.789262+00:00",
+  "checked_at": "2026-08-21T17:41:44.208008+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 38928384,
-  "warning_count": 6,
+  "database_bytes": 38981632,
+  "warning_count": 7,
   "warnings": [
     {
       "active": false,
@@ -59,8 +59,17 @@
     },
     {
       "active": true,
-      "database_bytes": 38928384,
-      "message": "Active SQLite is 37.1 MiB.",
+      "airport": "LTFM",
+      "checkpoint": "D-1 @20",
+      "message": "LTFM: D-1 @20 is missing for 2026-08-22.",
+      "severity": "error",
+      "target_date": "2026-08-22",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "database_bytes": 38981632,
+      "message": "Active SQLite is 37.2 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
