@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 11,
+  "active_warning_count": 10,
   "archive_partitions": 699,
   "archive_rows": 612878,
   "archive_status": "verified",
@@ -16,10 +16,10 @@
     "runs": 34,
     "trigger_coverage": 0.24113475177304963
   },
-  "checked_at": "2026-08-21T19:02:29.413674+00:00",
+  "checked_at": "2026-08-21T19:31:47.191650+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 39006208,
-  "warning_count": 13,
+  "database_bytes": 39018496,
+  "warning_count": 12,
   "warnings": [
     {
       "active": false,
@@ -41,15 +41,6 @@
     },
     {
       "active": true,
-      "age_minutes": 92.5,
-      "airport": "LEMD",
-      "data_type": "METAR",
-      "message": "LEMD: METAR is 92 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
       "airport": "LEMD",
       "checkpoint": "D-1 @20",
       "message": "LEMD: D-1 @20 is missing for 2026-08-22.",
@@ -59,10 +50,10 @@
     },
     {
       "active": true,
-      "age_minutes": 238.0,
+      "age_minutes": 267.3,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 238 minutes old.",
+      "message": "EHAM: forecast is 267 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -122,7 +113,7 @@
     },
     {
       "active": true,
-      "database_bytes": 39006208,
+      "database_bytes": 39018496,
       "message": "Active SQLite is 37.2 MiB.",
       "severity": "error",
       "type": "database_growth"
