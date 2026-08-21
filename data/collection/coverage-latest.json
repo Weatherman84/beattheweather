@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 3,
+  "active_warning_count": 4,
   "archive_partitions": 699,
   "archive_rows": 612878,
   "archive_status": "verified",
@@ -16,10 +16,10 @@
     "runs": 34,
     "trigger_coverage": 0.23943661971830985
   },
-  "checked_at": "2026-08-21T12:41:54.653195+00:00",
+  "checked_at": "2026-08-21T13:36:58.936317+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 36564992,
-  "warning_count": 5,
+  "database_bytes": 37216256,
+  "warning_count": 6,
   "warnings": [
     {
       "active": false,
@@ -56,6 +56,13 @@
       "severity": "error",
       "target_date": "2026-08-21",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "database_bytes": 37216256,
+      "message": "Active SQLite is 35.5 MiB.",
+      "severity": "error",
+      "type": "database_growth"
     }
   ]
 }
