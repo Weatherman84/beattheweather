@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39591936,
-    "generated_at": "2026-08-22T23:20:02.801545+00:00",
+    "database_bytes": 39612416,
+    "generated_at": "2026-08-22T23:46:36.848752+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -554,14 +554,14 @@
         "bytes": 4337664,
         "data_bytes": 3235840,
         "index_bytes": 1101824,
-        "rows": 6855,
+        "rows": 6867,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5742592,
-        "data_bytes": 5672960,
+        "bytes": 5746688,
+        "data_bytes": 5677056,
         "index_bytes": 69632,
-        "rows": 385,
+        "rows": 386,
         "table": "collection_runs"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 237568,
         "data_bytes": 131072,
         "index_bytes": 106496,
-        "rows": 854,
+        "rows": 860,
         "table": "observations"
       },
       {
@@ -649,10 +649,10 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 331776,
-        "data_bytes": 266240,
+        "bytes": 348160,
+        "data_bytes": 282624,
         "index_bytes": 65536,
-        "rows": 86,
+        "rows": 92,
         "table": "taf_reports"
       }
     ]
@@ -663,8 +663,8 @@
   "archive_total_rows": 644801,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39628800,
-    "generated_at": "2026-08-22T23:19:14.794854+00:00",
+    "database_bytes": 39649280,
+    "generated_at": "2026-08-22T23:45:51.678597+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -1216,14 +1216,14 @@
         "bytes": 4366336,
         "data_bytes": 3235840,
         "index_bytes": 1130496,
-        "rows": 6855,
+        "rows": 6867,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5742592,
-        "data_bytes": 5672960,
+        "bytes": 5746688,
+        "data_bytes": 5677056,
         "index_bytes": 69632,
-        "rows": 385,
+        "rows": 386,
         "table": "collection_runs"
       },
       {
@@ -1279,7 +1279,7 @@
         "bytes": 245760,
         "data_bytes": 131072,
         "index_bytes": 114688,
-        "rows": 854,
+        "rows": 860,
         "table": "observations"
       },
       {
@@ -1311,16 +1311,16 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 331776,
-        "data_bytes": 266240,
+        "bytes": 348160,
+        "data_bytes": 282624,
         "index_bytes": 65536,
-        "rows": 86,
+        "rows": 92,
         "table": "taf_reports"
       }
     ]
   },
-  "database_bytes": 39591936,
-  "database_bytes_before": 39628800,
+  "database_bytes": 39612416,
+  "database_bytes_before": 39649280,
   "database_bytes_saved": 36864,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
