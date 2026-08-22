@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 11,
+  "active_warning_count": 10,
   "archive_partitions": 710,
   "archive_rows": 644801,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 142,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 41.244384999999994,
+    "median_execution_seconds": 43.4326935,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 304.0,
-    "missing_slots": 107,
+    "missing_slots": 106,
     "observed_slots": 36,
     "p95_execution_seconds": 185.46231875,
     "runs": 36,
-    "trigger_coverage": 0.2517482517482518
+    "trigger_coverage": 0.2535211267605634
   },
-  "checked_at": "2026-08-22T04:47:02.786822+00:00",
+  "checked_at": "2026-08-22T05:15:15.989136+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 30330880,
-  "warning_count": 12,
+  "database_bytes": 30367744,
+  "warning_count": 11,
   "warnings": [
     {
       "active": false,
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -62,19 +62,10 @@
     },
     {
       "active": true,
-      "airport": "EPWA",
-      "checkpoint": "D0 @06",
-      "message": "EPWA: D0 @06 is missing for 2026-08-22.",
-      "severity": "error",
-      "target_date": "2026-08-22",
-      "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "age_minutes": 709.7,
+      "age_minutes": 737.9,
       "airport": "LTAC",
       "data_type": "market",
-      "message": "LTAC: market is 710 minutes old.",
+      "message": "LTAC: market is 738 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -89,10 +80,10 @@
     },
     {
       "active": true,
-      "age_minutes": 708.9,
+      "age_minutes": 737.1,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 709 minutes old.",
+      "message": "LTFM: market is 737 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
