@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 9,
+  "active_warning_count": 13,
   "archive_partitions": 710,
   "archive_rows": 644801,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 140,
+    "expected_slots": 141,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 72.9272725,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 219.0,
-    "missing_slots": 98,
+    "missing_slots": 99,
     "observed_slots": 42,
     "p95_execution_seconds": 182.79199899999975,
     "runs": 42,
-    "trigger_coverage": 0.3
+    "trigger_coverage": 0.2978723404255319
   },
-  "checked_at": "2026-08-22T18:05:25.812216+00:00",
+  "checked_at": "2026-08-22T18:47:43.494743+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 39464960,
-  "warning_count": 10,
+  "database_bytes": 39477248,
+  "warning_count": 14,
   "warnings": [
     {
       "active": false,
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -44,6 +44,15 @@
     },
     {
       "active": true,
+      "airport": "LEMD",
+      "checkpoint": "D-1 @20",
+      "message": "LEMD: D-1 @20 is missing for 2026-08-23.",
+      "severity": "error",
+      "target_date": "2026-08-23",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
       "airport": "EHAM",
       "checkpoint": "D-1 @20",
       "message": "EHAM: D-1 @20 is missing for 2026-08-22.",
@@ -53,11 +62,29 @@
     },
     {
       "active": true,
+      "airport": "EHAM",
+      "checkpoint": "D-1 @20",
+      "message": "EHAM: D-1 @20 is missing for 2026-08-23.",
+      "severity": "error",
+      "target_date": "2026-08-23",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
       "airport": "EPWA",
       "checkpoint": "D-1 @20",
       "message": "EPWA: D-1 @20 is missing for 2026-08-22.",
       "severity": "error",
       "target_date": "2026-08-22",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "airport": "EPWA",
+      "checkpoint": "D-1 @20",
+      "message": "EPWA: D-1 @20 is missing for 2026-08-23.",
+      "severity": "error",
+      "target_date": "2026-08-23",
       "type": "checkpoint_missing"
     },
     {
@@ -98,7 +125,16 @@
     },
     {
       "active": true,
-      "database_bytes": 39464960,
+      "airport": "EDDM",
+      "checkpoint": "D-1 @20",
+      "message": "EDDM: D-1 @20 is missing for 2026-08-23.",
+      "severity": "error",
+      "target_date": "2026-08-23",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "database_bytes": 39477248,
       "message": "Active SQLite is 37.6 MiB.",
       "severity": "error",
       "type": "database_growth"

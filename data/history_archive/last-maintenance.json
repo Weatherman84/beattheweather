@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39464960,
-    "generated_at": "2026-08-22T18:05:25.110209+00:00",
+    "database_bytes": 39477248,
+    "generated_at": "2026-08-22T18:47:42.975945+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -551,17 +551,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4280320,
-        "data_bytes": 3203072,
+        "bytes": 4284416,
+        "data_bytes": 3207168,
         "index_bytes": 1077248,
-        "rows": 6723,
+        "rows": 6735,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5689344,
-        "data_bytes": 5619712,
+        "bytes": 5697536,
+        "data_bytes": 5627904,
         "index_bytes": 69632,
-        "rows": 374,
+        "rows": 375,
         "table": "collection_runs"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 221184,
         "data_bytes": 122880,
         "index_bytes": 98304,
-        "rows": 792,
+        "rows": 797,
         "table": "observations"
       },
       {
@@ -663,8 +663,8 @@
   "archive_total_rows": 644801,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39538688,
-    "generated_at": "2026-08-22T18:04:49.943758+00:00",
+    "database_bytes": 39514112,
+    "generated_at": "2026-08-22T18:47:15.966416+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -757,7 +757,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 192512,
+        "bytes": 196608,
         "index": "ix_collection_coverage_status",
         "table": "collection_coverage"
       },
@@ -887,17 +887,17 @@
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 57344,
+        "bytes": 53248,
         "index": "ix_forecasts_airport",
         "table": "forecasts"
       },
       {
-        "bytes": 61440,
+        "bytes": 53248,
         "index": "ix_forecasts_horizon",
         "table": "forecasts"
       },
       {
-        "bytes": 106496,
+        "bytes": 94208,
         "index": "ix_forecasts_model",
         "table": "forecasts"
       },
@@ -912,12 +912,12 @@
         "table": "forecasts"
       },
       {
-        "bytes": 81920,
+        "bytes": 73728,
         "index": "ix_forecasts_target_date",
         "table": "forecasts"
       },
       {
-        "bytes": 262144,
+        "bytes": 253952,
         "index": "sqlite_autoindex_forecasts_1",
         "table": "forecasts"
       },
@@ -1213,17 +1213,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4308992,
-        "data_bytes": 3203072,
-        "index_bytes": 1105920,
-        "rows": 6723,
+        "bytes": 4317184,
+        "data_bytes": 3207168,
+        "index_bytes": 1110016,
+        "rows": 6735,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5689344,
-        "data_bytes": 5619712,
+        "bytes": 5697536,
+        "data_bytes": 5627904,
         "index_bytes": 69632,
-        "rows": 374,
+        "rows": 375,
         "table": "collection_runs"
       },
       {
@@ -1248,9 +1248,9 @@
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 1593344,
+        "bytes": 1552384,
         "data_bytes": 774144,
-        "index_bytes": 819200,
+        "index_bytes": 778240,
         "rows": 3475,
         "table": "forecasts"
       },
@@ -1279,7 +1279,7 @@
         "bytes": 225280,
         "data_bytes": 122880,
         "index_bytes": 102400,
-        "rows": 792,
+        "rows": 797,
         "table": "observations"
       },
       {
@@ -1319,9 +1319,9 @@
       }
     ]
   },
-  "database_bytes": 39464960,
-  "database_bytes_before": 39538688,
-  "database_bytes_saved": 73728,
+  "database_bytes": 39477248,
+  "database_bytes_before": 39514112,
+  "database_bytes_saved": 36864,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
   "database_warning_bytes": 36700160,
