@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39227392,
-    "generated_at": "2026-08-22T16:24:24.831938+00:00",
+    "database_bytes": 39305216,
+    "generated_at": "2026-08-22T16:52:57.250845+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -200,7 +200,7 @@
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 32768,
+        "bytes": 36864,
         "index": "ix_forecast_variant_snapshots_factor",
         "table": "forecast_variant_snapshots"
       },
@@ -275,7 +275,7 @@
         "table": "market_prices"
       },
       {
-        "bytes": 32768,
+        "bytes": 36864,
         "index": "ix_market_snapshots_airport",
         "table": "market_snapshots"
       },
@@ -300,7 +300,7 @@
         "table": "market_snapshots"
       },
       {
-        "bytes": 98304,
+        "bytes": 102400,
         "index": "sqlite_autoindex_market_snapshots_1",
         "table": "market_snapshots"
       },
@@ -551,45 +551,45 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4268032,
-        "data_bytes": 3190784,
+        "bytes": 4272128,
+        "data_bytes": 3194880,
         "index_bytes": 1077248,
-        "rows": 6675,
+        "rows": 6687,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5672960,
-        "data_bytes": 5603328,
+        "bytes": 5677056,
+        "data_bytes": 5607424,
         "index_bytes": 69632,
-        "rows": 370,
+        "rows": 371,
         "table": "collection_runs"
       },
       {
         "bytes": 1974272,
         "data_bytes": 958464,
         "index_bytes": 1015808,
-        "rows": 18767,
+        "rows": 18768,
         "table": "daily_actuals"
       },
       {
-        "bytes": 2195456,
-        "data_bytes": 2129920,
+        "bytes": 2224128,
+        "data_bytes": 2158592,
         "index_bytes": 65536,
-        "rows": 216,
+        "rows": 219,
         "table": "forecast_snapshots"
       },
       {
-        "bytes": 675840,
+        "bytes": 679936,
         "data_bytes": 376832,
-        "index_bytes": 299008,
-        "rows": 1124,
+        "index_bytes": 303104,
+        "rows": 1137,
         "table": "forecast_variant_snapshots"
       },
       {
         "bytes": 1523712,
         "data_bytes": 761856,
         "index_bytes": 761856,
-        "rows": 3415,
+        "rows": 3424,
         "table": "forecasts"
       },
       {
@@ -607,24 +607,24 @@
         "table": "market_prices"
       },
       {
-        "bytes": 1261568,
-        "data_bytes": 827392,
-        "index_bytes": 434176,
-        "rows": 2200,
+        "bytes": 1277952,
+        "data_bytes": 835584,
+        "index_bytes": 442368,
+        "rows": 2222,
         "table": "market_snapshots"
       },
       {
-        "bytes": 217088,
-        "data_bytes": 118784,
+        "bytes": 221184,
+        "data_bytes": 122880,
         "index_bytes": 98304,
-        "rows": 770,
+        "rows": 776,
         "table": "observations"
       },
       {
-        "bytes": 1159168,
-        "data_bytes": 1093632,
+        "bytes": 1175552,
+        "data_bytes": 1110016,
         "index_bytes": 65536,
-        "rows": 216,
+        "rows": 219,
         "table": "regime_memory_snapshots"
       },
       {
@@ -663,8 +663,8 @@
   "archive_total_rows": 644801,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 39419904,
-    "generated_at": "2026-08-22T16:23:56.739208+00:00",
+    "database_bytes": 39399424,
+    "generated_at": "2026-08-22T16:52:10.620397+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -742,7 +742,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 114688,
+        "bytes": 106496,
         "index": "ix_collection_coverage_data_type",
         "table": "collection_coverage"
       },
@@ -757,7 +757,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 196608,
+        "bytes": 192512,
         "index": "ix_collection_coverage_status",
         "table": "collection_coverage"
       },
@@ -797,7 +797,7 @@
         "table": "daily_actuals"
       },
       {
-        "bytes": 446464,
+        "bytes": 442368,
         "index": "sqlite_autoindex_daily_actuals_1",
         "table": "daily_actuals"
       },
@@ -862,7 +862,7 @@
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 32768,
+        "bytes": 40960,
         "index": "ix_forecast_variant_snapshots_factor",
         "table": "forecast_variant_snapshots"
       },
@@ -882,12 +882,12 @@
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 94208,
+        "bytes": 98304,
         "index": "sqlite_autoindex_forecast_variant_snapshots_1",
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 53248,
+        "bytes": 49152,
         "index": "ix_forecasts_airport",
         "table": "forecasts"
       },
@@ -917,12 +917,12 @@
         "table": "forecasts"
       },
       {
-        "bytes": 266240,
+        "bytes": 253952,
         "index": "sqlite_autoindex_forecasts_1",
         "table": "forecasts"
       },
       {
-        "bytes": 6832128,
+        "bytes": 6799360,
         "index": "sqlite_autoindex_hourly_forecasts_1",
         "table": "hourly_forecasts"
       },
@@ -947,12 +947,12 @@
         "table": "market_snapshots"
       },
       {
-        "bytes": 135168,
+        "bytes": 139264,
         "index": "ix_market_snapshots_event_slug",
         "table": "market_snapshots"
       },
       {
-        "bytes": 45056,
+        "bytes": 40960,
         "index": "ix_market_snapshots_market_id",
         "table": "market_snapshots"
       },
@@ -1042,7 +1042,7 @@
         "table": "shadow_evaluations"
       },
       {
-        "bytes": 98304,
+        "bytes": 94208,
         "index": "ix_shadow_evaluations_event_slug",
         "table": "shadow_evaluations"
       },
@@ -1072,7 +1072,7 @@
         "table": "shadow_evaluations"
       },
       {
-        "bytes": 73728,
+        "bytes": 69632,
         "index": "sqlite_autoindex_shadow_evaluations_1",
         "table": "shadow_evaluations"
       },
@@ -1087,7 +1087,7 @@
         "table": "signal_snapshots"
       },
       {
-        "bytes": 98304,
+        "bytes": 94208,
         "index": "ix_signal_snapshots_event_slug",
         "table": "signal_snapshots"
       },
@@ -1097,7 +1097,7 @@
         "table": "signal_snapshots"
       },
       {
-        "bytes": 49152,
+        "bytes": 45056,
         "index": "ix_signal_snapshots_signal",
         "table": "signal_snapshots"
       },
@@ -1112,7 +1112,7 @@
         "table": "signal_snapshots"
       },
       {
-        "bytes": 73728,
+        "bytes": 69632,
         "index": "sqlite_autoindex_signal_snapshots_1",
         "table": "signal_snapshots"
       },
@@ -1132,7 +1132,7 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 40960,
+        "bytes": 32768,
         "index": "ix_strategy_snapshots_strategy",
         "table": "strategy_snapshots"
       },
@@ -1147,7 +1147,7 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 77824,
+        "bytes": 73728,
         "index": "sqlite_autoindex_strategy_snapshots_1",
         "table": "strategy_snapshots"
       },
@@ -1213,51 +1213,51 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4308992,
-        "data_bytes": 3190784,
-        "index_bytes": 1118208,
-        "rows": 6675,
+        "bytes": 4300800,
+        "data_bytes": 3194880,
+        "index_bytes": 1105920,
+        "rows": 6687,
         "table": "collection_coverage"
       },
       {
-        "bytes": 5672960,
-        "data_bytes": 5603328,
+        "bytes": 5677056,
+        "data_bytes": 5607424,
         "index_bytes": 69632,
-        "rows": 370,
+        "rows": 371,
         "table": "collection_runs"
       },
       {
-        "bytes": 1986560,
+        "bytes": 1982464,
         "data_bytes": 958464,
-        "index_bytes": 1028096,
-        "rows": 18767,
+        "index_bytes": 1024000,
+        "rows": 18768,
         "table": "daily_actuals"
       },
       {
-        "bytes": 2195456,
-        "data_bytes": 2129920,
+        "bytes": 2224128,
+        "data_bytes": 2158592,
         "index_bytes": 65536,
-        "rows": 216,
+        "rows": 219,
         "table": "forecast_snapshots"
       },
       {
-        "bytes": 684032,
+        "bytes": 696320,
         "data_bytes": 376832,
-        "index_bytes": 307200,
-        "rows": 1124,
+        "index_bytes": 319488,
+        "rows": 1137,
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 1568768,
+        "bytes": 1552384,
         "data_bytes": 761856,
-        "index_bytes": 806912,
-        "rows": 3415,
+        "index_bytes": 790528,
+        "rows": 3424,
         "table": "forecasts"
       },
       {
-        "bytes": 16871424,
+        "bytes": 16838656,
         "data_bytes": 10039296,
-        "index_bytes": 6832128,
+        "index_bytes": 6799360,
         "rows": 78117,
         "table": "hourly_forecasts"
       },
@@ -1269,44 +1269,44 @@
         "table": "market_prices"
       },
       {
-        "bytes": 1277952,
-        "data_bytes": 827392,
+        "bytes": 1286144,
+        "data_bytes": 835584,
         "index_bytes": 450560,
-        "rows": 2200,
+        "rows": 2222,
         "table": "market_snapshots"
       },
       {
-        "bytes": 221184,
-        "data_bytes": 118784,
+        "bytes": 225280,
+        "data_bytes": 122880,
         "index_bytes": 102400,
-        "rows": 770,
+        "rows": 776,
         "table": "observations"
       },
       {
-        "bytes": 1159168,
-        "data_bytes": 1093632,
+        "bytes": 1175552,
+        "data_bytes": 1110016,
         "index_bytes": 65536,
-        "rows": 216,
+        "rows": 219,
         "table": "regime_memory_snapshots"
       },
       {
-        "bytes": 1966080,
+        "bytes": 1957888,
         "data_bytes": 1536000,
-        "index_bytes": 430080,
+        "index_bytes": 421888,
         "rows": 1562,
         "table": "shadow_evaluations"
       },
       {
-        "bytes": 692224,
+        "bytes": 679936,
         "data_bytes": 299008,
-        "index_bytes": 393216,
+        "index_bytes": 380928,
         "rows": 1562,
         "table": "signal_snapshots"
       },
       {
-        "bytes": 368640,
+        "bytes": 356352,
         "data_bytes": 135168,
-        "index_bytes": 233472,
+        "index_bytes": 221184,
         "rows": 852,
         "table": "strategy_snapshots"
       },
@@ -1319,9 +1319,9 @@
       }
     ]
   },
-  "database_bytes": 39227392,
-  "database_bytes_before": 39419904,
-  "database_bytes_saved": 192512,
+  "database_bytes": 39305216,
+  "database_bytes_before": 39399424,
+  "database_bytes_saved": 94208,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
   "database_warning_bytes": 36700160,
