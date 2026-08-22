@@ -5,20 +5,20 @@
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 140,
+    "expected_slots": 143,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 51.255456,
+    "median_execution_seconds": 51.594192,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 301.0,
-    "missing_slots": 103,
-    "observed_slots": 37,
-    "p95_execution_seconds": 206.5929185999999,
-    "runs": 37,
-    "trigger_coverage": 0.2642857142857143
+    "median_trigger_delay_seconds": 304.0,
+    "missing_slots": 105,
+    "observed_slots": 38,
+    "p95_execution_seconds": 205.35558469999998,
+    "runs": 38,
+    "trigger_coverage": 0.26573426573426573
   },
-  "checked_at": "2026-08-22T08:52:51.217331+00:00",
+  "checked_at": "2026-08-22T09:25:23.592129+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 32382976,
+  "database_bytes": 32919552,
   "warning_count": 11,
   "warnings": [
     {
@@ -71,10 +71,10 @@
     },
     {
       "active": true,
-      "age_minutes": 954.7,
+      "age_minutes": 987.2,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 955 minutes old.",
+      "message": "LTFM: market is 987 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
