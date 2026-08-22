@@ -5,20 +5,20 @@
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 141,
+    "expected_slots": 138,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 48.3610095,
+    "median_execution_seconds": 45.1529245,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 304.0,
-    "missing_slots": 105,
+    "median_trigger_delay_seconds": 308.5,
+    "missing_slots": 102,
     "observed_slots": 36,
     "p95_execution_seconds": 185.46231875,
     "runs": 36,
-    "trigger_coverage": 0.2553191489361702
+    "trigger_coverage": 0.2608695652173913
   },
-  "checked_at": "2026-08-22T05:48:49.854909+00:00",
+  "checked_at": "2026-08-22T06:17:20.499210+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 30986240,
+  "database_bytes": 31117312,
   "warning_count": 11,
   "warnings": [
     {
@@ -62,10 +62,10 @@
     },
     {
       "active": true,
-      "age_minutes": 771.5,
+      "age_minutes": 800.0,
       "airport": "LTAC",
       "data_type": "market",
-      "message": "LTAC: market is 771 minutes old.",
+      "message": "LTAC: market is 800 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -80,10 +80,10 @@
     },
     {
       "active": true,
-      "age_minutes": 770.6,
+      "age_minutes": 799.1,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 771 minutes old.",
+      "message": "LTFM: market is 799 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
