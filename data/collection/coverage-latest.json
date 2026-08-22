@@ -5,20 +5,20 @@
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 142,
+    "expected_slots": 141,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 43.4326935,
+    "median_execution_seconds": 48.3610095,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 304.0,
-    "missing_slots": 106,
+    "missing_slots": 105,
     "observed_slots": 36,
     "p95_execution_seconds": 185.46231875,
     "runs": 36,
-    "trigger_coverage": 0.2535211267605634
+    "trigger_coverage": 0.2553191489361702
   },
-  "checked_at": "2026-08-22T05:15:15.989136+00:00",
+  "checked_at": "2026-08-22T05:48:49.854909+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 30367744,
+  "database_bytes": 30986240,
   "warning_count": 11,
   "warnings": [
     {
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -62,10 +62,10 @@
     },
     {
       "active": true,
-      "age_minutes": 737.9,
+      "age_minutes": 771.5,
       "airport": "LTAC",
       "data_type": "market",
-      "message": "LTAC: market is 738 minutes old.",
+      "message": "LTAC: market is 771 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -80,10 +80,10 @@
     },
     {
       "active": true,
-      "age_minutes": 737.1,
+      "age_minutes": 770.6,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 737 minutes old.",
+      "message": "LTFM: market is 771 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
