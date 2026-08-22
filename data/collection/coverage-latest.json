@@ -9,16 +9,16 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 57.6055145,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 258.5,
+    "median_trigger_delay_seconds": 249.5,
     "missing_slots": 104,
     "observed_slots": 38,
     "p95_execution_seconds": 205.35558469999998,
     "runs": 38,
     "trigger_coverage": 0.2676056338028169
   },
-  "checked_at": "2026-08-22T10:50:53.403734+00:00",
+  "checked_at": "2026-08-22T11:19:40.578523+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 34377728,
+  "database_bytes": 35061760,
   "warning_count": 9,
   "warnings": [
     {
