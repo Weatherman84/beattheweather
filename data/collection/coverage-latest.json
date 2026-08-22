@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 14,
+  "active_warning_count": 10,
   "archive_partitions": 710,
   "archive_rows": 644801,
   "archive_status": "deferred_to_daily_verification",
@@ -12,14 +12,14 @@
     "median_trigger_delay_seconds": 310.0,
     "missing_slots": 106,
     "observed_slots": 37,
-    "p95_execution_seconds": 184.38356779999992,
+    "p95_execution_seconds": 206.5929185999999,
     "runs": 37,
     "trigger_coverage": 0.25874125874125875
   },
-  "checked_at": "2026-08-22T07:07:45.569685+00:00",
+  "checked_at": "2026-08-22T07:48:51.285221+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 31412224,
-  "warning_count": 15,
+  "database_bytes": 31715328,
+  "warning_count": 11,
   "warnings": [
     {
       "active": false,
@@ -35,30 +35,12 @@
     },
     {
       "active": true,
-      "age_minutes": 186.6,
-      "airport": "LEMD",
-      "data_type": "market",
-      "message": "LEMD: market is 187 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
       "airport": "LEMD",
       "checkpoint": "D-1 @20",
       "message": "LEMD: D-1 @20 is missing for 2026-08-22.",
       "severity": "error",
       "target_date": "2026-08-22",
       "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "age_minutes": 185.8,
-      "airport": "EHAM",
-      "data_type": "market",
-      "message": "EHAM: market is 186 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     },
     {
       "active": true,
@@ -71,15 +53,6 @@
     },
     {
       "active": true,
-      "age_minutes": 184.9,
-      "airport": "EPWA",
-      "data_type": "market",
-      "message": "EPWA: market is 185 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
       "airport": "EPWA",
       "checkpoint": "D-1 @20",
       "message": "EPWA: D-1 @20 is missing for 2026-08-22.",
@@ -89,10 +62,10 @@
     },
     {
       "active": true,
-      "age_minutes": 850.4,
+      "age_minutes": 891.5,
       "airport": "LTAC",
       "data_type": "market",
-      "message": "LTAC: market is 850 minutes old.",
+      "message": "LTAC: market is 891 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -107,10 +80,10 @@
     },
     {
       "active": true,
-      "age_minutes": 849.6,
+      "age_minutes": 890.7,
       "airport": "LTFM",
       "data_type": "market",
-      "message": "LTFM: market is 850 minutes old.",
+      "message": "LTFM: market is 891 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -131,15 +104,6 @@
       "severity": "error",
       "target_date": "2026-08-22",
       "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "age_minutes": 183.8,
-      "airport": "EDDM",
-      "data_type": "market",
-      "message": "EDDM: market is 184 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     },
     {
       "active": true,
