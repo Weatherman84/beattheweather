@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 8,
+  "active_warning_count": 9,
   "archive_partitions": 721,
   "archive_rows": 676091,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 140,
+    "expected_slots": 144,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 100.2055925,
+    "median_execution_seconds": 100.306387,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 351.0,
-    "missing_slots": 98,
-    "observed_slots": 42,
-    "p95_execution_seconds": 230.54149644999995,
-    "runs": 42,
-    "trigger_coverage": 0.3
+    "median_trigger_delay_seconds": 347.0,
+    "missing_slots": 101,
+    "observed_slots": 43,
+    "p95_execution_seconds": 229.8465829,
+    "runs": 43,
+    "trigger_coverage": 0.2986111111111111
   },
-  "checked_at": "2026-08-23T17:58:51.526753+00:00",
+  "checked_at": "2026-08-23T18:32:56.710957+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 40939520,
-  "warning_count": 9,
+  "database_bytes": 40955904,
+  "warning_count": 10,
   "warnings": [
     {
       "active": false,
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -41,6 +41,15 @@
       "severity": "error",
       "target_date": "2026-08-23",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 221.7,
+      "airport": "EHAM",
+      "data_type": "forecast",
+      "message": "EHAM: forecast is 222 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
@@ -89,8 +98,8 @@
     },
     {
       "active": true,
-      "database_bytes": 40939520,
-      "message": "Active SQLite is 39.0 MiB.",
+      "database_bytes": 40955904,
+      "message": "Active SQLite is 39.1 MiB.",
       "severity": "error",
       "type": "database_growth"
     }

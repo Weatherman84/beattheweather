@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 40939520,
-    "generated_at": "2026-08-23T17:58:50.715450+00:00",
+    "database_bytes": 40955904,
+    "generated_at": "2026-08-23T18:32:56.053725+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -245,7 +245,7 @@
         "table": "forecasts"
       },
       {
-        "bytes": 126976,
+        "bytes": 131072,
         "index": "ix_forecasts_run_at",
         "table": "forecasts"
       },
@@ -551,17 +551,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4841472,
-        "data_bytes": 3624960,
+        "bytes": 4845568,
+        "data_bytes": 3629056,
         "index_bytes": 1216512,
-        "rows": 7582,
+        "rows": 7594,
         "table": "collection_coverage"
       },
       {
-        "bytes": 6422528,
-        "data_bytes": 6352896,
+        "bytes": 6426624,
+        "data_bytes": 6356992,
         "index_bytes": 69632,
-        "rows": 416,
+        "rows": 417,
         "table": "collection_runs"
       },
       {
@@ -586,10 +586,10 @@
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 1560576,
-        "data_bytes": 778240,
-        "index_bytes": 782336,
-        "rows": 3509,
+        "bytes": 1568768,
+        "data_bytes": 782336,
+        "index_bytes": 786432,
+        "rows": 3524,
         "table": "forecasts"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 221184,
         "data_bytes": 122880,
         "index_bytes": 98304,
-        "rows": 789,
+        "rows": 798,
         "table": "observations"
       },
       {
@@ -664,7 +664,7 @@
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
     "database_bytes": 41046016,
-    "generated_at": "2026-08-23T17:58:06.073538+00:00",
+    "generated_at": "2026-08-23T18:32:20.498258+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -757,7 +757,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 217088,
+        "bytes": 221184,
         "index": "ix_collection_coverage_status",
         "table": "collection_coverage"
       },
@@ -907,7 +907,7 @@
         "table": "forecasts"
       },
       {
-        "bytes": 126976,
+        "bytes": 131072,
         "index": "ix_forecasts_run_at",
         "table": "forecasts"
       },
@@ -937,7 +937,7 @@
         "table": "market_prices"
       },
       {
-        "bytes": 49152,
+        "bytes": 40960,
         "index": "ix_market_snapshots_airport",
         "table": "market_snapshots"
       },
@@ -947,7 +947,7 @@
         "table": "market_snapshots"
       },
       {
-        "bytes": 163840,
+        "bytes": 151552,
         "index": "ix_market_snapshots_event_slug",
         "table": "market_snapshots"
       },
@@ -1213,17 +1213,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4870144,
-        "data_bytes": 3624960,
-        "index_bytes": 1245184,
-        "rows": 7582,
+        "bytes": 4878336,
+        "data_bytes": 3629056,
+        "index_bytes": 1249280,
+        "rows": 7594,
         "table": "collection_coverage"
       },
       {
-        "bytes": 6422528,
-        "data_bytes": 6352896,
+        "bytes": 6426624,
+        "data_bytes": 6356992,
         "index_bytes": 69632,
-        "rows": 416,
+        "rows": 417,
         "table": "collection_runs"
       },
       {
@@ -1248,10 +1248,10 @@
         "table": "forecast_variant_snapshots"
       },
       {
-        "bytes": 1613824,
-        "data_bytes": 778240,
-        "index_bytes": 835584,
-        "rows": 3509,
+        "bytes": 1622016,
+        "data_bytes": 782336,
+        "index_bytes": 839680,
+        "rows": 3524,
         "table": "forecasts"
       },
       {
@@ -1269,9 +1269,9 @@
         "table": "market_prices"
       },
       {
-        "bytes": 1519616,
+        "bytes": 1499136,
         "data_bytes": 983040,
-        "index_bytes": 536576,
+        "index_bytes": 516096,
         "rows": 2607,
         "table": "market_snapshots"
       },
@@ -1279,7 +1279,7 @@
         "bytes": 225280,
         "data_bytes": 122880,
         "index_bytes": 102400,
-        "rows": 789,
+        "rows": 798,
         "table": "observations"
       },
       {
@@ -1319,9 +1319,9 @@
       }
     ]
   },
-  "database_bytes": 40939520,
+  "database_bytes": 40955904,
   "database_bytes_before": 41046016,
-  "database_bytes_saved": 106496,
+  "database_bytes_saved": 90112,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
   "database_warning_bytes": 36700160,
