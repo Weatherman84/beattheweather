@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 5,
+  "active_warning_count": 15,
   "archive_partitions": 721,
   "archive_rows": 676091,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 140,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 72.9272725,
+    "median_execution_seconds": 74.516169,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 242.5,
-    "missing_slots": 99,
-    "observed_slots": 44,
-    "p95_execution_seconds": 176.97511900000006,
-    "runs": 44,
-    "trigger_coverage": 0.3076923076923077
+    "median_trigger_delay_seconds": 244.0,
+    "missing_slots": 97,
+    "observed_slots": 43,
+    "p95_execution_seconds": 179.8835589999999,
+    "runs": 43,
+    "trigger_coverage": 0.30714285714285716
   },
-  "checked_at": "2026-08-23T01:58:51.952444+00:00",
+  "checked_at": "2026-08-23T03:15:22.255392+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 30076928,
-  "warning_count": 6,
+  "database_bytes": 30208000,
+  "warning_count": 16,
   "warnings": [
     {
       "active": false,
@@ -29,9 +29,27 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 120 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 70 minutes.",
       "severity": "error",
       "type": "collector_gap"
+    },
+    {
+      "active": true,
+      "age_minutes": 553.6,
+      "airport": "LEMD",
+      "data_type": "forecast",
+      "message": "LEMD: forecast is 554 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 569.9,
+      "airport": "LEMD",
+      "data_type": "market",
+      "message": "LEMD: market is 570 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
@@ -44,6 +62,24 @@
     },
     {
       "active": true,
+      "age_minutes": 569.8,
+      "airport": "EHAM",
+      "data_type": "forecast",
+      "message": "EHAM: forecast is 570 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 569.6,
+      "airport": "EHAM",
+      "data_type": "market",
+      "message": "EHAM: market is 570 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
       "airport": "EHAM",
       "checkpoint": "D-1 @20",
       "message": "EHAM: D-1 @20 is missing for 2026-08-23.",
@@ -53,12 +89,66 @@
     },
     {
       "active": true,
+      "age_minutes": 569.5,
+      "airport": "EPWA",
+      "data_type": "forecast",
+      "message": "EPWA: forecast is 570 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 569.4,
+      "airport": "EPWA",
+      "data_type": "market",
+      "message": "EPWA: market is 569 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
       "airport": "EPWA",
       "checkpoint": "D-1 @20",
       "message": "EPWA: D-1 @20 is missing for 2026-08-23.",
       "severity": "error",
       "target_date": "2026-08-23",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 624.9,
+      "airport": "LTAC",
+      "data_type": "market",
+      "message": "LTAC: market is 625 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 624.0,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 624 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 551.5,
+      "airport": "EDDM",
+      "data_type": "forecast",
+      "message": "EDDM: forecast is 552 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 568.4,
+      "airport": "EDDM",
+      "data_type": "market",
+      "message": "EDDM: market is 568 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
