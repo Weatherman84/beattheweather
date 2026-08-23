@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 13,
+  "active_warning_count": 10,
   "archive_partitions": 721,
   "archive_rows": 676091,
   "archive_status": "verified",
@@ -16,10 +16,10 @@
     "runs": 43,
     "trigger_coverage": 0.2986111111111111
   },
-  "checked_at": "2026-08-23T20:50:33.267480+00:00",
+  "checked_at": "2026-08-23T21:20:16.850981+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 41009152,
-  "warning_count": 14,
+  "database_bytes": 41017344,
+  "warning_count": 11,
   "warnings": [
     {
       "active": false,
@@ -50,15 +50,6 @@
       "severity": "error",
       "target_date": "2026-08-24",
       "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "age_minutes": 359.3,
-      "airport": "EHAM",
-      "data_type": "forecast",
-      "message": "EHAM: forecast is 359 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     },
     {
       "active": true,
@@ -98,24 +89,6 @@
     },
     {
       "active": true,
-      "airport": "LTAC",
-      "checkpoint": "D0 @06",
-      "message": "LTAC: D0 @06 is missing for 2026-08-23.",
-      "severity": "error",
-      "target_date": "2026-08-23",
-      "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "airport": "LTFM",
-      "checkpoint": "D0 @06",
-      "message": "LTFM: D0 @06 is missing for 2026-08-23.",
-      "severity": "error",
-      "target_date": "2026-08-23",
-      "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
       "airport": "EDDM",
       "checkpoint": "D-1 @20",
       "message": "EDDM: D-1 @20 is missing for 2026-08-23.",
@@ -134,7 +107,7 @@
     },
     {
       "active": true,
-      "database_bytes": 41009152,
+      "database_bytes": 41017344,
       "message": "Active SQLite is 39.1 MiB.",
       "severity": "error",
       "type": "database_growth"
