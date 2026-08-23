@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 9,
+  "active_warning_count": 13,
   "archive_partitions": 721,
   "archive_rows": 676091,
   "archive_status": "verified",
@@ -9,17 +9,17 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 100.306387,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 347.0,
+    "median_trigger_delay_seconds": 325.0,
     "missing_slots": 101,
     "observed_slots": 43,
     "p95_execution_seconds": 229.8465829,
     "runs": 43,
     "trigger_coverage": 0.2986111111111111
   },
-  "checked_at": "2026-08-23T18:32:56.710957+00:00",
+  "checked_at": "2026-08-23T19:04:00.849858+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 40955904,
-  "warning_count": 10,
+  "database_bytes": 40964096,
+  "warning_count": 14,
   "warnings": [
     {
       "active": false,
@@ -44,10 +44,19 @@
     },
     {
       "active": true,
-      "age_minutes": 221.7,
+      "airport": "LEMD",
+      "checkpoint": "D-1 @20",
+      "message": "LEMD: D-1 @20 is missing for 2026-08-24.",
+      "severity": "error",
+      "target_date": "2026-08-24",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 252.7,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 222 minutes old.",
+      "message": "EHAM: forecast is 253 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -62,11 +71,29 @@
     },
     {
       "active": true,
+      "airport": "EHAM",
+      "checkpoint": "D-1 @20",
+      "message": "EHAM: D-1 @20 is missing for 2026-08-24.",
+      "severity": "error",
+      "target_date": "2026-08-24",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
       "airport": "EPWA",
       "checkpoint": "D-1 @20",
       "message": "EPWA: D-1 @20 is missing for 2026-08-23.",
       "severity": "error",
       "target_date": "2026-08-23",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "airport": "EPWA",
+      "checkpoint": "D-1 @20",
+      "message": "EPWA: D-1 @20 is missing for 2026-08-24.",
+      "severity": "error",
+      "target_date": "2026-08-24",
       "type": "checkpoint_missing"
     },
     {
@@ -98,7 +125,16 @@
     },
     {
       "active": true,
-      "database_bytes": 40955904,
+      "airport": "EDDM",
+      "checkpoint": "D-1 @20",
+      "message": "EDDM: D-1 @20 is missing for 2026-08-24.",
+      "severity": "error",
+      "target_date": "2026-08-24",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "database_bytes": 40964096,
       "message": "Active SQLite is 39.1 MiB.",
       "severity": "error",
       "type": "database_growth"
