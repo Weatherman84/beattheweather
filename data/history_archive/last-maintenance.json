@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 40968192,
-    "generated_at": "2026-08-23T19:34:07.665475+00:00",
+    "database_bytes": 40980480,
+    "generated_at": "2026-08-23T19:54:45.764187+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -90,7 +90,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 262144,
+        "bytes": 266240,
         "index": "ix_collection_coverage_scheduled_at",
         "table": "collection_coverage"
       },
@@ -551,17 +551,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4849664,
-        "data_bytes": 3633152,
-        "index_bytes": 1216512,
-        "rows": 7618,
+        "bytes": 4857856,
+        "data_bytes": 3637248,
+        "index_bytes": 1220608,
+        "rows": 7630,
         "table": "collection_coverage"
       },
       {
-        "bytes": 6434816,
-        "data_bytes": 6365184,
+        "bytes": 6438912,
+        "data_bytes": 6369280,
         "index_bytes": 69632,
-        "rows": 419,
+        "rows": 420,
         "table": "collection_runs"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 221184,
         "data_bytes": 122880,
         "index_bytes": 98304,
-        "rows": 810,
+        "rows": 812,
         "table": "observations"
       },
       {
@@ -663,8 +663,8 @@
   "archive_total_rows": 676091,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 41000960,
-    "generated_at": "2026-08-23T19:33:22.087399+00:00",
+    "database_bytes": 41013248,
+    "generated_at": "2026-08-23T19:53:57.596422+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -752,7 +752,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 262144,
+        "bytes": 266240,
         "index": "ix_collection_coverage_scheduled_at",
         "table": "collection_coverage"
       },
@@ -1213,17 +1213,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4878336,
-        "data_bytes": 3633152,
-        "index_bytes": 1245184,
-        "rows": 7618,
+        "bytes": 4886528,
+        "data_bytes": 3637248,
+        "index_bytes": 1249280,
+        "rows": 7630,
         "table": "collection_coverage"
       },
       {
-        "bytes": 6434816,
-        "data_bytes": 6365184,
+        "bytes": 6438912,
+        "data_bytes": 6369280,
         "index_bytes": 69632,
-        "rows": 419,
+        "rows": 420,
         "table": "collection_runs"
       },
       {
@@ -1279,7 +1279,7 @@
         "bytes": 225280,
         "data_bytes": 122880,
         "index_bytes": 102400,
-        "rows": 810,
+        "rows": 812,
         "table": "observations"
       },
       {
@@ -1319,8 +1319,8 @@
       }
     ]
   },
-  "database_bytes": 40968192,
-  "database_bytes_before": 41000960,
+  "database_bytes": 40980480,
+  "database_bytes_before": 41013248,
   "database_bytes_saved": 32768,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,

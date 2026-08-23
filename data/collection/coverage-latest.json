@@ -1,5 +1,5 @@
 {
-  "active_warning_count": 13,
+  "active_warning_count": 15,
   "archive_partitions": 721,
   "archive_rows": 676091,
   "archive_status": "verified",
@@ -16,10 +16,10 @@
     "runs": 43,
     "trigger_coverage": 0.2986111111111111
   },
-  "checked_at": "2026-08-23T19:34:08.498851+00:00",
+  "checked_at": "2026-08-23T19:54:46.573886+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 40968192,
-  "warning_count": 14,
+  "database_bytes": 40980480,
+  "warning_count": 16,
   "warnings": [
     {
       "active": false,
@@ -53,10 +53,10 @@
     },
     {
       "active": true,
-      "age_minutes": 282.9,
+      "age_minutes": 303.5,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 283 minutes old.",
+      "message": "EHAM: forecast is 304 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -98,12 +98,30 @@
     },
     {
       "active": true,
+      "age_minutes": 195.1,
+      "airport": "LTAC",
+      "data_type": "market",
+      "message": "LTAC: market is 195 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
       "airport": "LTAC",
       "checkpoint": "D0 @06",
       "message": "LTAC: D0 @06 is missing for 2026-08-23.",
       "severity": "error",
       "target_date": "2026-08-23",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 194.2,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 194 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
@@ -134,7 +152,7 @@
     },
     {
       "active": true,
-      "database_bytes": 40968192,
+      "database_bytes": 40980480,
       "message": "Active SQLite is 39.1 MiB.",
       "severity": "error",
       "type": "database_growth"
