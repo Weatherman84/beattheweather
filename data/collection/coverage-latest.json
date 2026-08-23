@@ -16,9 +16,9 @@
     "runs": 43,
     "trigger_coverage": 0.2986111111111111
   },
-  "checked_at": "2026-08-23T19:04:00.849858+00:00",
+  "checked_at": "2026-08-23T19:34:08.498851+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 40964096,
+  "database_bytes": 40968192,
   "warning_count": 14,
   "warnings": [
     {
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 40 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -53,10 +53,10 @@
     },
     {
       "active": true,
-      "age_minutes": 252.7,
+      "age_minutes": 282.9,
       "airport": "EHAM",
       "data_type": "forecast",
-      "message": "EHAM: forecast is 253 minutes old.",
+      "message": "EHAM: forecast is 283 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -134,7 +134,7 @@
     },
     {
       "active": true,
-      "database_bytes": 40964096,
+      "database_bytes": 40968192,
       "message": "Active SQLite is 39.1 MiB.",
       "severity": "error",
       "type": "database_growth"

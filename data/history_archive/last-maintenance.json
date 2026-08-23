@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 40964096,
-    "generated_at": "2026-08-23T19:04:00.017608+00:00",
+    "database_bytes": 40968192,
+    "generated_at": "2026-08-23T19:34:07.665475+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -554,14 +554,14 @@
         "bytes": 4849664,
         "data_bytes": 3633152,
         "index_bytes": 1216512,
-        "rows": 7606,
+        "rows": 7618,
         "table": "collection_coverage"
       },
       {
-        "bytes": 6430720,
-        "data_bytes": 6361088,
+        "bytes": 6434816,
+        "data_bytes": 6365184,
         "index_bytes": 69632,
-        "rows": 418,
+        "rows": 419,
         "table": "collection_runs"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 221184,
         "data_bytes": 122880,
         "index_bytes": 98304,
-        "rows": 804,
+        "rows": 810,
         "table": "observations"
       },
       {
@@ -663,8 +663,8 @@
   "archive_total_rows": 676091,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 40996864,
-    "generated_at": "2026-08-23T19:03:15.316128+00:00",
+    "database_bytes": 41000960,
+    "generated_at": "2026-08-23T19:33:22.087399+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -1216,14 +1216,14 @@
         "bytes": 4878336,
         "data_bytes": 3633152,
         "index_bytes": 1245184,
-        "rows": 7606,
+        "rows": 7618,
         "table": "collection_coverage"
       },
       {
-        "bytes": 6430720,
-        "data_bytes": 6361088,
+        "bytes": 6434816,
+        "data_bytes": 6365184,
         "index_bytes": 69632,
-        "rows": 418,
+        "rows": 419,
         "table": "collection_runs"
       },
       {
@@ -1279,7 +1279,7 @@
         "bytes": 225280,
         "data_bytes": 122880,
         "index_bytes": 102400,
-        "rows": 804,
+        "rows": 810,
         "table": "observations"
       },
       {
@@ -1319,8 +1319,8 @@
       }
     ]
   },
-  "database_bytes": 40964096,
-  "database_bytes_before": 40996864,
+  "database_bytes": 40968192,
+  "database_bytes_before": 41000960,
   "database_bytes_saved": 32768,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
