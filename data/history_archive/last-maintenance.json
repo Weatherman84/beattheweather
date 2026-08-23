@@ -1,8 +1,8 @@
 {
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 40992768,
-    "generated_at": "2026-08-23T20:20:42.925840+00:00",
+    "database_bytes": 41009152,
+    "generated_at": "2026-08-23T20:50:32.446233+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -85,7 +85,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 217088,
+        "bytes": 221184,
         "index": "ix_collection_coverage_run_id",
         "table": "collection_coverage"
       },
@@ -100,7 +100,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 311296,
+        "bytes": 315392,
         "index": "sqlite_autoindex_collection_coverage_1",
         "table": "collection_coverage"
       },
@@ -551,17 +551,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4861952,
+        "bytes": 4870144,
         "data_bytes": 3641344,
-        "index_bytes": 1220608,
-        "rows": 7642,
+        "index_bytes": 1228800,
+        "rows": 7654,
         "table": "collection_coverage"
       },
       {
-        "bytes": 6443008,
-        "data_bytes": 6373376,
+        "bytes": 6447104,
+        "data_bytes": 6377472,
         "index_bytes": 69632,
-        "rows": 421,
+        "rows": 422,
         "table": "collection_runs"
       },
       {
@@ -617,7 +617,7 @@
         "bytes": 225280,
         "data_bytes": 126976,
         "index_bytes": 98304,
-        "rows": 818,
+        "rows": 824,
         "table": "observations"
       },
       {
@@ -649,10 +649,10 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 278528,
-        "data_bytes": 217088,
+        "bytes": 282624,
+        "data_bytes": 221184,
         "index_bytes": 61440,
-        "rows": 80,
+        "rows": 81,
         "table": "taf_reports"
       }
     ]
@@ -663,8 +663,8 @@
   "archive_total_rows": 676091,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 41029632,
-    "generated_at": "2026-08-23T20:19:57.575840+00:00",
+    "database_bytes": 41046016,
+    "generated_at": "2026-08-23T20:49:45.051858+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -747,7 +747,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 217088,
+        "bytes": 221184,
         "index": "ix_collection_coverage_run_id",
         "table": "collection_coverage"
       },
@@ -762,7 +762,7 @@
         "table": "collection_coverage"
       },
       {
-        "bytes": 311296,
+        "bytes": 315392,
         "index": "sqlite_autoindex_collection_coverage_1",
         "table": "collection_coverage"
       },
@@ -1213,17 +1213,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 4894720,
+        "bytes": 4902912,
         "data_bytes": 3641344,
-        "index_bytes": 1253376,
-        "rows": 7642,
+        "index_bytes": 1261568,
+        "rows": 7654,
         "table": "collection_coverage"
       },
       {
-        "bytes": 6443008,
-        "data_bytes": 6373376,
+        "bytes": 6447104,
+        "data_bytes": 6377472,
         "index_bytes": 69632,
-        "rows": 421,
+        "rows": 422,
         "table": "collection_runs"
       },
       {
@@ -1279,7 +1279,7 @@
         "bytes": 229376,
         "data_bytes": 126976,
         "index_bytes": 102400,
-        "rows": 818,
+        "rows": 824,
         "table": "observations"
       },
       {
@@ -1311,16 +1311,16 @@
         "table": "strategy_snapshots"
       },
       {
-        "bytes": 278528,
-        "data_bytes": 217088,
+        "bytes": 282624,
+        "data_bytes": 221184,
         "index_bytes": 61440,
-        "rows": 80,
+        "rows": 81,
         "table": "taf_reports"
       }
     ]
   },
-  "database_bytes": 40992768,
-  "database_bytes_before": 41029632,
+  "database_bytes": 41009152,
+  "database_bytes_before": 41046016,
   "database_bytes_saved": 36864,
   "database_hard_limit_bytes": 50331648,
   "database_warning": true,
