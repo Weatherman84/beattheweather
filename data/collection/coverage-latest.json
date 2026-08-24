@@ -9,16 +9,16 @@
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 100.351236,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 355.0,
+    "median_trigger_delay_seconds": 347.0,
     "missing_slots": 100,
     "observed_slots": 43,
-    "p95_execution_seconds": 236.830279,
+    "p95_execution_seconds": 230.16960809999998,
     "runs": 43,
     "trigger_coverage": 0.3006993006993007
   },
-  "checked_at": "2026-08-24T03:42:55.980312+00:00",
+  "checked_at": "2026-08-24T04:35:14.410620+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 33374208,
+  "database_bytes": 33726464,
   "warning_count": 10,
   "warnings": [
     {
@@ -44,15 +44,6 @@
     },
     {
       "active": true,
-      "age_minutes": 771.7,
-      "airport": "EHAM",
-      "data_type": "forecast",
-      "message": "EHAM: forecast is 772 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
       "airport": "EHAM",
       "checkpoint": "D-1 @20",
       "message": "EHAM: D-1 @20 is missing for 2026-08-24.",
@@ -62,9 +53,27 @@
     },
     {
       "active": true,
+      "airport": "EHAM",
+      "checkpoint": "D0 @06",
+      "message": "EHAM: D0 @06 is missing for 2026-08-24.",
+      "severity": "error",
+      "target_date": "2026-08-24",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
       "airport": "EPWA",
       "checkpoint": "D-1 @20",
       "message": "EPWA: D-1 @20 is missing for 2026-08-24.",
+      "severity": "error",
+      "target_date": "2026-08-24",
+      "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "airport": "EPWA",
+      "checkpoint": "D0 @06",
+      "message": "EPWA: D0 @06 is missing for 2026-08-24.",
       "severity": "error",
       "target_date": "2026-08-24",
       "type": "checkpoint_missing"
@@ -86,15 +95,6 @@
       "severity": "error",
       "target_date": "2026-08-24",
       "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "age_minutes": 551.7,
-      "airport": "EDDM",
-      "data_type": "forecast",
-      "message": "EDDM: forecast is 552 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     },
     {
       "active": true,
