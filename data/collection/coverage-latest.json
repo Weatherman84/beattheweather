@@ -5,20 +5,20 @@
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 144,
+    "expected_slots": 142,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 103.978773,
+    "median_execution_seconds": 104.8945105,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 325.0,
-    "missing_slots": 105,
-    "observed_slots": 39,
-    "p95_execution_seconds": 231.8406079,
-    "runs": 39,
-    "trigger_coverage": 0.2708333333333333
+    "median_trigger_delay_seconds": 322.0,
+    "missing_slots": 104,
+    "observed_slots": 38,
+    "p95_execution_seconds": 232.14270685,
+    "runs": 38,
+    "trigger_coverage": 0.2676056338028169
   },
-  "checked_at": "2026-08-24T10:55:57.648035+00:00",
+  "checked_at": "2026-08-24T11:29:41.887693+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 36864000,
+  "database_bytes": 37539840,
   "warning_count": 10,
   "warnings": [
     {
@@ -71,10 +71,10 @@
     },
     {
       "active": true,
-      "age_minutes": 215.8,
+      "age_minutes": 249.5,
       "airport": "LTFM",
       "data_type": "forecast",
-      "message": "LTFM: forecast is 216 minutes old.",
+      "message": "LTFM: forecast is 250 minutes old.",
       "severity": "warning",
       "type": "source_stale"
     },
@@ -98,8 +98,8 @@
     },
     {
       "active": true,
-      "database_bytes": 36864000,
-      "message": "Active SQLite is 35.2 MiB.",
+      "database_bytes": 37539840,
+      "message": "Active SQLite is 35.8 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
