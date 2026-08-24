@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 8,
+  "active_warning_count": 9,
   "archive_partitions": 732,
   "archive_rows": 703491,
-  "archive_status": "deferred_to_daily_verification",
+  "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 141,
+    "expected_slots": 144,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 103.978773,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 325.0,
-    "missing_slots": 102,
+    "missing_slots": 105,
     "observed_slots": 39,
     "p95_execution_seconds": 231.8406079,
     "runs": 39,
-    "trigger_coverage": 0.2765957446808511
+    "trigger_coverage": 0.2708333333333333
   },
-  "checked_at": "2026-08-24T10:10:15.448100+00:00",
+  "checked_at": "2026-08-24T10:55:57.648035+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 36605952,
-  "warning_count": 9,
+  "database_bytes": 36864000,
+  "warning_count": 10,
   "warnings": [
     {
       "active": false,
@@ -32,15 +32,6 @@
       "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
       "severity": "error",
       "type": "collector_gap"
-    },
-    {
-      "active": true,
-      "age_minutes": 391.6,
-      "airport": "LEMD",
-      "data_type": "market",
-      "message": "LEMD: market is 392 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
     },
     {
       "active": true,
@@ -80,6 +71,15 @@
     },
     {
       "active": true,
+      "age_minutes": 215.8,
+      "airport": "LTFM",
+      "data_type": "forecast",
+      "message": "LTFM: forecast is 216 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
       "airport": "LTFM",
       "checkpoint": "D0 @06",
       "message": "LTFM: D0 @06 is missing for 2026-08-24.",
@@ -95,6 +95,13 @@
       "severity": "error",
       "target_date": "2026-08-24",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "database_bytes": 36864000,
+      "message": "Active SQLite is 35.2 MiB.",
+      "severity": "error",
+      "type": "database_growth"
     }
   ]
 }
