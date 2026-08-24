@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 9,
+  "active_warning_count": 8,
   "archive_partitions": 732,
   "archive_rows": 703491,
   "archive_status": "deferred_to_daily_verification",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 142,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 100.351236,
+    "median_execution_seconds": 102.6136985,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 347.0,
     "missing_slots": 100,
-    "observed_slots": 43,
-    "p95_execution_seconds": 230.16960809999998,
-    "runs": 43,
-    "trigger_coverage": 0.3006993006993007
+    "observed_slots": 42,
+    "p95_execution_seconds": 230.70300904999996,
+    "runs": 42,
+    "trigger_coverage": 0.29577464788732394
   },
-  "checked_at": "2026-08-24T04:35:14.410620+00:00",
+  "checked_at": "2026-08-24T05:26:56.258591+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 33726464,
-  "warning_count": 10,
+  "database_bytes": 34205696,
+  "warning_count": 9,
   "warnings": [
     {
       "active": false,
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 70 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -47,15 +47,6 @@
       "airport": "EHAM",
       "checkpoint": "D-1 @20",
       "message": "EHAM: D-1 @20 is missing for 2026-08-24.",
-      "severity": "error",
-      "target_date": "2026-08-24",
-      "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "airport": "EHAM",
-      "checkpoint": "D0 @06",
-      "message": "EHAM: D0 @06 is missing for 2026-08-24.",
       "severity": "error",
       "target_date": "2026-08-24",
       "type": "checkpoint_missing"
