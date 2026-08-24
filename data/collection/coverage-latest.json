@@ -1,25 +1,25 @@
 {
-  "active_warning_count": 9,
+  "active_warning_count": 8,
   "archive_partitions": 732,
   "archive_rows": 703491,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 142,
+    "expected_slots": 140,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
     "median_execution_seconds": 104.8945105,
     "median_queue_delay_seconds": 0.0,
     "median_trigger_delay_seconds": 322.0,
-    "missing_slots": 104,
+    "missing_slots": 102,
     "observed_slots": 38,
     "p95_execution_seconds": 232.14270685,
     "runs": 38,
-    "trigger_coverage": 0.2676056338028169
+    "trigger_coverage": 0.2714285714285714
   },
-  "checked_at": "2026-08-24T11:29:41.887693+00:00",
+  "checked_at": "2026-08-24T11:59:41.804087+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 37539840,
-  "warning_count": 10,
+  "database_bytes": 37957632,
+  "warning_count": 9,
   "warnings": [
     {
       "active": false,
@@ -29,7 +29,7 @@
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 50 minutes.",
+      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 30 minutes.",
       "severity": "error",
       "type": "collector_gap"
     },
@@ -71,15 +71,6 @@
     },
     {
       "active": true,
-      "age_minutes": 249.5,
-      "airport": "LTFM",
-      "data_type": "forecast",
-      "message": "LTFM: forecast is 250 minutes old.",
-      "severity": "warning",
-      "type": "source_stale"
-    },
-    {
-      "active": true,
       "airport": "LTFM",
       "checkpoint": "D0 @06",
       "message": "LTFM: D0 @06 is missing for 2026-08-24.",
@@ -98,8 +89,8 @@
     },
     {
       "active": true,
-      "database_bytes": 37539840,
-      "message": "Active SQLite is 35.8 MiB.",
+      "database_bytes": 37957632,
+      "message": "Active SQLite is 36.2 MiB.",
       "severity": "error",
       "type": "database_growth"
     }
