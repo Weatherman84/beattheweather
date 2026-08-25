@@ -1,98 +1,307 @@
 {
-  "active_warning_count": 8,
-  "archive_partitions": 732,
-  "archive_rows": 703491,
+  "active_warning_count": 31,
+  "archive_partitions": 745,
+  "archive_rows": 735259,
   "archive_status": "verified",
   "cadence": {
     "diagnosis": "Observed bottleneck is scheduled-trigger delivery: recorded jobs start without a material concurrency queue and finish below the ten-minute interval. GitHub does not expose why uncreated schedule events were dropped.",
-    "expected_slots": 143,
+    "expected_slots": 63,
     "measurement": "Expected slots are inferred from the declared offset cron; GitHub does not expose dropped-trigger causes.",
-    "median_execution_seconds": 105.810248,
+    "median_execution_seconds": 134.893978,
     "median_queue_delay_seconds": 0.0,
-    "median_trigger_delay_seconds": 305.0,
-    "missing_slots": 106,
-    "observed_slots": 37,
-    "p95_execution_seconds": 232.44480579999998,
-    "runs": 37,
-    "trigger_coverage": 0.25874125874125875
+    "median_trigger_delay_seconds": 347.0,
+    "missing_slots": 50,
+    "observed_slots": 13,
+    "p95_execution_seconds": 249.21002339999995,
+    "runs": 13,
+    "trigger_coverage": 0.20634920634920634
   },
-  "checked_at": "2026-08-24T14:04:57.879513+00:00",
+  "checked_at": "2026-08-25T03:17:06.605231+00:00",
   "collector_version": "10.7.10",
-  "database_bytes": 39219200,
-  "warning_count": 9,
+  "database_bytes": 29773824,
+  "warning_count": 32,
   "warnings": [
     {
       "active": false,
-      "message": "Historical 24-hour collector gap: 90 minutes.",
+      "message": "Historical 24-hour collector gap: 70 minutes.",
       "severity": "warning",
       "type": "collector_historical_gap"
     },
     {
       "active": true,
-      "message": "Current collector cadence is not ten-minute complete; the largest recent gap is 60 minutes.",
+      "message": "No collector run has been stored for 800 minutes.",
       "severity": "error",
-      "type": "collector_gap"
+      "type": "collector_missing_recent"
+    },
+    {
+      "active": true,
+      "age_minutes": 827.1,
+      "airport": "LEMD",
+      "data_type": "METAR",
+      "message": "LEMD: METAR is 827 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 794.1,
+      "airport": "LEMD",
+      "data_type": "forecast",
+      "message": "LEMD: forecast is 794 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 852.4,
+      "airport": "LEMD",
+      "data_type": "TAF",
+      "message": "LEMD: TAF is 852 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 793.7,
+      "airport": "LEMD",
+      "data_type": "market",
+      "message": "LEMD: market is 794 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
       "airport": "LEMD",
       "checkpoint": "D-1 @20",
-      "message": "LEMD: D-1 @20 is missing for 2026-08-24.",
+      "message": "LEMD: D-1 @20 is missing for 2026-08-25.",
       "severity": "error",
-      "target_date": "2026-08-24",
+      "target_date": "2026-08-25",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 802.1,
+      "airport": "EHAM",
+      "data_type": "METAR",
+      "message": "EHAM: METAR is 802 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 794.1,
+      "airport": "EHAM",
+      "data_type": "forecast",
+      "message": "EHAM: forecast is 794 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 852.4,
+      "airport": "EHAM",
+      "data_type": "TAF",
+      "message": "EHAM: TAF is 852 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 793.6,
+      "airport": "EHAM",
+      "data_type": "market",
+      "message": "EHAM: market is 794 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
       "airport": "EHAM",
       "checkpoint": "D-1 @20",
-      "message": "EHAM: D-1 @20 is missing for 2026-08-24.",
+      "message": "EHAM: D-1 @20 is missing for 2026-08-25.",
       "severity": "error",
-      "target_date": "2026-08-24",
+      "target_date": "2026-08-25",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 827.1,
+      "airport": "EPWA",
+      "data_type": "METAR",
+      "message": "EPWA: METAR is 827 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 794.1,
+      "airport": "EPWA",
+      "data_type": "forecast",
+      "message": "EPWA: forecast is 794 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 852.4,
+      "airport": "EPWA",
+      "data_type": "TAF",
+      "message": "EPWA: TAF is 852 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 793.5,
+      "airport": "EPWA",
+      "data_type": "market",
+      "message": "EPWA: market is 793 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
       "airport": "EPWA",
       "checkpoint": "D-1 @20",
-      "message": "EPWA: D-1 @20 is missing for 2026-08-24.",
+      "message": "EPWA: D-1 @20 is missing for 2026-08-25.",
       "severity": "error",
-      "target_date": "2026-08-24",
+      "target_date": "2026-08-25",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 807.1,
+      "airport": "LTAC",
+      "data_type": "METAR",
+      "message": "LTAC: METAR is 807 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 794.0,
+      "airport": "LTAC",
+      "data_type": "forecast",
+      "message": "LTAC: forecast is 794 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 852.4,
+      "airport": "LTAC",
+      "data_type": "TAF",
+      "message": "LTAC: TAF is 852 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 793.4,
+      "airport": "LTAC",
+      "data_type": "market",
+      "message": "LTAC: market is 793 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
       "airport": "LTAC",
-      "checkpoint": "D0 @06",
-      "message": "LTAC: D0 @06 is missing for 2026-08-24.",
+      "checkpoint": "D-1 @20",
+      "message": "LTAC: D-1 @20 is missing for 2026-08-25.",
       "severity": "error",
-      "target_date": "2026-08-24",
+      "target_date": "2026-08-25",
       "type": "checkpoint_missing"
     },
     {
       "active": true,
+      "age_minutes": 807.1,
       "airport": "LTFM",
-      "checkpoint": "D0 @06",
-      "message": "LTFM: D0 @06 is missing for 2026-08-24.",
+      "data_type": "METAR",
+      "message": "LTFM: METAR is 807 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 919.0,
+      "airport": "LTFM",
+      "data_type": "forecast",
+      "message": "LTFM: forecast is 919 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 852.4,
+      "airport": "LTFM",
+      "data_type": "TAF",
+      "message": "LTFM: TAF is 852 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 793.3,
+      "airport": "LTFM",
+      "data_type": "market",
+      "message": "LTFM: market is 793 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "airport": "LTFM",
+      "checkpoint": "D-1 @20",
+      "message": "LTFM: D-1 @20 is missing for 2026-08-25.",
       "severity": "error",
-      "target_date": "2026-08-24",
+      "target_date": "2026-08-25",
       "type": "checkpoint_missing"
+    },
+    {
+      "active": true,
+      "age_minutes": 807.1,
+      "airport": "EDDM",
+      "data_type": "METAR",
+      "message": "EDDM: METAR is 807 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 919.0,
+      "airport": "EDDM",
+      "data_type": "forecast",
+      "message": "EDDM: forecast is 919 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 852.4,
+      "airport": "EDDM",
+      "data_type": "TAF",
+      "message": "EDDM: TAF is 852 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
+    },
+    {
+      "active": true,
+      "age_minutes": 793.2,
+      "airport": "EDDM",
+      "data_type": "market",
+      "message": "EDDM: market is 793 minutes old.",
+      "severity": "warning",
+      "type": "source_stale"
     },
     {
       "active": true,
       "airport": "EDDM",
       "checkpoint": "D-1 @20",
-      "message": "EDDM: D-1 @20 is missing for 2026-08-24.",
+      "message": "EDDM: D-1 @20 is missing for 2026-08-25.",
       "severity": "error",
-      "target_date": "2026-08-24",
+      "target_date": "2026-08-25",
       "type": "checkpoint_missing"
-    },
-    {
-      "active": true,
-      "database_bytes": 39219200,
-      "message": "Active SQLite is 37.4 MiB.",
-      "severity": "error",
-      "type": "database_growth"
     }
   ]
 }
