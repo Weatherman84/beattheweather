@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-30T08:20:23.689028+00:00",
+  "generated_at": "2026-08-31T08:41:23.037297+00:00",
   "partition_count": 775,
   "partitions": [
     {
@@ -231,13 +231,12 @@
       "utc_date": "2026-08-16"
     },
     {
-      "bytes": 19879,
+      "bytes": 18063,
       "columns": [
         "airport",
         "attempts",
         "data_type",
         "duration_seconds",
-        "id",
         "latest_source_at",
         "metrics_json",
         "reason",
@@ -248,13 +247,13 @@
         "source_age_minutes",
         "status"
       ],
-      "created_at": "2026-08-20T21:15:29.110911+00:00",
+      "created_at": "2026-08-31T08:40:45.677208+00:00",
       "file": "collection_coverage/2026-08-17.jsonl.gz",
       "maximum_event_time": "2026-08-17T23:47:00+00:00",
       "minimum_event_time": "2026-08-17T00:57:00+00:00",
       "rows": 676,
       "schema_version": 2,
-      "sha256": "920c74aef15c3511583fb281b2d85e281e25209334763e8bfe1520f98bd4b0aa",
+      "sha256": "45892836d82093857eeb4339ec4a70bba94d987d957d37353f75c3d97c2ef971",
       "table": "collection_coverage",
       "utc_date": "2026-08-17"
     },
@@ -475,7 +474,7 @@
       "utc_date": "2026-08-16"
     },
     {
-      "bytes": 44408,
+      "bytes": 44246,
       "columns": [
         "airport_metrics_json",
         "airports_json",
@@ -484,7 +483,6 @@
         "error_reason",
         "event_created_at",
         "execution_seconds",
-        "id",
         "overall_status",
         "persistence_status",
         "provider_metrics_json",
@@ -501,13 +499,13 @@
         "trigger",
         "trigger_delay_seconds"
       ],
-      "created_at": "2026-08-20T21:15:22.452334+00:00",
+      "created_at": "2026-08-31T08:40:31.837475+00:00",
       "file": "collection_runs/2026-08-17.jsonl.gz",
       "maximum_event_time": "2026-08-17T23:47:00+00:00",
       "minimum_event_time": "2026-08-17T00:57:00+00:00",
       "rows": 36,
       "schema_version": 2,
-      "sha256": "78b7c4f1684ab33eabeebad1103b097e442a58064347f2b8587f0b22156e3708",
+      "sha256": "7e6175871fdddec2927e99a914ec188c9a6103bec6bb702ed4bf0cdf54a62c5d",
       "table": "collection_runs",
       "utc_date": "2026-08-17"
     },
@@ -23756,6 +23754,6 @@
     }
   ],
   "schema_version": 2,
-  "total_bytes": 14600828,
+  "total_bytes": 14598850,
   "total_rows": 787999
 }
