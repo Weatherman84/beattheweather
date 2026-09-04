@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-03T07:12:18.383679+00:00",
-  "partition_count": 781,
+  "generated_at": "2026-09-04T07:16:28.379928+00:00",
+  "partition_count": 783,
   "partitions": [
     {
       "bytes": 642,
@@ -337,6 +337,33 @@
       "sha256": "74e4085551afad23956e5bd1594324c14288d1a59e9eb181b1efc3a6a752169e",
       "table": "collection_coverage",
       "utc_date": "2026-08-20"
+    },
+    {
+      "bytes": 17629,
+      "columns": [
+        "airport",
+        "attempts",
+        "data_type",
+        "duration_seconds",
+        "latest_source_at",
+        "metrics_json",
+        "reason",
+        "rows_read",
+        "rows_written",
+        "run_id",
+        "scheduled_at",
+        "source_age_minutes",
+        "status"
+      ],
+      "created_at": "2026-09-04T07:15:50.747462+00:00",
+      "file": "collection_coverage/2026-08-21.jsonl.gz",
+      "maximum_event_time": "2026-08-21T23:47:00+00:00",
+      "minimum_event_time": "2026-08-21T00:57:00+00:00",
+      "rows": 701,
+      "schema_version": 2,
+      "sha256": "c876e08505d9c453c0aa6a1430d33e476523fc1ca0bd8d0dde3be42018970dbf",
+      "table": "collection_coverage",
+      "utc_date": "2026-08-21"
     },
     {
       "bytes": 1764,
@@ -697,6 +724,42 @@
       "sha256": "5e465a7c13bc48d7f9e7b918c6274bea734d6e7f51c86cde2e2a327f10f61943",
       "table": "collection_runs",
       "utc_date": "2026-08-20"
+    },
+    {
+      "bytes": 42074,
+      "columns": [
+        "airport_metrics_json",
+        "airports_json",
+        "collector_version",
+        "ended_at",
+        "error_reason",
+        "event_created_at",
+        "execution_seconds",
+        "overall_status",
+        "persistence_status",
+        "provider_metrics_json",
+        "queue_delay_seconds",
+        "queue_started_at",
+        "rows_read_json",
+        "rows_written_json",
+        "run_id",
+        "scheduled_at",
+        "scheduler_drift_seconds",
+        "source_age_json",
+        "source_status_json",
+        "started_at",
+        "trigger",
+        "trigger_delay_seconds"
+      ],
+      "created_at": "2026-09-04T07:15:36.524905+00:00",
+      "file": "collection_runs/2026-08-21.jsonl.gz",
+      "maximum_event_time": "2026-08-21T23:47:00+00:00",
+      "minimum_event_time": "2026-08-21T00:57:00+00:00",
+      "rows": 35,
+      "schema_version": 2,
+      "sha256": "b74629a4ba8faaa1e5e5438366fcaa0c70181c7e9127cfcd7597ecf80abcfbd0",
+      "table": "collection_runs",
+      "utc_date": "2026-08-21"
     },
     {
       "bytes": 2928,
@@ -23943,6 +24006,6 @@
     }
   ],
   "schema_version": 2,
-  "total_bytes": 14805347,
-  "total_rows": 790234
+  "total_bytes": 14865050,
+  "total_rows": 790970
 }
