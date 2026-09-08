@@ -2,7 +2,7 @@
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
     "database_bytes": 2514944,
-    "generated_at": "2026-09-07T07:22:15.726524+00:00",
+    "generated_at": "2026-09-08T07:16:24.847786+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -659,12 +659,12 @@
   },
   "archive_directory": "/home/runner/work/beattheweather/beattheweather/data/history_archive",
   "archive_files": 789,
-  "archive_rows_added": 405,
+  "archive_rows_added": 0,
   "archive_total_rows": 793199,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 3293184,
-    "generated_at": "2026-09-07T07:20:49.664132+00:00",
+    "database_bytes": 2514944,
+    "generated_at": "2026-09-08T07:15:31.058189+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -737,32 +737,32 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 12288,
+        "bytes": 4096,
         "index": "ix_collection_coverage_airport",
         "table": "collection_coverage"
       },
       {
-        "bytes": 12288,
+        "bytes": 4096,
         "index": "ix_collection_coverage_data_type",
         "table": "collection_coverage"
       },
       {
-        "bytes": 16384,
+        "bytes": 4096,
         "index": "ix_collection_coverage_run_id",
         "table": "collection_coverage"
       },
       {
-        "bytes": 20480,
+        "bytes": 4096,
         "index": "ix_collection_coverage_scheduled_at",
         "table": "collection_coverage"
       },
       {
-        "bytes": 16384,
+        "bytes": 4096,
         "index": "ix_collection_coverage_status",
         "table": "collection_coverage"
       },
       {
-        "bytes": 20480,
+        "bytes": 4096,
         "index": "sqlite_autoindex_collection_coverage_1",
         "table": "collection_coverage"
       },
@@ -1213,17 +1213,17 @@
         "table": "basket_snapshots"
       },
       {
-        "bytes": 364544,
-        "data_bytes": 266240,
-        "index_bytes": 98304,
-        "rows": 390,
+        "bytes": 28672,
+        "data_bytes": 4096,
+        "index_bytes": 24576,
+        "rows": 0,
         "table": "collection_coverage"
       },
       {
-        "bytes": 462848,
-        "data_bytes": 446464,
+        "bytes": 20480,
+        "data_bytes": 4096,
         "index_bytes": 16384,
-        "rows": 15,
+        "rows": 0,
         "table": "collection_runs"
       },
       {
@@ -1320,8 +1320,8 @@
     ]
   },
   "database_bytes": 2514944,
-  "database_bytes_before": 3293184,
-  "database_bytes_saved": 778240,
+  "database_bytes_before": 2514944,
+  "database_bytes_saved": 0,
   "database_hard_limit_bytes": 50331648,
   "database_warning": false,
   "database_warning_bytes": 36700160,
@@ -1417,21 +1417,17 @@
       "table": "taf_reports"
     },
     {
-      "archive_files_changed": 1,
-      "archive_rows_added": 15,
-      "archived": 15,
-      "cutoff": "2026-08-25 00:00:00",
-      "pruned": 15,
-      "status": "archived",
+      "archived": 0,
+      "cutoff": null,
+      "pruned": 0,
+      "status": "empty",
       "table": "collection_runs"
     },
     {
-      "archive_files_changed": 1,
-      "archive_rows_added": 390,
-      "archived": 390,
-      "cutoff": "2026-08-25 00:00:00",
-      "pruned": 390,
-      "status": "archived",
+      "archived": 0,
+      "cutoff": null,
+      "pruned": 0,
+      "status": "empty",
       "table": "collection_coverage"
     }
   ],
