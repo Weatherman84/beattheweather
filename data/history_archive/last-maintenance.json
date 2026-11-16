@@ -2,7 +2,7 @@
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
     "database_bytes": 2519040,
-    "generated_at": "2026-11-15T09:24:54.240106+00:00",
+    "generated_at": "2026-11-16T09:41:57.339349+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -663,8 +663,8 @@
   "archive_total_rows": 793199,
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
-    "database_bytes": 2514944,
-    "generated_at": "2026-11-15T09:24:14.692483+00:00",
+    "database_bytes": 2519040,
+    "generated_at": "2026-11-16T09:41:17.921247+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -1320,8 +1320,8 @@
     ]
   },
   "database_bytes": 2519040,
-  "database_bytes_before": 2514944,
-  "database_bytes_saved": -4096,
+  "database_bytes_before": 2519040,
+  "database_bytes_saved": 0,
   "database_hard_limit_bytes": 50331648,
   "database_warning": false,
   "database_warning_bytes": 36700160,
