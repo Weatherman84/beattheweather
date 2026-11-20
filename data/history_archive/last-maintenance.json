@@ -2,7 +2,7 @@
   "after": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
     "database_bytes": 2519040,
-    "generated_at": "2026-11-19T10:20:09.602342+00:00",
+    "generated_at": "2026-11-20T10:01:01.426983+00:00",
     "indexes": [
       {
         "bytes": 4096,
@@ -664,7 +664,7 @@
   "before": {
     "database": "/home/runner/work/beattheweather/beattheweather/data/weatherman.db",
     "database_bytes": 2519040,
-    "generated_at": "2026-11-19T10:19:38.010641+00:00",
+    "generated_at": "2026-11-20T10:00:34.291229+00:00",
     "indexes": [
       {
         "bytes": 4096,
